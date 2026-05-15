@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>派工系統－員工作業</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang TC','Microsoft JhengHei',sans-serif;font-size:14px;color:#1a1a1a;background:#f4f4f2}
+.nav{background:#fff;border-bottom:1px solid #e5e5e5;padding:0 1.25rem;display:flex;align-items:center;height:52px;position:sticky;top:0;z-index:100;box-shadow:0 1px 3px rgba(0,0,0,0.06)}
+.nav-title{font-weight:600;font-size:15px;color:#185FA5;flex:1}
+.nav-name{font-size:13px;color:#888;margin-right:8px}
+.page{padding:1.25rem;max-width:680px;margin:0 auto}
+.card{background:#fff;border:1px solid #e8e8e8;border-radius:12px;padding:1.25rem;margin-bottom:1rem;box-shadow:0 1px 3px rgba(0,0,0,0.04)}
+.btn{padding:7px 14px;border-radius:8px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-family:inherit;font-size:13px;color:#1a1a1a;transition:all 0.15s}
+.btn:hover{background:#f5f5f5}
+.btn:active{transform:scale(0.98)}
+.btn-primary{background:#185FA5;color:#fff;border-color:#185FA5}
+.btn-primary:hover{background:#0C447C}
+.btn-sm{padding:5px 11px;font-size:12px}
+input{width:100%;font-family:inherit;font-size:14px;padding:10px 12px;border:1px solid #d0d0d0;border-radius:8px;background:#fff;color:#1a1a1a;outline:none;transition:border-color 0.15s}
+input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
+.metric{background:#f7f7f7;border-radius:10px;padding:0.875rem}
+.metric-label{font-size:11px;color:#888;margin-bottom:4px}
+.metric-val{font-size:22px;font-weight:600}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:1rem}
+.worker-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px}
+.worker-btn{background:#fff;border:1px solid #e0e0e0;border-radius:12px;padding:1rem;text-align:center;cursor:pointer;transition:all 0.15s}
+.worker-btn:hover{border-color:#185FA5;box-shadow:0 2px 8px rgba(24,95,165,0.15)}
+.wa{width:48px;height:48px;border-radius:50%;background:#BBDEFB;color:#1565C0;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600;margin:0 auto 8px}
+.err{background:#FFEBEE;border:1px solid #EF9A9A;color:#C62828;border-radius:8px;padding:8px 12px;font-size:12px;margin-top:8px;display:none}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#323232;color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;z-index:9999;display:none;box-shadow:0 4px 12px rgba(0,0,0,0.2)}
+.badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:500}
+.bd{background:#E8F5E9;color:#2E7D32}
+.ba{background:#E3F2FD;color:#1565C0}
+.sync-dot{width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0}
+.sync-dot.ok{background:#43A047}
+.sync-dot.syncing{background:#FFB300;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+/* 選人畫面 */
+#select-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:1.5rem}
+.select-card{background:#fff;border-radius:16px;padding:2rem;width:100%;max-width:420px;box-shadow:0 4px 24px rgba(0,0,0,0.08)}
+/* 長按重置提示 */
+#reset-hint{font-size:11px;color:#bbb;text-align:center;margin-top:1.5rem;user-select:none}
+</style>
+</head>
+<body>
+
+<!-- 選人畫面 -->
+<div id="select-screen" style="display:none">
+  <div class="select-card">
+    <div style="text-align:center;margin-bottom:1.5rem">
+      <div style="font-size:28px;margin-bottom:8px">👷</div>
+      <div style="font-weight:600;font-size:18px;color:#185FA5">員工作業系統</div>
+      <div style="font-size:13px;color:#888;margin-top:4px">請點選你的名字</div>
+    </div>
+    <div class="worker-grid" id="w-grid"></div>
+    <div id="reset-hint">若選錯姓名，請長按此處重新選擇</div>
+  </div>
+</div>
+
+<!-- 主畫面 -->
+<div id="main-screen" style="display:none">
+  <div class="nav">
+    <span class="nav-title">👷 員工作業</span>
+    <span class="nav-name" id="nav-name"></span>
+    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#888">
+      <div class="sync-dot" id="sync-dot"></div>
+      <span id="sync-txt"></span>
+    </div>
+  </div>
+  <div class="page">
+    <div class="grid3" id="wm-stats"></div>
+    <!-- 分頁切換 -->
+    <div style="display:flex;gap:0;margin-bottom:1rem;background:#fff;border:1px solid #e8e8e8;border-radius:10px;overflow:hidden">
+      <button id="tab-pending" onclick="switchTab('pending')" style="flex:1;padding:10px;border:none;background:#185FA5;color:#fff;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">待辦工單</button>
+      <button id="tab-history" onclick="switchTab('history')" style="flex:1;padding:10px;border:none;background:#fff;color:#666;font-family:inherit;font-size:13px;cursor:pointer">加工記錄</button>
+    </div>
+    <!-- 待辦工單 -->
+    <div id="panel-pending">
+      <div class="card">
+        <div id="wm-tasks"><div style="text-align:center;color:#aaa;padding:2rem">載入中...</div></div>
+      </div>
+    </div>
+    <!-- 加工記錄 -->
+    <div id="panel-history" style="display:none">
+      <div class="card" style="padding:0;overflow:hidden">
+        <div style="overflow-x:auto">
+          <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:400px">
+            <thead>
+              <tr style="background:#fafafa;border-bottom:1px solid #eee">
+                <th style="padding:10px;text-align:left;font-size:11px;font-weight:600;color:#888;white-space:nowrap">日期</th>
+                <th style="padding:10px;text-align:left;font-size:11px;font-weight:600;color:#888">品名</th>
+                <th style="padding:10px;text-align:right;font-size:11px;font-weight:600;color:#888">指派</th>
+                <th style="padding:10px;text-align:right;font-size:11px;font-weight:600;color:#2E7D32">完工</th>
+                <th style="padding:10px;text-align:right;font-size:11px;font-weight:600;color:#C62828">不良</th>
+                <th style="padding:10px;text-align:right;font-size:11px;font-weight:600;color:#E65100">不足</th>
+                <th style="padding:10px;text-align:right;font-size:11px;font-weight:600;color:#2E7D32">薪資</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody"><tr><td colspan="7" style="text-align:center;padding:2rem;color:#aaa">載入中...</td></tr></tbody>
+          </table>
+        </div>
+        <div id="history-total" style="padding:12px 16px;border-top:1px solid #eee;text-align:right;font-size:13px;color:#888"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getFirestore, doc, collection, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",
+  authDomain: "changcyun-19b9b.firebaseapp.com",
+  projectId: "changcyun-19b9b",
+  storageBucket: "changcyun-19b9b.firebasestorage.app",
+  messagingSenderId: "853660333384",
+  appId: "1:853660333384:web:183107f8390c6c2ac92f7d"
+};
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+let currentWorker = localStorage.getItem('worker_name') || null;
+let employees = [];
+let dispatches = [];
+let orders = [];
+
+function setSyncStatus(s){
+  const dot=document.getElementById('sync-dot');
+  const txt=document.getElementById('sync-txt');
+  if(!dot)return;
+  if(s==='ok'){dot.className='sync-dot ok';txt.textContent='已同步';}
+  else if(s==='syncing'){dot.className='sync-dot syncing';txt.textContent='同步中...';}
+  else{dot.className='sync-dot err';txt.textContent='離線';}
+}
+function toast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg;t.style.display='block';
+  setTimeout(()=>t.style.display='none',2500);
+}
+
+// 監聽員工清單
+onSnapshot(doc(db,'system','employees'),snap=>{
+  setSyncStatus('ok');
+  employees=snap.exists()?snap.data().list||[]:[];
+  if(!currentWorker)renderSelectScreen();
+},{error:()=>setSyncStatus('err')});
+
+// 監聽派工資料
+onSnapshot(collection(db,'dispatches'),snap=>{
+  dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));
+  if(currentWorker)renderWorkerMain();
+});
+
+// 監聽訂單資料（只需要訂單ID對照）
+onSnapshot(collection(db,'orders'),snap=>{
+  orders=snap.docs.map(d=>({id:d.id,...d.data()}));
+  if(currentWorker)renderWorkerMain();
+});
+
+function init(){
+  if(currentWorker){
+    showMain(currentWorker);
+  } else {
+    document.getElementById('select-screen').style.display='flex';
+  }
+}
+
+function renderSelectScreen(){
+  const g=document.getElementById('w-grid');
+  g.innerHTML=employees.map(e=>`<div class="worker-btn" onclick="selectWorker('${e}')">
+    <div class="wa">${e[0]}</div>
+    <div style="font-size:13px;font-weight:600">${e}</div>
+  </div>`).join('');
+}
+
+window.selectWorker=function(name){
+  if(!confirm(`確認你是「${name}」嗎？\n選擇後此裝置將綁定你的帳號。`))return;
+  localStorage.setItem('worker_name', name);
+  currentWorker=name;
+  showMain(name);
+}
+
+function showMain(name){
+  document.getElementById('select-screen').style.display='none';
+  document.getElementById('main-screen').style.display='block';
+  document.getElementById('nav-name').textContent=name;
+  renderWorkerMain();
+}
+
+let currentTab='pending';
+window.switchTab=function(tab){
+  currentTab=tab;
+  document.getElementById('panel-pending').style.display=tab==='pending'?'block':'none';
+  document.getElementById('panel-history').style.display=tab==='history'?'block':'none';
+  document.getElementById('tab-pending').style.background=tab==='pending'?'#185FA5':'#fff';
+  document.getElementById('tab-pending').style.color=tab==='pending'?'#fff':'#666';
+  document.getElementById('tab-pending').style.fontWeight=tab==='pending'?'600':'400';
+  document.getElementById('tab-history').style.background=tab==='history'?'#185FA5':'#fff';
+  document.getElementById('tab-history').style.color=tab==='history'?'#fff':'#666';
+  document.getElementById('tab-history').style.fontWeight=tab==='history'?'600':'400';
+  if(tab==='history')renderHistory();
+}
+
+function renderHistory(){
+  if(!currentWorker)return;
+  const myAll=dispatches.filter(d=>d.worker===currentWorker).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  const tb=document.getElementById('history-tbody');
+  const total=document.getElementById('history-total');
+  if(!myAll.length){
+    tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:2rem;color:#aaa">尚無加工記錄</td></tr>';
+    total.innerHTML='';return;
+  }
+  tb.innerHTML=myAll.map(d=>{
+    const earn=(d.doneQty||0)*(d.itemPrice||0);
+    return`<tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:10px;white-space:nowrap;color:#888;font-size:12px">${(d.createdAt||'').slice(0,10)}</td>
+      <td style="padding:10px"><div style="font-weight:600">${d.orderName}</div>${d.orderSpec?`<div style="color:#aaa;font-size:11px">${d.orderSpec}</div>`:''}</td>
+      <td style="padding:10px;text-align:right">${d.assignQty}</td>
+      <td style="padding:10px;text-align:right;color:#2E7D32;font-weight:600">${d.doneQty||0}</td>
+      <td style="padding:10px;text-align:right;color:#C62828">${d.defectQty||0}</td>
+      <td style="padding:10px;text-align:right;color:#E65100">${d.shortageQty||0}</td>
+      <td style="padding:10px;text-align:right;font-weight:600;color:#2E7D32">${earn>0?'$'+earn.toFixed(0):'—'}</td>
+    </tr>`;
+  }).join('');
+  const totalEarn=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+  const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
+  total.innerHTML=`合計完工 <strong>${totalDone}</strong> 件 ／ 累計薪資 <strong style="color:#2E7D32">$${totalEarn.toFixed(0)}</strong>`;
+}
+
+function renderWorkerMain(){
+  if(!currentWorker)return;
+  const myAll=dispatches.filter(d=>d.worker===currentWorker);
+  const myPending=myAll.filter(d=>d.status!=='已完成');
+  const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
+  const totalEarned=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+
+  document.getElementById('wm-stats').innerHTML=`
+    <div class="metric"><div class="metric-label">待完成工單</div><div class="metric-val">${myPending.length}</div></div>
+    <div class="metric"><div class="metric-label">累計完工數</div><div class="metric-val">${totalDone}</div></div>
+    <div class="metric"><div class="metric-label">累計薪資</div><div class="metric-val">$${totalEarned.toFixed(0)}</div></div>
+  `;
+
+  if(currentTab==='history'){renderHistory();return;}
+
+  const tasks=document.getElementById('wm-tasks');
+  if(!myPending.length){
+    tasks.innerHTML='<div style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單</div>';
+    return;
+  }
+  tasks.innerHTML=myPending.map(d=>`
+    <div style="border:1px solid #e8e8e8;border-radius:10px;padding:1rem;margin-bottom:12px;background:#fafafa">
+      <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+        <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
+        <span class="badge ba">${d.status}</span>
+      </div>
+      <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:1.8">
+        指派數量：<strong>${d.assignQty}</strong> 件<br>
+        單價：<strong>$${d.itemPrice}</strong>／件<br>
+        已回報：${d.doneQty||0} 件
+        ${d.note?`<br>備註：${d.note}`:''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
+        <div>
+          <div style="font-size:12px;color:#2E7D32;font-weight:600;margin-bottom:4px">✓ 加工完成</div>
+          <input type="number" id="rd-${d.id}" min="0" max="${d.assignQty}" value="${d.doneQty||0}" oninput="validateRpt('${d.id}',${d.assignQty})" inputmode="numeric">
+          <div style="font-size:11px;color:#aaa;margin-top:2px">計入薪資</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#C62828;font-weight:600;margin-bottom:4px">✗ 不良品</div>
+          <input type="number" id="rf-${d.id}" min="0" value="${d.defectQty||0}" inputmode="numeric">
+          <div style="font-size:11px;color:#aaa;margin-top:2px">不計薪資</div>
+        </div>
+        <div>
+          <div style="font-size:12px;color:#E65100;font-weight:600;margin-bottom:4px">✗ 來料不足</div>
+          <input type="number" id="rs-${d.id}" min="0" value="${d.shortageQty||0}" inputmode="numeric">
+          <div style="font-size:11px;color:#aaa;margin-top:2px">不計薪資</div>
+        </div>
+      </div>
+      <div id="re-${d.id}" class="err"></div>
+      <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:10px" onclick="submitRpt('${d.id}',${d.assignQty})">回報完工</button>
+    </div>
+  `).join('');
+}
+
+window.validateRpt=function(id,max){
+  const done=parseInt(document.getElementById('rd-'+id).value)||0;
+  const err=document.getElementById('re-'+id);
+  if(done>max){
+    err.style.display='block';
+    err.textContent=`加工完成數量(${done})不能超過指派數量(${max})，請修正。`;
+    return false;
+  }
+  err.style.display='none';return true;
+}
+
+window.submitRpt=async function(id,max){
+  if(!validateRpt(id,max))return;
+  const d=dispatches.find(x=>x.id===id);if(!d)return;
+  const done=parseInt(document.getElementById('rd-'+id).value)||0;
+  const def=parseInt(document.getElementById('rf-'+id).value)||0;
+  const sho=parseInt(document.getElementById('rs-'+id).value)||0;
+  setSyncStatus('syncing');
+  try{
+    const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,status:done>=d.assignQty?'已完成':'待完成'};
+    await setDoc(doc(db,'dispatches',String(id)),updated);
+    // 更新訂單加總
+    const o=orders.find(x=>x.id===d.orderId);
+    if(o){
+      const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
+      const updatedOrder={...o,
+        done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),
+        defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
+        shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
+      };
+      await setDoc(doc(db,'orders',o.id),updatedOrder);
+    }
+    setSyncStatus('ok');toast('回報成功！');
+  }catch(e){setSyncStatus('err');toast('回報失敗，請檢查網路');}
+}
+
+// 長按重置（按住 reset-hint 3 秒）
+let pressTimer=null;
+const hint=document.getElementById('reset-hint');
+hint.addEventListener('touchstart',()=>{
+  pressTimer=setTimeout(()=>{
+    if(confirm('確定要重新選擇姓名嗎？')){
+      localStorage.removeItem('worker_name');
+      location.reload();
+    }
+  },3000);
+});
+hint.addEventListener('touchend',()=>clearTimeout(pressTimer));
+hint.addEventListener('mousedown',()=>{
+  pressTimer=setTimeout(()=>{
+    if(confirm('確定要重新選擇姓名嗎？')){
+      localStorage.removeItem('worker_name');
+      location.reload();
+    }
+  },3000);
+});
+hint.addEventListener('mouseup',()=>clearTimeout(pressTimer));
+
+init();
+</script>
+</body>
+</html>
