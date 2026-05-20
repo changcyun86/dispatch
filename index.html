@@ -99,6 +99,7 @@ textarea{resize:vertical;min-height:70px}
     <button class="nav-tab" onclick="sw('settings')">設定</button>
   </div>
   <div class="sync-indicator"><div class="sync-dot" id="sync-dot"></div><span id="sync-txt">連線中</span></div>
+  <button class="btn btn-sm" onclick="adminLogout()" style="margin-left:8px;font-size:11px;flex-shrink:0">登出</button>
 </div>
 
 <!-- 訂單管理 -->
@@ -370,11 +371,24 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/fireba
 import { getFirestore, doc, collection, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const ADMIN_PWD='0423';
+function showAdminApp(){
+  document.getElementById('login-screen').style.display='none';
+  document.getElementById('main-app').style.display='block';
+  document.getElementById('m-date').value=new Date().toISOString().slice(0,10);
+}
+window.adminLogout=function(){
+  sessionStorage.removeItem('admin_auth');
+  document.getElementById('main-app').style.display='none';
+  document.getElementById('login-screen').style.display='flex';
+  document.getElementById('pwd-input').value='';
+}
+// 頁面載入時檢查是否已登入（同一個瀏覽器分頁 session）
+if(sessionStorage.getItem('admin_auth')==='1')showAdminApp();
+
 window.checkPwd=function(){
   if(document.getElementById('pwd-input').value===ADMIN_PWD){
-    document.getElementById('login-screen').style.display='none';
-    document.getElementById('main-app').style.display='block';
-    document.getElementById('m-date').value=new Date().toISOString().slice(0,10);
+    sessionStorage.setItem('admin_auth','1');
+    showAdminApp();
   }else{document.getElementById('login-err').style.display='block';document.getElementById('pwd-input').value='';}
 }
 

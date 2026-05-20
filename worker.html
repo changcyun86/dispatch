@@ -195,8 +195,8 @@ onSnapshot(collection(db,'checkins'),snap=>{checkins=snap.docs.map(d=>({id:d.id,
 
 function init(){
   if(currentWorker){
-    // 已記住員工，直接跳 PIN 驗證
-    openPinScreen(currentWorker,'verify');
+    // 裝置已記住員工，直接進入主畫面
+    showMain(currentWorker);
   }else{
     document.getElementById('select-screen').style.display='flex';
   }
@@ -216,7 +216,7 @@ function openPinScreen(name, mode){
   pinTargetWorker=name;
   pinMode=mode;
   pinBuffer='';
-  pinPending='';
+  if(mode!=='confirm') pinPending=''; // confirm 模式保留 pinPending
   updatePinDots();
   document.getElementById('pin-name').textContent=name;
   document.getElementById('pin-avatar').textContent=name[0]||'👷';
