@@ -534,15 +534,18 @@ window.delOrder=async function(id){
 // ── 派工 ──
 function renderDispatchOrders(){
   const sel=document.getElementById('d-order');if(!sel)return;const cur=sel.value;
-  // 只顯示「待派工」：尚無任何派工記錄，且 reported < qty
-  const dispatchedOrderIds=new Set(window.DB.dispatches.map(d=>d.orderId));
-  const pendingOrders=window.DB.orders.filter(o=>{
+  // 顯示尚未完成的訂單（reported < qty），讓管理員可多次派工
+  const availOrders=window.DB.orders.filter(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-    if(reported>=o.qty)return false; // 已完成
-    if(dispatchedOrderIds.has(o.id))return false; // 已派工
-    return true;
+    return reported<o.qty;
   });
-  sel.innerHTML='<option value="">-- 選擇訂單 --</option>'+pendingOrders.map(o=>`<option value="${o.id}" ${o.id===cur?'selected':''}>${o.orderno?o.orderno+' ':''}${o.name}${o.spec?' ('+o.spec+')':''}</option>`).join('');
+  sel.innerHTML='<option value="">-- 選擇訂單 --</option>'+availOrders.map(o=>{
+    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    const remaining=o.qty-reported;
+    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
+    const label=`${o.orderno?o.orderno+' ':''}${o.name}${o.spec?' ('+o.spec+')':''} — 剩 ${remaining}`;
+    return`<option value="${o.id}" ${o.id===cur?'selected':''}>${label}</option>`;
+  }).join('');
   if(cur)onOrderChange();
 }
 function renderDispatchWorkers(){
@@ -598,7 +601,6 @@ window.createDispatch=async function(){
 }
 function renderPendingDispatch(){
   const el=document.getElementById('pending-dispatch-list');if(!el)return;
-  // 找出尚未完成的訂單（已加工+不良+來料不足 < 總數量）
   const pending=window.DB.orders.filter(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     return reported<o.qty;
@@ -607,17 +609,19 @@ function renderPendingDispatch(){
   el.innerHTML=pending.map(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const remaining=o.qty-reported;
-    const dispatched=window.DB.dispatches.filter(d=>d.orderId===o.id&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
-    const avail=Math.max(0,remaining-dispatched);
-    const st=reported<=0?'待派工':'加工中';
+    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
+    const st=reported<=0&&!hasDispatch?'待派工':reported>=o.qty?'已完成':'加工中';
+    const activeDispatches=window.DB.dispatches.filter(d=>d.orderId===o.id&&d.status!=='已完成');
+    const activeWorkers=activeDispatches.map(d=>d.worker).join('、');
     return`<div style="padding:7px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('d-order').value='${o.id}';onOrderChange()">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-weight:600">${o.name}${o.spec?' <span style="color:#aaa;font-size:11px">'+o.spec+'</span>':''}</span>
         <span class="badge ${st==='待派工'?'bp':'ba'}">${st}</span>
       </div>
       <div style="color:#888;font-size:11px;margin-top:2px">
-        ${o.orderno?`${o.orderno} · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ 可派 <strong style="color:#185FA5">${avail}</strong>
+        ${o.orderno?`${o.orderno} · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ <strong style="color:#185FA5">剩餘 ${remaining}</strong>
       </div>
+      ${activeWorkers?`<div style="color:#888;font-size:11px;margin-top:1px">加工中：${activeWorkers}</div>`:''}
     </div>`;
   }).join('');
 }
