@@ -599,8 +599,12 @@ function renderWorkerMain(){
   const tasks=document.getElementById('wm-tasks');
   if(!myPending.length){tasks.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單<br>Không có công việc chờ xử lý</div>';return;}
   tasks.innerHTML=myPending.map(d=>{
-    const repSoFar=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
-    const remain=d.assignQty-repSoFar;
+    const o=orders.find(x=>x.id===d.orderId);
+    const orderQty=o?o.qty:d.assignQty;
+    const allReported=dispatches
+      .filter(x=>x.orderId===d.orderId)
+      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    const remain=Math.max(0,orderQty-allReported);
     return`
     <div class="card">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px">
@@ -608,7 +612,7 @@ function renderWorkerMain(){
         <span style="font-size:12px;color:#888">${d.orderId||''}</span>
       </div>
       <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
-        <div>訂單總量 / <span style="color:#aaa">Tổng đơn hàng</span>：<strong>${d.assignQty}</strong></div>
+        <div>訂單總量 / <span style="color:#aaa">Tổng đơn hàng</span>：<strong>${orderQty}</strong></div>
         <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
         <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5" id="remain-${d.id}">${remain}</strong></div>
         ${d.note?`<div>備註：${d.note}</div>`:''}
