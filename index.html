@@ -203,7 +203,10 @@ textarea{resize:vertical;min-height:70px}
       <div style="margin-top:14px"><button class="btn btn-primary btn-sm" onclick="createDispatch()">確認派工</button></div>
     </div>
     <div class="card">
-      <div class="card-title">最近派工記錄</div>
+      <div class="card-title">待派工訂單</div>
+      <div id="pending-dispatch-list" style="font-size:12px"></div>
+      <div style="border-top:1px solid #eee;margin:12px -1.25rem 12px;padding:0"></div>
+      <div class="card-title" style="margin-top:0">最近派工記錄</div>
       <div id="dispatch-log" style="font-size:12px"></div>
     </div>
   </div>
@@ -477,12 +480,14 @@ function renderOrders(){
   }
   if(!list.length){tb.innerHTML=`<tr><td colspan="14" style="text-align:center;padding:2rem;color:#aaa">${orderFilter==='all'&&!dateFrom&&!dateTo?'尚無訂單':'查無符合條件的訂單'}</td></tr>`;return;}
   tb.innerHTML=list.map(o=>{
-    const undone=Math.max(0,o.qty-(o.done||0)),pct=o.qty>0?Math.min(100,Math.round((o.done||0)/o.qty*100)):0;
-    const amt=o.qty*(o.price||0),st=(o.done||0)<=0?'待派工':undone<=0?'已完成':'加工中';
+    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    const undone=Math.max(0,o.qty-reported);
+    const pct=o.qty>0?Math.min(100,Math.round(reported/o.qty*100)):0;
+    const amt=o.qty*(o.price||0),st=reported<=0?'待派工':undone<=0?'已完成':'加工中';
     const sc={'待派工':'bp','加工中':'ba','已完成':'bd'};
     return`<tr><td style="white-space:nowrap">${o.date||'-'}</td><td style="color:#888">${o.orderno||'-'}</td><td style="font-weight:600">${o.name}</td><td style="color:#888">${o.spec||'-'}</td>
       <td class="col-num">${(o.qty||0).toLocaleString()}</td><td class="col-num">$${o.price||0}</td><td class="col-num" style="font-weight:600;color:#1565C0">${amt>0?'$'+amt.toLocaleString():'—'}</td>
-      <td class="col-num" style="color:#2E7D32;font-weight:600">${o.done||0}</td><td class="col-num" style="color:#1565C0">${undone}</td>
+      <td class="col-num" style="color:#2E7D32;font-weight:600">${o.done||0}</td><td class="col-num" style="color:#1565C0;font-weight:600">${undone}</td>
       <td class="col-num" style="color:#C62828">${o.defect||0}</td><td class="col-num" style="color:#E65100">${o.shortage||0}</td>
       <td><span class="badge ${sc[st]}">${st}</span></td>
       <td style="min-width:70px">${pct}%<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div></td>
@@ -510,9 +515,10 @@ function renderDispatchWorkers(){
 window.onOrderChange=function(){
   const id=document.getElementById('d-order').value,o=window.DB.orders.find(x=>x.id===id);
   const info=document.getElementById('d-order-info');if(!o){info.innerHTML='';return;}
+  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
   const dispatched=window.DB.dispatches.filter(d=>d.orderId===id&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
-  const avail=Math.max(0,o.qty-(o.done||0)-dispatched);
-  info.innerHTML=`訂單量 ${o.qty} ／ 已加工 ${o.done||0} ／ 可派 <strong style="color:#185FA5">${avail}</strong> ／ 單價 $${o.price}`;
+  const avail=Math.max(0,o.qty-reported-dispatched);
+  info.innerHTML=`總量 ${o.qty} ／ 已加工 ${o.done||0} ／ 不良 ${o.defect||0} ／ 來料不足 ${o.shortage||0} ／ 可派 <strong style="color:#185FA5">${avail}</strong> ／ 單價 $${o.price}`;
   document.getElementById('d-qty').value=avail>0?avail:'';
   checkDispatchQty();
 }
@@ -520,8 +526,9 @@ window.checkDispatchQty=function(){
   const id=document.getElementById('d-order').value,o=window.DB.orders.find(x=>x.id===id);
   const qty=parseInt(document.getElementById('d-qty').value)||0,w=document.getElementById('d-warn');
   if(!o||qty<=0){w.style.display='none';return;}
+  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
   const dispatched=window.DB.dispatches.filter(d=>d.orderId===id&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
-  const avail=Math.max(0,o.qty-(o.done||0)-dispatched);
+  const avail=Math.max(0,o.qty-reported-dispatched);
   if(qty>avail){w.style.display='block';w.textContent=`派工數量(${qty})超過可派數量(${avail})`;}else w.style.display='none';
 }
 window.createDispatch=async function(){
@@ -530,8 +537,9 @@ window.createDispatch=async function(){
   const qty=parseInt(document.getElementById('d-qty').value)||0;
   if(!orderId||!selectedWorkers.length||qty<=0)return alert('請選擇訂單、至少一名員工，並填寫派工數量');
   const o=window.DB.orders.find(x=>x.id===orderId);
+  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
   const dispatched=window.DB.dispatches.filter(d=>d.orderId===orderId&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
-  const avail=Math.max(0,o.qty-(o.done||0)-dispatched);
+  const avail=Math.max(0,o.qty-reported-dispatched);
   if(qty>avail)return alert(`派工數量超過可派數量(${avail})`);
 
   for(const worker of selectedWorkers){
@@ -541,7 +549,33 @@ window.createDispatch=async function(){
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
   toast(`已派工給 ${selectedWorkers.join('、')}：${o.name} × ${qty}`);
 }
+function renderPendingDispatch(){
+  const el=document.getElementById('pending-dispatch-list');if(!el)return;
+  // 找出尚未完成的訂單（已加工+不良+來料不足 < 總數量）
+  const pending=window.DB.orders.filter(o=>{
+    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    return reported<o.qty;
+  }).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  if(!pending.length){el.innerHTML='<div style="color:#aaa;padding:4px 0">目前無待派工訂單</div>';return;}
+  el.innerHTML=pending.map(o=>{
+    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    const remaining=o.qty-reported;
+    const dispatched=window.DB.dispatches.filter(d=>d.orderId===o.id&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
+    const avail=Math.max(0,remaining-dispatched);
+    const st=(o.done||0)<=0?'待派工':'加工中';
+    return`<div style="padding:7px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('d-order').value='${o.id}';onOrderChange()">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span style="font-weight:600">${o.name}${o.spec?' <span style="color:#aaa;font-size:11px">'+o.spec+'</span>':''}</span>
+        <span class="badge ${st==='待派工'?'bp':'ba'}">${st}</span>
+      </div>
+      <div style="color:#888;font-size:11px;margin-top:2px">
+        ${o.orderno?`${o.orderno} · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ 可派 <strong style="color:#185FA5">${avail}</strong>
+      </div>
+    </div>`;
+  }).join('');
+}
 function renderDispatchLog(){
+  renderPendingDispatch();
   const el=document.getElementById('dispatch-log');if(!el)return;
   const list=[...window.DB.dispatches].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||'')).slice(0,20);
   if(!list.length){el.innerHTML='<div style="color:#aaa">尚無派工記錄</div>';return;}
