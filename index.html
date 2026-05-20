@@ -193,12 +193,9 @@ textarea{resize:vertical;min-height:70px}
       <div class="card-title">建立派工單</div>
       <label>選擇訂單</label>
       <select id="d-order" onchange="onOrderChange()"><option value="">-- 選擇訂單 --</option></select>
-      <div id="d-order-info" style="font-size:12px;color:#888;margin-top:6px;line-height:1.8"></div>
-      <label>選擇員工（可多選）</label>
+      <div id="d-order-info" style="font-size:12px;color:#888;margin-top:6px;line-height:1.8;background:#f7f7f7;border-radius:8px;padding:8px 10px;display:none"></div>
+      <label>指派員工（可多選）</label>
       <div id="d-worker-checks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-top:4px;max-height:150px;overflow-y:auto;padding:4px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa"></div>
-      <label>派工數量</label>
-      <input type="number" id="d-qty" min="1" placeholder="0" oninput="checkDispatchQty()">
-      <div id="d-warn" class="warn-box"></div>
       <label>備註 <span style="color:#aaa;font-weight:400">（選填）</span></label>
       <textarea id="d-note" placeholder="填寫備註說明...（可不填）" style="min-height:60px"></textarea>
       <div style="margin-top:14px"><button class="btn btn-primary btn-sm" onclick="createDispatch()">確認派工</button></div>
@@ -534,7 +531,7 @@ function renderDispatchOrders(){
 }
 function renderDispatchWorkers(){
   const cont=document.getElementById('d-worker-checks');if(!cont)return;
-  cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0"> ${e}</label>`).join('');
+  cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0" onchange="checkDispatchQty()"> ${e}</label>`).join('');
 }
 window.onOrderChange=function(){
   const id=document.getElementById('d-order').value,o=window.DB.orders.find(x=>x.id===id);
@@ -546,32 +543,42 @@ window.onOrderChange=function(){
   document.getElementById('d-qty').value=avail>0?avail:'';
   checkDispatchQty();
 }
-window.checkDispatchQty=function(){
-  const id=document.getElementById('d-order').value,o=window.DB.orders.find(x=>x.id===id);
-  const qty=parseInt(document.getElementById('d-qty').value)||0,w=document.getElementById('d-warn');
-  if(!o||qty<=0){w.style.display='none';return;}
+window.onOrderChange=function(){
+  const id=document.getElementById('d-order').value;
+  const o=window.DB.orders.find(x=>x.id===id);
+  const info=document.getElementById('d-order-info');
+  if(!o){info.style.display='none';return;}
   const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-  const dispatched=window.DB.dispatches.filter(d=>d.orderId===id&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
-  const avail=Math.max(0,o.qty-reported-dispatched);
-  if(qty>avail){w.style.display='block';w.textContent=`派工數量(${qty})超過可派數量(${avail})`;}else w.style.display='none';
+  const remaining=Math.max(0,o.qty-reported);
+  info.style.display='block';
+  info.innerHTML=`
+    <div style="display:flex;gap:16px;flex-wrap:wrap">
+      <span>訂單總量：<strong>${o.qty}</strong></span>
+      <span>已處理：<strong style="color:#2E7D32">${reported}</strong></span>
+      <span>剩餘未加工：<strong style="color:#185FA5">${remaining}</strong></span>
+      <span>單價：<strong>$${o.price}</strong></span>
+    </div>`;
 }
 window.createDispatch=async function(){
   const orderId=document.getElementById('d-order').value;
   const selectedWorkers=Array.from(document.querySelectorAll('#d-worker-checks input:checked')).map(c=>c.value);
-  const qty=parseInt(document.getElementById('d-qty').value)||0;
-  if(!orderId||!selectedWorkers.length||qty<=0)return alert('請選擇訂單、至少一名員工，並填寫派工數量');
+  if(!orderId)return alert('請選擇訂單');
+  if(!selectedWorkers.length)return alert('請選擇至少一名員工');
   const o=window.DB.orders.find(x=>x.id===orderId);
-  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-  const dispatched=window.DB.dispatches.filter(d=>d.orderId===orderId&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
-  const avail=Math.max(0,o.qty-reported-dispatched);
-  if(qty>avail)return alert(`派工數量超過可派數量(${avail})`);
-
+  // 每位員工的工單都帶入「整筆訂單數量」，回報時驗證總數不超過訂單數量
   for(const worker of selectedWorkers){
-    await saveDispatch({id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',orderNo:o.orderno||'',itemPrice:o.price,worker,assignQty:qty,doneQty:0,defectQty:0,shortageQty:0,note:document.getElementById('d-note').value,status:'待完成',createdAt:new Date().toISOString()});
+    await saveDispatch({
+      id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
+      orderNo:o.orderno||'',itemPrice:o.price,worker,
+      assignQty:o.qty, // 帶入整筆訂單數量供員工參考
+      doneQty:0,defectQty:0,shortageQty:0,
+      note:document.getElementById('d-note').value,
+      status:'待完成',createdAt:new Date().toISOString()
+    });
   }
-  document.getElementById('d-qty').value='';document.getElementById('d-note').value='';
+  document.getElementById('d-note').value='';
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
-  toast(`已派工給 ${selectedWorkers.join('、')}：${o.name} × ${qty}`);
+  toast(`已派工給 ${selectedWorkers.join('、')}：${o.name}（訂單數量 ${o.qty}）`);
 }
 function renderPendingDispatch(){
   const el=document.getElementById('pending-dispatch-list');if(!el)return;

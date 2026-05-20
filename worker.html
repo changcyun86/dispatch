@@ -485,17 +485,17 @@ function renderHistory(){
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
           <div>
             <div style="font-size:11px;color:#2E7D32;font-weight:600;margin-bottom:3px">✓ 加工完成 / Hoàn thành</div>
-            <input type="number" id="eh-done-${d.id}" min="0" value="${d.doneQty||0}" oninput="validateEdit('${d.id}',${d.assignQty})" inputmode="numeric">
+            <input type="number" id="eh-done-${d.id}" min="0" value="${d.doneQty||0}" oninput="validateEdit('${d.id}')" inputmode="numeric">
             <div style="font-size:11px;color:#2E7D32;margin-top:2px">計入薪資</div>
           </div>
           <div>
             <div style="font-size:11px;color:#C62828;font-weight:600;margin-bottom:3px">✗ 不良品 / Hàng lỗi</div>
-            <input type="number" id="eh-def-${d.id}" min="0" value="${d.defectQty||0}" oninput="validateEdit('${d.id}',${d.assignQty})" inputmode="numeric">
+            <input type="number" id="eh-def-${d.id}" min="0" value="${d.defectQty||0}" oninput="validateEdit('${d.id}')" inputmode="numeric">
             <div style="font-size:11px;color:#C62828;margin-top:2px">不計薪資</div>
           </div>
           <div>
             <div style="font-size:11px;color:#E65100;font-weight:600;margin-bottom:3px">✗ 來料不足 / Thiếu NVL</div>
-            <input type="number" id="eh-sho-${d.id}" min="0" value="${d.shortageQty||0}" oninput="validateEdit('${d.id}',${d.assignQty})" inputmode="numeric">
+            <input type="number" id="eh-sho-${d.id}" min="0" value="${d.shortageQty||0}" oninput="validateEdit('${d.id}')" inputmode="numeric">
             <div style="font-size:11px;color:#E65100;margin-top:2px">不計薪資</div>
           </div>
         </div>
@@ -504,7 +504,7 @@ function renderHistory(){
         </div>
         <div id="ee-${d.id}" class="err-box"></div>
         <div style="display:flex;gap:8px;margin-top:8px">
-          <button class="btn btn-primary btn-sm" onclick="saveEdit('${d.id}',${d.assignQty})" style="flex:1;padding:10px">儲存 / Lưu</button>
+          <button class="btn btn-primary btn-sm" onclick="saveEdit('${d.id}')" style="flex:1;padding:10px">儲存 / Lưu</button>
           <button class="btn btn-sm" onclick="cancelEdit()" style="padding:10px">取消</button>
         </div>
       </div>`;
@@ -531,19 +531,26 @@ function renderHistory(){
 let editingId=null;
 window.startEdit=function(id){editingId=id;renderHistory();}
 window.cancelEdit=function(){editingId=null;renderHistory();}
-window.validateEdit=function(id,max){
+window.validateEdit=function(id){
+  const d=dispatches.find(x=>x.id===id);if(!d)return true;
   const done=parseInt(document.getElementById('eh-done-'+id).value)||0;
   const def=parseInt(document.getElementById('eh-def-'+id).value)||0;
   const sho=parseInt(document.getElementById('eh-sho-'+id).value)||0;
-  const total=done+def+sho;
+  const myTotal=done+def+sho;
   const totalEl=document.getElementById('etotal-'+id);
-  if(totalEl)totalEl.textContent=total;
+  if(totalEl)totalEl.textContent=myTotal;
   const err=document.getElementById('ee-'+id);
-  if(total>max){err.style.display='block';err.textContent=`總數(${total})不能超過指派數量(${max}) / Tổng không được vượt quá ${max}`;return false;}
+  const o=orders.find(x=>x.id===d.orderId);
+  const orderQty=o?o.qty:d.assignQty;
+  const othersReported=dispatches
+    .filter(x=>x.orderId===d.orderId&&x.id!==id)
+    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+  const avail=Math.max(0,orderQty-othersReported);
+  if(myTotal>avail){err.style.display='block';err.textContent=`總數(${myTotal})超過可回報數量(${avail}) / Tổng không được vượt quá ${avail}`;return false;}
   err.style.display='none';return true;
 }
-window.saveEdit=async function(id,max){
-  if(!validateEdit(id,max))return;
+window.saveEdit=async function(id){
+  if(!validateEdit(id))return;
   const d=dispatches.find(x=>x.id===id);if(!d)return;
   const done=parseInt(document.getElementById('eh-done-'+id).value)||0;
   const def=parseInt(document.getElementById('eh-def-'+id).value)||0;
@@ -597,76 +604,98 @@ function renderWorkerMain(){
         <span style="font-size:12px;color:#888">${d.orderId||''}</span>
       </div>
       <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
-        <div>指派數量 / <span style="color:#aaa">Số lượng giao</span>：<strong>${d.assignQty}</strong></div>
+        <div>訂單總量 / <span style="color:#aaa">Tổng đơn hàng</span>：<strong>${d.assignQty}</strong></div>
         <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
-        <div>尚未回報 / <span style="color:#aaa">Chưa báo cáo</span>：<strong style="color:#185FA5">${remain}</strong></div>
+        <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5" id="remain-${d.id}">${remain}</strong></div>
         ${d.note?`<div>備註：${d.note}</div>`:''}
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
         <div>
           <div class="bilabel"><span class="zh">✓ 加工完成</span><span class="vi">Hoàn thành</span></div>
-          <input type="number" id="rd-${d.id}" min="0" value="${d.doneQty||0}" oninput="validateRpt('${d.id}',${d.assignQty})" inputmode="numeric" style="margin-top:4px">
+          <input type="number" id="rd-${d.id}" min="0" value="${d.doneQty||0}" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
           <div style="font-size:11px;color:#2E7D32;margin-top:2px">計入薪資</div>
         </div>
         <div>
           <div class="bilabel"><span class="zh">✗ 不良品</span><span class="vi">Hàng lỗi</span></div>
-          <input type="number" id="rf-${d.id}" min="0" value="${d.defectQty||0}" oninput="validateRpt('${d.id}',${d.assignQty})" inputmode="numeric" style="margin-top:4px">
+          <input type="number" id="rf-${d.id}" min="0" value="${d.defectQty||0}" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
           <div style="font-size:11px;color:#C62828;margin-top:2px">不計薪資</div>
         </div>
         <div>
           <div class="bilabel"><span class="zh">✗ 來料不足</span><span class="vi">Thiếu NVL</span></div>
-          <input type="number" id="rs-${d.id}" min="0" value="${d.shortageQty||0}" oninput="validateRpt('${d.id}',${d.assignQty})" inputmode="numeric" style="margin-top:4px">
+          <input type="number" id="rs-${d.id}" min="0" value="${d.shortageQty||0}" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
           <div style="font-size:11px;color:#E65100;margin-top:2px">不計薪資</div>
         </div>
       </div>
       <div style="font-size:12px;color:#888;text-align:right;margin-bottom:4px">
-        已回報總數：<span id="rtotal-${d.id}" style="font-weight:600;color:#185FA5">${(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)}</span> ／ 指派 ${d.assignQty}
+        本次回報總數：<span id="rtotal-${d.id}" style="font-weight:600;color:#185FA5">${(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)}</span>
       </div>
       <div id="re-${d.id}" class="err-box"></div>
-      <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px" onclick="submitRpt('${d.id}',${d.assignQty})">
+      <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px" onclick="submitRpt('${d.id}')">
         回報完工 / Báo cáo hoàn thành
       </button>
     </div>
   `;}).join('');
 }
 
-window.validateRpt=function(id,max){
+window.validateRpt=function(id){
+  const d=dispatches.find(x=>x.id===id);if(!d)return true;
   const done=parseInt(document.getElementById('rd-'+id).value)||0;
   const def=parseInt(document.getElementById('rf-'+id).value)||0;
   const sho=parseInt(document.getElementById('rs-'+id).value)||0;
-  const total=done+def+sho;
+  const myTotal=done+def+sho;
   const err=document.getElementById('re-'+id);
   const totalEl=document.getElementById('rtotal-'+id);
-  if(totalEl)totalEl.textContent=total;
-  if(total>max){
+  if(totalEl)totalEl.textContent=myTotal;
+
+  // 計算其他員工已回報的總數（不含自己這筆）
+  const o=orders.find(x=>x.id===d.orderId);
+  const orderQty=o?o.qty:d.assignQty;
+  const othersReported=dispatches
+    .filter(x=>x.orderId===d.orderId&&x.id!==id)
+    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+  const avail=Math.max(0,orderQty-othersReported);
+
+  // 更新可回報數量顯示
+  const remainEl=document.getElementById('remain-'+id);
+  if(remainEl)remainEl.textContent=Math.max(0,avail-myTotal)+myTotal>avail?avail:avail;
+
+  if(myTotal>avail){
     err.style.display='block';
-    err.textContent=`已回報總數(${total})不能超過指派數量(${max})，請修正 / Tổng số báo cáo (${total}) không được vượt quá ${max}`;
+    err.textContent=`本次回報數量(${myTotal})超過可回報數量(${avail})，其他員工已回報 ${othersReported} 件 / Vượt quá giới hạn (${avail})`;
     return false;
   }
   err.style.display='none';return true;
 }
-window.submitRpt=async function(id,max){
-  if(!validateRpt(id,max))return;
+window.submitRpt=async function(id){
+  if(!validateRpt(id))return;
   const d=dispatches.find(x=>x.id===id);if(!d)return;
   const done=parseInt(document.getElementById('rd-'+id).value)||0;
   const def=parseInt(document.getElementById('rf-'+id).value)||0;
   const sho=parseInt(document.getElementById('rs-'+id).value)||0;
-  const totalReported=done+def+sho;
+  const myTotal=done+def+sho;
+
+  // 再次確認訂單總量
+  const o=orders.find(x=>x.id===d.orderId);
+  const orderQty=o?o.qty:d.assignQty;
+  const othersReported=dispatches
+    .filter(x=>x.orderId===d.orderId&&x.id!==id)
+    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+  if(myTotal+othersReported>orderQty)
+    return alert(`回報後總數(${myTotal+othersReported})會超過訂單數量(${orderQty})，請修正`);
+
+  const totalReported=myTotal;
   setSS('syncing');
   try{
-    // 總回報數 >= 指派數量 → 已完成，不再有「待完成」狀態
     const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
       status:totalReported>=d.assignQty?'已完成':'回報中',
       lastReportAt:new Date().toISOString()};
     await setDoc(doc(db,'dispatches',String(id)),updated);
-    const o=orders.find(x=>x.id===d.orderId);
     if(o){
       const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
-      const totalDone=allDisp.reduce((a,x)=>a+(x.doneQty||0),0);
-      const totalDef=allDisp.reduce((a,x)=>a+(x.defectQty||0),0);
-      const totalSho=allDisp.reduce((a,x)=>a+(x.shortageQty||0),0);
-      const totalRep=totalDone+totalDef+totalSho;
-      await setDoc(doc(db,'orders',o.id),{...o,done:totalDone,defect:totalDef,shortage:totalSho});
+      await setDoc(doc(db,'orders',o.id),{...o,
+        done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),
+        defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
+        shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)});
     }
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
