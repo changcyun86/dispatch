@@ -113,10 +113,10 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
     <!-- 加工記錄 -->
     <div id="panel-history" style="display:none">
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-        <span style="font-size:12px;color:#888">薪資週期 / Kỳ lương：</span>
-        <button class="btn btn-sm active" id="hp-cur" onclick="setHistoryPeriod(0,this)">本期 / Kỳ này</button>
-        <button class="btn btn-sm" id="hp-prev" onclick="setHistoryPeriod(-1,this)">上期 / Kỳ trước</button>
-        <button class="btn btn-sm" id="hp-prev2" onclick="setHistoryPeriod(-2,this)">上上期</button>
+        <span style="font-size:12px;color:#888">月份 / Tháng：</span>
+        <button class="btn btn-sm active" id="hp-cur" onclick="setHistoryPeriod(0,this)">本月 / Tháng này</button>
+        <button class="btn btn-sm" id="hp-prev" onclick="setHistoryPeriod(-1,this)">上月 / Tháng trước</button>
+        <button class="btn btn-sm" id="hp-prev2" onclick="setHistoryPeriod(-2,this)">上上月</button>
       </div>
       <div id="history-period-label" style="font-size:12px;color:#185FA5;margin-bottom:8px"></div>
       <div id="history-list"></div>
@@ -273,12 +273,20 @@ window.switchTab=function(tab){
   if(tab==='history')renderHistory();
 }
 
-// ── 薪資週期計算（上個月整月，10號發薪）──
+// ── 薪資週期計算 ──
+// offset=0：當月1號到今天
+// offset=-1：上個月整月
+// offset=-2：上上個月整月
 function getPayPeriod(offset){
   const now=new Date();
-  let year=now.getFullYear(),month=now.getMonth()-1+offset;
-  while(month<0){month+=12;year--;}while(month>11){month-=12;year++;}
+  const today=now.toISOString().slice(0,10);
   const pad=n=>String(n).padStart(2,'0');
+  if(offset===0){
+    const y=now.getFullYear(),m=now.getMonth();
+    return{from:`${y}-${pad(m+1)}-01`,to:today};
+  }
+  let year=now.getFullYear(),month=now.getMonth()+offset;
+  while(month<0){month+=12;year--;}while(month>11){month-=12;year++;}
   const lastDay=new Date(year,month+1,0).getDate();
   return{from:`${year}-${pad(month+1)}-01`,to:`${year}-${pad(month+1)}-${lastDay}`};
 }
@@ -347,19 +355,22 @@ function renderWorkerMain(){
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
         <div>
           <div class="bilabel"><span class="zh">✓ 加工完成</span><span class="vi">Hoàn thành</span></div>
-          <input type="number" id="rd-${d.id}" min="0" max="${d.assignQty}" value="${d.doneQty||0}" oninput="validateRpt('${d.id}',${d.assignQty})" inputmode="numeric" style="margin-top:4px">
+          <input type="number" id="rd-${d.id}" min="0" value="${d.doneQty||0}" oninput="validateRpt('${d.id}',${d.assignQty})" inputmode="numeric" style="margin-top:4px">
           <div style="font-size:11px;color:#2E7D32;margin-top:2px">計入薪資</div>
         </div>
         <div>
           <div class="bilabel"><span class="zh">✗ 不良品</span><span class="vi">Hàng lỗi</span></div>
-          <input type="number" id="rf-${d.id}" min="0" value="${d.defectQty||0}" inputmode="numeric" style="margin-top:4px">
+          <input type="number" id="rf-${d.id}" min="0" value="${d.defectQty||0}" oninput="validateRpt('${d.id}',${d.assignQty})" inputmode="numeric" style="margin-top:4px">
           <div style="font-size:11px;color:#C62828;margin-top:2px">不計薪資</div>
         </div>
         <div>
           <div class="bilabel"><span class="zh">✗ 來料不足</span><span class="vi">Thiếu NVL</span></div>
-          <input type="number" id="rs-${d.id}" min="0" value="${d.shortageQty||0}" inputmode="numeric" style="margin-top:4px">
+          <input type="number" id="rs-${d.id}" min="0" value="${d.shortageQty||0}" oninput="validateRpt('${d.id}',${d.assignQty})" inputmode="numeric" style="margin-top:4px">
           <div style="font-size:11px;color:#E65100;margin-top:2px">不計薪資</div>
         </div>
+      </div>
+      <div style="font-size:12px;color:#888;text-align:right;margin-bottom:4px">
+        已回報總數：<span id="rtotal-${d.id}" style="font-weight:600;color:#185FA5">${(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)}</span> ／ 指派 ${d.assignQty}
       </div>
       <div id="re-${d.id}" class="err-box"></div>
       <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px" onclick="submitRpt('${d.id}',${d.assignQty})">
@@ -371,8 +382,17 @@ function renderWorkerMain(){
 
 window.validateRpt=function(id,max){
   const done=parseInt(document.getElementById('rd-'+id).value)||0;
+  const def=parseInt(document.getElementById('rf-'+id).value)||0;
+  const sho=parseInt(document.getElementById('rs-'+id).value)||0;
+  const total=done+def+sho;
   const err=document.getElementById('re-'+id);
-  if(done>max){err.style.display='block';err.textContent=`加工完成數量(${done})不能超過指派數量(${max}) / Số lượng không được vượt quá ${max}`;return false;}
+  const totalEl=document.getElementById('rtotal-'+id);
+  if(totalEl)totalEl.textContent=total;
+  if(total>max){
+    err.style.display='block';
+    err.textContent=`已回報總數(${total})不能超過指派數量(${max})，請修正 / Tổng số báo cáo (${total}) không được vượt quá ${max}`;
+    return false;
+  }
   err.style.display='none';return true;
 }
 window.submitRpt=async function(id,max){

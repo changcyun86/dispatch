@@ -118,6 +118,19 @@ textarea{resize:vertical;min-height:70px}
       <button class="btn btn-primary btn-sm" onclick="togglePanel('manual-panel','order-paste-panel')">+ 手動新增</button>
     </div>
   </div>
+  <!-- 日期篩選列 -->
+  <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
+    <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1;min-width:130px"><label style="margin-top:0">接單日期起</label><input type="date" id="order-from"></div>
+      <div style="flex:1;min-width:130px"><label style="margin-top:0">接單日期迄</label><input type="date" id="order-to"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;padding-bottom:1px">
+        <button class="btn btn-primary btn-sm" onclick="renderOrders()">查詢</button>
+        <button class="btn btn-sm" onclick="clearOrderDate()">清除日期</button>
+        <button class="btn btn-sm" onclick="setOrderDateRange('month')">本月</button>
+        <button class="btn btn-sm" onclick="setOrderDateRange('lastmonth')">上月</button>
+      </div>
+    </div>
+  </div>
   <div id="order-paste-panel" class="card" style="display:none">
     <div class="card-title">從 Excel 貼上訂單</div>
     <div class="info-box">欄位順序：<strong>接單日期 / 訂單號 / 品名 / 規格 / 數量 / 加工單價</strong>（單價欄空白時自動從品名資料庫帶入）</div>
@@ -428,9 +441,33 @@ window.saveManual=async function(){
   await saveOrder({id:genId('ORD'),date:document.getElementById('m-date').value,orderno:document.getElementById('m-orderno').value.trim(),name,spec:document.getElementById('m-spec').value.trim(),qty,price:parseFloat(document.getElementById('m-price').value)||0,done:0,defect:0,shortage:0,createdAt:new Date().toISOString()});
   closePanel('manual-panel');toast('訂單已新增');
 }
+window.setOrderDateRange=function(range){
+  const now=new Date();
+  const pad=n=>String(n).padStart(2,'0');
+  const y=now.getFullYear(),m=now.getMonth();
+  if(range==='month'){
+    document.getElementById('order-from').value=`${y}-${pad(m+1)}-01`;
+    document.getElementById('order-to').value=now.toISOString().slice(0,10);
+  }else if(range==='lastmonth'){
+    let ly=y,lm=m-1;if(lm<0){lm=11;ly--;}
+    const lastDay=new Date(ly,lm+1,0).getDate();
+    document.getElementById('order-from').value=`${ly}-${pad(lm+1)}-01`;
+    document.getElementById('order-to').value=`${ly}-${pad(lm+1)}-${lastDay}`;
+  }
+  renderOrders();
+}
+window.clearOrderDate=function(){
+  document.getElementById('order-from').value='';
+  document.getElementById('order-to').value='';
+  renderOrders();
+}
 function renderOrders(){
   const tb=document.getElementById('order-tbody');if(!tb)return;
   let list=window.DB.orders;
+  const dateFrom=document.getElementById('order-from').value;
+  const dateTo=document.getElementById('order-to').value;
+  if(dateFrom)list=list.filter(o=>(o.date||'')>=dateFrom);
+  if(dateTo)list=list.filter(o=>(o.date||'')<=dateTo);
   if(orderFilter!=='all'){
     list=list.filter(o=>{
       const undone=Math.max(0,o.qty-(o.done||0));
@@ -438,7 +475,7 @@ function renderOrders(){
       return st===orderFilter;
     });
   }
-  if(!list.length){tb.innerHTML=`<tr><td colspan="14" style="text-align:center;padding:2rem;color:#aaa">${orderFilter==='all'?'尚無訂單':'此狀態無訂單'}</td></tr>`;return;}
+  if(!list.length){tb.innerHTML=`<tr><td colspan="14" style="text-align:center;padding:2rem;color:#aaa">${orderFilter==='all'&&!dateFrom&&!dateTo?'尚無訂單':'查無符合條件的訂單'}</td></tr>`;return;}
   tb.innerHTML=list.map(o=>{
     const undone=Math.max(0,o.qty-(o.done||0)),pct=o.qty>0?Math.min(100,Math.round((o.done||0)/o.qty*100)):0;
     const amt=o.qty*(o.price||0),st=(o.done||0)<=0?'待派工':undone<=0?'已完成':'加工中';
