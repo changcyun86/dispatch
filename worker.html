@@ -585,14 +585,13 @@ function renderWorkerMain(){
   // 2. 此派工記錄的 batchId 是針對此訂單「最新一批」的派工
   //    → 第1天派給A，第2天改派給B，A的舊記錄就不再顯示
   const myPending=myAll.filter(d=>{
-    const o=orders.find(x=>x.id===d.orderId);
-    const orderQty=o?o.qty:d.assignQty;
-
-    // 本人這筆已回報完成 → 不顯示
+    // 本人只要有回報過任何數量 → 不顯示
     const myReported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
-    if(myReported>0&&d.status==='已完成')return false;
+    if(myReported>0)return false;
 
     // 訂單整體已完成 → 不顯示
+    const o=orders.find(x=>x.id===d.orderId);
+    const orderQty=o?o.qty:d.assignQty;
     const allReported=dispatches
       .filter(x=>x.orderId===d.orderId)
       .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
