@@ -295,6 +295,13 @@ textarea{resize:vertical;min-height:70px}
         <input type="text" id="new-emp" placeholder="員工姓名">
         <button class="btn btn-primary btn-sm" onclick="addEmp()">新增</button>
       </div>
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee">
+        <div style="font-size:12px;color:#888;margin-bottom:8px">重設員工 PIN 碼（員工忘記 PIN 時使用）</div>
+        <div style="display:flex;gap:8px">
+          <select id="reset-pin-emp" style="flex:1"><option value="">選擇員工</option></select>
+          <button class="btn btn-warn btn-sm" onclick="resetEmployeePin()">重設 PIN</button>
+        </div>
+      </div>
     </div>
     <div class="card">
       <div class="card-title">品名單價資料庫</div>
@@ -360,7 +367,7 @@ textarea{resize:vertical;min-height:70px}
 
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, collection, onSnapshot, setDoc, deleteDoc, getDocs, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getFirestore, doc, collection, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
 const ADMIN_PWD='0423';
 window.checkPwd=function(){
@@ -899,7 +906,24 @@ window.printSalary=function(){
 }
 
 // ── 設定 ──
-function renderSettingsEmps(){const el=document.getElementById('emp-tags');if(!el)return;el.innerHTML=window.DB.employees.map((e,i)=>`<span class="tag">${e}<button onclick="removeEmp(${i})">×</button></span>`).join('');}
+function renderSettingsEmps(){
+  const el=document.getElementById('emp-tags');if(!el)return;
+  el.innerHTML=window.DB.employees.map((e,i)=>`<span class="tag">${e}<button onclick="removeEmp(${i})">×</button></span>`).join('');
+  const sel=document.getElementById('reset-pin-emp');if(!sel)return;
+  sel.innerHTML='<option value="">選擇員工</option>'+window.DB.employees.map(e=>`<option value="${e}">${e}</option>`).join('');
+}
+window.resetEmployeePin=async function(){
+  const emp=document.getElementById('reset-pin-emp').value;
+  if(!emp)return alert('請選擇員工');
+  if(!confirm(`確定重設「${emp}」的 PIN 碼？\n重設後員工下次登入需重新設定新 PIN。`))return;
+  try{
+    const pinsSnap=await getDoc(doc(db,'system','workerPins'));
+    const pins=pinsSnap.exists()?{...pinsSnap.data()}:{};
+    delete pins[emp];
+    await setDoc(doc(db,'system','workerPins'),pins);
+    toast(`已重設「${emp}」的 PIN 碼`);
+  }catch(e){toast('重設失敗，請重試');}
+}
 function renderProducts(){const ptb=document.getElementById('product-tbody');if(!ptb)return;if(!window.DB.products.length){ptb.innerHTML='<tr><td colspan="4" style="text-align:center;color:#aaa;padding:1rem">尚無品名資料</td></tr>';return;}ptb.innerHTML=window.DB.products.map((p,i)=>`<tr><td style="font-weight:600">${p.name}</td><td style="color:#888">${p.spec||'—'}</td><td class="col-num">$${p.price}</td><td><button class="btn btn-sm btn-danger" onclick="removeProd(${i})">🗑</button></td></tr>`).join('');}
 function updateSysInfo(){['orders','emps','disps','prods'].forEach((k,i)=>{const el=document.getElementById('si-'+k);if(el)el.textContent=[window.DB.orders,window.DB.employees,window.DB.dispatches,window.DB.products][i].length;});}
 window.addEmp=async function(){const n=document.getElementById('new-emp').value.trim();if(!n)return;if(window.DB.employees.includes(n))return alert('員工已存在');window.DB.employees.push(n);document.getElementById('new-emp').value='';await saveEmployees();toast(`已新增員工：${n}`);}

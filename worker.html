@@ -47,6 +47,8 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 .checkin-status{border-radius:12px;padding:1rem;text-align:center;margin-bottom:1rem}
 .checkin-status.in{background:#E8F5E9;border:1px solid #A5D6A7}
 .checkin-status.out{background:#f7f7f7;border:1px solid #e0e0e0}
+.pin-key{padding:16px;border-radius:12px;border:1px solid #e0e0e0;background:#fff;cursor:pointer;font-family:inherit;font-size:22px;font-weight:500;color:#1a1a1a;transition:all 0.1s}
+.pin-key:active{background:#E3F2FD;border-color:#185FA5;transform:scale(0.95)}
 </style>
 </head>
 <body>
@@ -60,7 +62,36 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
       <div style="font-size:13px;color:#888;margin-top:6px">請點選你的名字 / Chọn tên của bạn</div>
     </div>
     <div class="worker-grid" id="w-grid"></div>
-    <div id="reset-hint">長按此處重新選擇 / Giữ lâu để chọn lại</div>
+  </div>
+</div>
+
+<!-- PIN 驗證畫面 -->
+<div id="pin-screen" style="display:none;min-height:100vh;align-items:center;justify-content:center;padding:1.5rem">
+  <div class="select-card" style="max-width:340px;text-align:center">
+    <div style="font-size:28px;margin-bottom:8px" id="pin-avatar">👷</div>
+    <div style="font-weight:600;font-size:18px;margin-bottom:4px" id="pin-name"></div>
+    <div style="font-size:13px;color:#888;margin-bottom:1.5rem" id="pin-subtitle">請輸入 PIN 碼 / Nhập mã PIN</div>
+    <div style="display:flex;gap:12px;justify-content:center;margin-bottom:1rem">
+      <div id="pin-dot-0" style="width:16px;height:16px;border-radius:50%;background:#e0e0e0;border:2px solid #ccc"></div>
+      <div id="pin-dot-1" style="width:16px;height:16px;border-radius:50%;background:#e0e0e0;border:2px solid #ccc"></div>
+      <div id="pin-dot-2" style="width:16px;height:16px;border-radius:50%;background:#e0e0e0;border:2px solid #ccc"></div>
+      <div id="pin-dot-3" style="width:16px;height:16px;border-radius:50%;background:#e0e0e0;border:2px solid #ccc"></div>
+    </div>
+    <div id="pin-error" style="font-size:13px;color:#C62828;min-height:20px;margin-bottom:8px"></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:240px;margin:0 auto">
+      <button class="pin-key" onclick="pinInput('1')">1</button>
+      <button class="pin-key" onclick="pinInput('2')">2</button>
+      <button class="pin-key" onclick="pinInput('3')">3</button>
+      <button class="pin-key" onclick="pinInput('4')">4</button>
+      <button class="pin-key" onclick="pinInput('5')">5</button>
+      <button class="pin-key" onclick="pinInput('6')">6</button>
+      <button class="pin-key" onclick="pinInput('7')">7</button>
+      <button class="pin-key" onclick="pinInput('8')">8</button>
+      <button class="pin-key" onclick="pinInput('9')">9</button>
+      <button class="pin-key" onclick="pinBack()" style="font-size:18px">⌫</button>
+      <button class="pin-key" onclick="pinInput('0')">0</button>
+      <button class="pin-key" onclick="pinCancel()" style="font-size:12px;color:#888">取消</button>
+    </div>
   </div>
 </div>
 
@@ -68,9 +99,10 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
   <div class="nav">
     <span class="nav-title">👷 作業系統</span>
     <span id="nav-name" style="font-size:13px;color:#888;margin-right:8px"></span>
-    <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#888">
+    <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#888">
       <div class="sync-dot" id="sync-dot"></div>
       <span id="sync-txt"></span>
+      <button class="btn btn-sm" onclick="logoutWorker()" style="font-size:11px;padding:3px 8px;color:#888">登出</button>
     </div>
   </div>
   <div class="page">
@@ -140,9 +172,18 @@ const app=initializeApp(firebaseConfig);
 const db=getFirestore(app);
 
 let currentWorker=localStorage.getItem('worker_name')||null;
-let employees=[],dispatches=[],orders=[],checkins=[];
+let employees=[],dispatches=[],orders=[],checkins=[],workerPins={};
 let historyOffset=0;
 let currentTab='pending';
+let pinBuffer='';
+let pinMode=''; // 'verify' | 'set' | 'confirm'
+let pinPending=''; // 暫存第一次設定的PIN
+let pinTargetWorker=''; // 正在設定/驗證的員工名稱
+
+// 監聽 PIN 資料
+onSnapshot(doc(db,'system','workerPins'),snap=>{
+  workerPins=snap.exists()?snap.data()||{}:{};
+});
 
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
@@ -152,21 +193,122 @@ onSnapshot(collection(db,'dispatches'),snap=>{dispatches=snap.docs.map(d=>({id:d
 onSnapshot(collection(db,'orders'),snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
 onSnapshot(collection(db,'checkins'),snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker)renderCheckinStatus();});
 
-function init(){if(currentWorker)showMain(currentWorker);else document.getElementById('select-screen').style.display='flex';}
+function init(){
+  if(currentWorker){
+    // 已記住員工，直接跳 PIN 驗證
+    openPinScreen(currentWorker,'verify');
+  }else{
+    document.getElementById('select-screen').style.display='flex';
+  }
+}
 
 function renderSelectScreen(){
   const g=document.getElementById('w-grid');
   g.innerHTML=employees.map(e=>`<div class="worker-btn" onclick="selectWorker('${e}')"><div class="wa">${e[0]}</div><div style="font-size:13px;font-weight:600">${e}</div></div>`).join('');
 }
+
 window.selectWorker=function(name){
-  if(!confirm(`確認你是「${name}」嗎？\nXác nhận bạn là "${name}"?`))return;
-  localStorage.setItem('worker_name',name);currentWorker=name;showMain(name);
+  // 選人後進入 PIN 驗證或設定
+  openPinScreen(name, workerPins[name]?'verify':'set');
 }
+
+function openPinScreen(name, mode){
+  pinTargetWorker=name;
+  pinMode=mode;
+  pinBuffer='';
+  pinPending='';
+  updatePinDots();
+  document.getElementById('pin-name').textContent=name;
+  document.getElementById('pin-avatar').textContent=name[0]||'👷';
+  document.getElementById('pin-error').textContent='';
+  if(mode==='verify'){
+    document.getElementById('pin-subtitle').textContent='請輸入 PIN 碼 / Nhập mã PIN';
+  }else if(mode==='set'){
+    document.getElementById('pin-subtitle').textContent='首次登入，請設定 4 位 PIN 碼 / Đặt mã PIN 4 số';
+  }else if(mode==='confirm'){
+    document.getElementById('pin-subtitle').textContent='請再輸入一次確認 / Nhập lại để xác nhận';
+  }
+  document.getElementById('select-screen').style.display='none';
+  document.getElementById('pin-screen').style.display='flex';
+}
+
+function updatePinDots(){
+  for(let i=0;i<4;i++){
+    const dot=document.getElementById('pin-dot-'+i);
+    dot.style.background=i<pinBuffer.length?'#185FA5':'#e0e0e0';
+    dot.style.borderColor=i<pinBuffer.length?'#185FA5':'#ccc';
+  }
+}
+
+window.pinInput=function(digit){
+  if(pinBuffer.length>=4)return;
+  pinBuffer+=digit;
+  updatePinDots();
+  document.getElementById('pin-error').textContent='';
+  if(pinBuffer.length===4)setTimeout(()=>processPIN(),150);
+}
+window.pinBack=function(){
+  pinBuffer=pinBuffer.slice(0,-1);
+  updatePinDots();
+}
+window.pinCancel=function(){
+  pinBuffer='';pinPending='';
+  document.getElementById('pin-screen').style.display='none';
+  currentWorker=null;localStorage.removeItem('worker_name');
+  document.getElementById('select-screen').style.display='flex';
+}
+
+async function processPIN(){
+  if(pinMode==='verify'){
+    if(pinBuffer===workerPins[pinTargetWorker]){
+      localStorage.setItem('worker_name',pinTargetWorker);
+      currentWorker=pinTargetWorker;
+      document.getElementById('pin-screen').style.display='none';
+      showMain(pinTargetWorker);
+    }else{
+      document.getElementById('pin-error').textContent='PIN 碼錯誤，請重試 / Sai mã PIN, thử lại';
+      pinBuffer='';updatePinDots();
+    }
+  }else if(pinMode==='set'){
+    pinPending=pinBuffer;
+    pinBuffer='';
+    openPinScreen(pinTargetWorker,'confirm');
+  }else if(pinMode==='confirm'){
+    if(pinBuffer===pinPending){
+      // 儲存 PIN 到 Firebase
+      const newPins={...workerPins,[pinTargetWorker]:pinBuffer};
+      try{
+        await setDoc(doc(db,'system','workerPins'),newPins);
+        workerPins=newPins;
+        localStorage.setItem('worker_name',pinTargetWorker);
+        currentWorker=pinTargetWorker;
+        document.getElementById('pin-screen').style.display='none';
+        showMain(pinTargetWorker);
+        toast('PIN 碼設定成功 / Đặt mã PIN thành công ✓');
+      }catch(e){
+        document.getElementById('pin-error').textContent='儲存失敗，請重試';
+        pinBuffer='';updatePinDots();
+      }
+    }else{
+      document.getElementById('pin-error').textContent='兩次輸入不同，請重新設定 / Không khớp, thử lại';
+      pinBuffer='';pinPending='';
+      setTimeout(()=>openPinScreen(pinTargetWorker,'set'),1000);
+    }
+  }
+}
+
 function showMain(name){
   document.getElementById('select-screen').style.display='none';
+  document.getElementById('pin-screen').style.display='none';
   document.getElementById('main-screen').style.display='block';
   document.getElementById('nav-name').textContent=name;
   renderWorkerMain();renderCheckinStatus();
+}
+
+window.logoutWorker=function(){
+  currentWorker=null;localStorage.removeItem('worker_name');
+  document.getElementById('main-screen').style.display='none';
+  document.getElementById('select-screen').style.display='flex';
 }
 
 
@@ -529,12 +671,6 @@ window.submitRpt=async function(id,max){
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
 }
-
-// ── 長按重置 ──
-let pressTimer=null;
-const hint=document.getElementById('reset-hint');
-['touchstart','mousedown'].forEach(ev=>hint.addEventListener(ev,()=>{pressTimer=setTimeout(()=>{if(confirm('確定要重新選擇姓名嗎？\nChọn lại tên?')){localStorage.removeItem('worker_name');location.reload();}},3000);}));
-['touchend','mouseup'].forEach(ev=>hint.addEventListener(ev,()=>clearTimeout(pressTimer)));
 
 init();
 </script>
