@@ -549,7 +549,10 @@ function renderOrders(){
     const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
     const st=reported>=o.qty&&o.qty>0?'已完成':(reported>0||hasDispatch)?'加工中':'待派工';
     const sc={'待派工':'bp','加工中':'ba','已完成':'bd'};
-    return`<tr><td style="white-space:nowrap">${o.date||'-'}</td><td style="color:#888">${o.orderno||'-'}</td><td style="font-weight:600">${o.name}</td><td style="color:#888">${o.spec||'-'}</td>
+    return`<tr><td style="white-space:nowrap">${o.date||'-'}</td>
+      <td><span style="color:#888;cursor:pointer;text-decoration:underline dotted" title="點擊編輯訂單號" onclick="editOrderNo('${o.id}','${(o.orderno||'').replace(/'/g,"\\'")}')">
+        ${o.orderno||'<span style="color:#ccc">點擊輸入</span>'}</span></td>
+      <td style="font-weight:600">${o.name}</td><td style="color:#888">${o.spec||'-'}</td>
       <td class="col-num">${(o.qty||0).toLocaleString()}</td><td class="col-num">$${o.price||0}</td><td class="col-num" style="font-weight:600;color:#1565C0">${amt>0?'$'+amt.toLocaleString():'—'}</td>
       <td class="col-num" style="color:#2E7D32;font-weight:600">${o.done||0}</td><td class="col-num" style="color:#1565C0;font-weight:600">${undone}</td>
       <td class="col-num" style="color:#C62828">${o.defect||0}</td><td class="col-num" style="color:#E65100">${o.shortage||0}</td>
@@ -557,6 +560,28 @@ function renderOrders(){
       <td style="min-width:70px">${pct}%<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div></td>
       <td><button class="btn btn-sm btn-danger" onclick="delOrder('${o.id}')">🗑</button></td></tr>`;
   }).join('');
+}
+window.editOrderNo=async function(orderId, currentNo){
+  const newNo=prompt('修改訂單號：', currentNo);
+  if(newNo===null)return; // 取消
+  if(newNo===currentNo)return; // 沒有變更
+  const trimmed=newNo.trim();
+  const o=window.DB.orders.find(x=>x.id===orderId);
+  if(!o)return;
+  // 更新訂單
+  o.orderno=trimmed;
+  await saveOrder(o);
+  // 同步更新所有相關派工記錄的 orderNo
+  const related=window.DB.dispatches.filter(d=>d.orderId===orderId);
+  if(related.length){
+    for(const d of related){
+      d.orderNo=trimmed;
+      await saveDispatch(d);
+    }
+    toast(`訂單號已更新，同步 ${related.length} 筆派工記錄`);
+  }else{
+    toast('訂單號已更新');
+  }
 }
 window.delOrder=async function(id){
   if(!confirm('確定刪除此訂單？'))return;

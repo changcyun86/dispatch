@@ -588,13 +588,17 @@ function renderWorkerMain(){
     const o=orders.find(x=>x.id===d.orderId);
     const orderQty=o?o.qty:d.assignQty;
 
-    // 訂單已完成 → 不顯示
+    // 本人這筆已回報完成 → 不顯示
+    const myReported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+    if(myReported>0&&d.status==='已完成')return false;
+
+    // 訂單整體已完成 → 不顯示
     const allReported=dispatches
       .filter(x=>x.orderId===d.orderId)
       .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
     if(allReported>=orderQty)return false;
 
-    // 找出此訂單最新一批的 batchId（以 createdAt 最新的那筆為準）
+    // 找出此訂單最新一批的 batchId
     const allForOrder=dispatches.filter(x=>x.orderId===d.orderId);
     const latestBatchId=allForOrder.reduce((latest,x)=>{
       if(!latest)return x.batchId||x.id;
