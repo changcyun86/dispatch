@@ -332,7 +332,10 @@ textarea{resize:vertical;min-height:70px}
       <span>派工記錄：<strong id="si-disps">0</strong></span>
       <span>品名資料：<strong id="si-prods">0</strong></span>
     </div>
-    <div style="margin-top:12px"><button class="btn btn-sm btn-danger" onclick="clearAll()">清除所有訂單與派工資料</button></div>
+    <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-sm btn-warn" onclick="clearCompleted()">🗑 刪除已完成訂單（含派工記錄）</button>
+      <button class="btn btn-sm btn-danger" onclick="clearAll()">清除所有資料</button>
+    </div>
   </div>
 </div>
 </div><!-- main-app -->
@@ -473,8 +476,8 @@ function renderOrders(){
   if(dateTo)list=list.filter(o=>(o.date||'')<=dateTo);
   if(orderFilter!=='all'){
     list=list.filter(o=>{
-      const undone=Math.max(0,o.qty-(o.done||0));
-      const st=(o.done||0)<=0?'待派工':undone<=0?'已完成':'加工中';
+      const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+      const st=reported<=0?'待派工':reported>=o.qty?'已完成':'加工中';
       return st===orderFilter;
     });
   }
@@ -483,7 +486,7 @@ function renderOrders(){
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const undone=Math.max(0,o.qty-reported);
     const pct=o.qty>0?Math.min(100,Math.round(reported/o.qty*100)):0;
-    const amt=o.qty*(o.price||0),st=reported<=0?'待派工':undone<=0?'已完成':'加工中';
+    const amt=o.qty*(o.price||0),st=reported<=0?'待派工':reported>=o.qty?'已完成':'加工中';
     const sc={'待派工':'bp','加工中':'ba','已完成':'bd'};
     return`<tr><td style="white-space:nowrap">${o.date||'-'}</td><td style="color:#888">${o.orderno||'-'}</td><td style="font-weight:600">${o.name}</td><td style="color:#888">${o.spec||'-'}</td>
       <td class="col-num">${(o.qty||0).toLocaleString()}</td><td class="col-num">$${o.price||0}</td><td class="col-num" style="font-weight:600;color:#1565C0">${amt>0?'$'+amt.toLocaleString():'—'}</td>
@@ -562,7 +565,7 @@ function renderPendingDispatch(){
     const remaining=o.qty-reported;
     const dispatched=window.DB.dispatches.filter(d=>d.orderId===o.id&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
     const avail=Math.max(0,remaining-dispatched);
-    const st=(o.done||0)<=0?'待派工':'加工中';
+    const st=reported<=0?'待派工':'加工中';
     return`<div style="padding:7px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('d-order').value='${o.id}';onOrderChange()">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-weight:600">${o.name}${o.spec?' <span style="color:#aaa;font-size:11px">'+o.spec+'</span>':''}</span>
@@ -743,6 +746,15 @@ function renderCheckins(){
       const diff=(new Date('2000-01-01T'+c.outTime)-new Date('2000-01-01T'+c.inTime))/3600000;
       if(diff>0){hoursNum=diff;hours=diff.toFixed(1)+'h';totalHours+=diff;countComplete++;}
     }
+    if(c.leave){
+      return`<tr style="background:#fdf5ff">
+        <td style="white-space:nowrap;font-weight:500">${c.date}</td>
+        <td style="font-weight:600">${c.worker}</td>
+        <td colspan="4" style="color:#6A1B9A">📋 ${c.leaveType||'請假'}${c.leaveNote?' — '+c.leaveNote:''}</td>
+        <td></td>
+        <td><span class="badge" style="background:#F3E5F5;color:#6A1B9A">請假</span></td>
+      </tr>`;
+    }
     const statusBadge=c.outTime
       ?`<span class="badge bd">完整</span>`
       :c.inTime?`<span class="badge" style="background:#FFF3E0;color:#E65100">未下班</span>`
@@ -809,17 +821,31 @@ window.calcSalary=function(){
   // 明細：日期 加工者 訂單號 品名 規格 加工單價 完成數量 金額
   const detailRows=rows.sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
 
+  // 產生可複製的 TSV 格式（貼到 Excel）
+  const tsvHeader='日期\t加工者\t訂單號\t品名\t規格\t加工單價\t完成數量\t金額';
+  const tsvRows=detailRows.map(d=>[
+    (d.createdAt||'').slice(0,10),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
+    d.itemPrice||0,d.doneQty||0,((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)
+  ].join('\t'));
+  const tsvTotal=`合計\t\t\t\t\t\t${rows.reduce((a,d)=>a+(d.doneQty||0),0)}\t${grand.toFixed(0)}`;
+  const tsvAll=[tsvHeader,...tsvRows,tsvTotal].join('\n');
+
   el.innerHTML=`<div class="grid4" style="margin-bottom:1rem">
     <div class="metric"><div class="metric-label">${filterWorker?'員工':'計薪員工數'}</div><div class="metric-val">${filterWorker||ws.length}</div></div>
     <div class="metric"><div class="metric-label">${filterWorker?'個人薪資':'薪資總支出'}</div><div class="metric-val">$${grand.toFixed(0)}</div></div>
     <div class="metric"><div class="metric-label">總完工數量</div><div class="metric-val">${ws.reduce((a,w)=>a+map[w].done,0)}</div></div>
     <div class="metric"><div class="metric-label">不良 / 來料不足</div><div class="metric-val">${ws.reduce((a,w)=>a+map[w].defect,0)} / ${ws.reduce((a,w)=>a+map[w].shortage,0)}</div></div>
   </div>
+  <div style="display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap">
+    <button class="btn btn-primary btn-sm" onclick="printSalary()">🖨️ 列印明細</button>
+    <button class="btn btn-sm" onclick="copySalaryTSV()">📋 複製到 Excel</button>
+    <span id="copy-msg" style="font-size:12px;color:#2E7D32;align-self:center;display:none">✓ 已複製，可直接貼到 Excel！</span>
+  </div>
   ${!filterWorker?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem"><div class="tbl-wrap"><table class="tbl">
     <thead><tr><th>員工</th><th class="col-num">完工數量</th><th class="col-num">不良品</th><th class="col-num">來料不足</th><th class="col-num" style="color:#2E7D32">薪資</th></tr></thead>
     <tbody>${ws.map(w=>`<tr><td style="font-weight:600">${w}</td><td class="col-num">${map[w].done}</td><td class="col-num" style="color:#C62828">${map[w].defect}</td><td class="col-num" style="color:#E65100">${map[w].shortage}</td><td class="col-num" style="font-weight:600;color:#2E7D32">$${map[w].salary.toFixed(0)}</td></tr>`).join('')}</tbody>
   </table></div></div>`:''}
-  <div class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="tbl">
+  <div id="sal-detail-tbl" class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="tbl">
     <thead><tr><th>日期</th><th>加工者</th><th>訂單號</th><th>品名</th><th>規格</th><th class="col-num">加工單價</th><th class="col-num">完成數量</th><th class="col-num" style="color:#2E7D32">金額</th></tr></thead>
     <tbody>${detailRows.map(d=>`<tr>
       <td style="white-space:nowrap">${(d.createdAt||'').slice(0,10)}</td>
@@ -834,6 +860,42 @@ window.calcSalary=function(){
     <tr style="background:#f0f7f0;font-weight:600"><td colspan="6" style="text-align:right;padding:8px 10px">合計</td><td class="col-num">${rows.reduce((a,d)=>a+(d.doneQty||0),0)}</td><td class="col-num" style="color:#2E7D32">$${grand.toFixed(0)}</td></tr>
     </tbody>
   </table></div></div>`;
+
+  // 儲存 TSV 供複製
+  window._salaryTSV=tsvAll;
+}
+window.copySalaryTSV=function(){
+  if(!window._salaryTSV)return;
+  navigator.clipboard.writeText(window._salaryTSV).then(()=>{
+    const msg=document.getElementById('copy-msg');
+    msg.style.display='inline';
+    setTimeout(()=>msg.style.display='none',3000);
+  }).catch(()=>{
+    // fallback
+    const ta=document.createElement('textarea');
+    ta.value=window._salaryTSV;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');
+    document.body.removeChild(ta);
+    toast('已複製，可直接貼到 Excel！');
+  });
+}
+window.printSalary=function(){
+  const tbl=document.getElementById('sal-detail-tbl');
+  if(!tbl)return;
+  const from=document.getElementById('sal-from').value,to=document.getElementById('sal-to').value;
+  const w=window.open('','_blank','width=900,height=700');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>薪資明細</title>
+  <style>body{font-family:'Microsoft JhengHei',sans-serif;font-size:13px;padding:20px}
+  h2{font-size:16px;margin-bottom:4px}p{color:#666;font-size:12px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:6px 10px;text-align:left;font-size:12px}
+  th{background:#f5f5f5;font-weight:600}.num{text-align:right}.total{background:#f0f7f0;font-weight:600}
+  @media print{button{display:none}}</style></head><body>
+  <h2>薪資加工明細</h2><p>期間：${from} ～ ${to}</p>
+  ${tbl.innerHTML}
+  <div style="margin-top:16px;text-align:right"><button onclick="window.print()">列印</button></div>
+  </body></html>`);
+  w.document.close();
+  setTimeout(()=>w.print(),500);
 }
 
 // ── 設定 ──
@@ -850,6 +912,20 @@ window.parseProdPaste=async function(){
 }
 window.addProduct=async function(){const name=document.getElementById('np-name').value.trim(),spec=document.getElementById('np-spec').value.trim(),price=parseFloat(document.getElementById('np-price').value)||0;if(!name)return alert('請輸入品名');if(price<=0)return alert('請輸入有效單價');const ei=window.DB.products.findIndex(p=>p.name===name&&(p.spec||'')===spec);if(ei>=0){if(!confirm(`「${name}」已存在，覆蓋單價嗎？`))return;window.DB.products[ei].price=price;}else window.DB.products.push({name,spec,price});document.getElementById('np-name').value='';document.getElementById('np-spec').value='';document.getElementById('np-price').value='';await saveProducts();toast('品名已儲存');}
 window.removeProd=async function(i){if(!confirm('確定移除？'))return;window.DB.products.splice(i,1);await saveProducts();}
+window.clearCompleted=async function(){
+  const completed=window.DB.orders.filter(o=>{
+    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    return reported>=o.qty&&o.qty>0;
+  });
+  if(!completed.length)return alert('目前沒有已完成的訂單');
+  if(!confirm(`確定刪除 ${completed.length} 筆已完成訂單及其派工記錄？此操作無法復原！`))return;
+  for(const o of completed){
+    await deleteDoc(doc(db,'orders',o.id));
+    const toDelete=window.DB.dispatches.filter(d=>d.orderId===o.id);
+    for(const d of toDelete)await deleteDoc(doc(db,'dispatches',String(d.id)));
+  }
+  toast(`已刪除 ${completed.length} 筆已完成訂單`);
+}
 window.clearAll=async function(){if(!confirm('確定清除所有訂單與派工記錄？'))return;const oSnap=await getDocs(collection(db,'orders'));for(const d of oSnap.docs)await deleteDoc(d.ref);const dSnap=await getDocs(collection(db,'dispatches'));for(const d of dSnap.docs)await deleteDoc(d.ref);toast('已清除');}
 
 // ── 頁面切換 ──

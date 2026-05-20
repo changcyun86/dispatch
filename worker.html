@@ -92,6 +92,11 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
           下班打卡<br><span style="font-size:12px;font-weight:400">Ra ca</span>
         </button>
       </div>
+      <div style="margin-top:8px">
+        <button class="btn" style="width:100%;background:#F3E5F5;border-color:#CE93D8;color:#6A1B9A;padding:10px" onclick="doLeave()">
+          📋 請假申請 / Xin nghỉ phép
+        </button>
+      </div>
       <div id="checkin-msg" style="font-size:12px;color:#888;margin-top:8px;text-align:center"></div>
     </div>
 
@@ -191,18 +196,40 @@ function renderCheckinStatus(){
   const ci=getTodayCheckin();
   const box=document.getElementById('checkin-status-box');
   const msg=document.getElementById('checkin-msg');
-  if(ci&&ci.outTime){
-    box.className='checkin-status in';
+  if(ci&&ci.leave){
+    box.className='checkin-status';
+    box.style.background='#F3E5F5';box.style.borderColor='#CE93D8';
+    box.innerHTML=`<div style="font-size:13px;color:#6A1B9A;font-weight:600">📋 今日請假 / Nghỉ phép hôm nay</div><div style="font-size:12px;color:#666;margin-top:4px">假別：${ci.leaveType||'請假'}${ci.leaveNote?' — '+ci.leaveNote:''}</div>`;
+    msg.textContent='';
+  }else if(ci&&ci.outTime){
+    box.className='checkin-status in';box.style.background='';box.style.borderColor='';
     box.innerHTML=`<div style="font-size:13px;color:#2E7D32;font-weight:600">今日已下班 / Đã ra ca</div><div style="font-size:12px;color:#666;margin-top:4px">上班 ${ci.inTime} → 下班 ${ci.outTime}</div>`;
     msg.textContent='';
   }else if(ci&&ci.inTime){
-    box.className='checkin-status in';
+    box.className='checkin-status in';box.style.background='';box.style.borderColor='';
     box.innerHTML=`<div style="font-size:13px;color:#2E7D32;font-weight:600">✓ 已上班打卡 / Đã vào ca</div><div style="font-size:12px;color:#666;margin-top:4px">上班時間 / Giờ vào: ${ci.inTime}</div>`;
     msg.textContent='';
   }else{
-    box.className='checkin-status out';
+    box.className='checkin-status out';box.style.background='';box.style.borderColor='';
     box.innerHTML=`<div style="font-size:13px;color:#888">今日尚未上班 / Chưa chấm công hôm nay</div>`;
   }
+}
+window.doLeave=async function(){
+  if(!currentWorker)return;
+  const ci=getTodayCheckin();
+  if(ci&&(ci.inTime||ci.leave))return toast('今日已有打卡或請假記錄 / Hôm nay đã có ghi chép');
+  const leaveTypes=['特休 / Nghỉ phép năm','病假 / Nghỉ ốm','事假 / Nghỉ việc riêng','其他 / Khác'];
+  const typeChoice=prompt(`請選擇假別（輸入數字）/ Chọn loại nghỉ phép:\n1. 特休 / Nghỉ phép năm\n2. 病假 / Nghỉ ốm\n3. 事假 / Nghỉ việc riêng\n4. 其他 / Khác`);
+  if(!typeChoice)return;
+  const leaveType=leaveTypes[(parseInt(typeChoice)||1)-1]||leaveTypes[3];
+  const leaveNote=prompt('備註說明（可不填）/ Ghi chú (có thể bỏ trống):')||'';
+  const today=new Date().toISOString().slice(0,10);
+  setSS('syncing');
+  try{
+    const id=`CI-${currentWorker}-${today}`;
+    await setDoc(doc(db,'checkins',id),{worker:currentWorker,date:today,leave:true,leaveType,leaveNote,inTime:null,outTime:null,inLat:null,inLng:null,outLat:null,outLng:null});
+    setSS('ok');toast('請假申請已送出 / Đã gửi yêu cầu nghỉ phép ✓');
+  }catch(e){setSS('err');toast('送出失敗，請重試');}
 }
 window.doCheckin=async function(type){
   if(!currentWorker)return;
@@ -403,7 +430,11 @@ window.saveEdit=async function(id,max){
 function renderWorkerMain(){
   if(!currentWorker)return;
   const myAll=dispatches.filter(d=>d.worker===currentWorker);
-  const myPending=myAll.filter(d=>d.status!=='已完成');
+  // 待辦：總回報數 < 指派數量
+  const myPending=myAll.filter(d=>{
+    const rep=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+    return rep<d.assignQty;
+  });
   const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
   const totalEarned=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
   document.getElementById('wm-stats').innerHTML=`
@@ -414,16 +445,19 @@ function renderWorkerMain(){
   if(currentTab!=='pending')return;
   const tasks=document.getElementById('wm-tasks');
   if(!myPending.length){tasks.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單<br>Không có công việc chờ xử lý</div>';return;}
-  tasks.innerHTML=myPending.map(d=>`
+  tasks.innerHTML=myPending.map(d=>{
+    const repSoFar=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+    const remain=d.assignQty-repSoFar;
+    return`
     <div class="card">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px">
         <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
-        <span class="badge ba">${d.status}</span>
+        <span style="font-size:12px;color:#888">${d.orderId||''}</span>
       </div>
       <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
         <div>指派數量 / <span style="color:#aaa">Số lượng giao</span>：<strong>${d.assignQty}</strong></div>
         <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
-        <div>已回報 / <span style="color:#aaa">Đã báo cáo</span>：${d.doneQty||0}</div>
+        <div>尚未回報 / <span style="color:#aaa">Chưa báo cáo</span>：<strong style="color:#185FA5">${remain}</strong></div>
         ${d.note?`<div>備註：${d.note}</div>`:''}
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
@@ -451,7 +485,7 @@ function renderWorkerMain(){
         回報完工 / Báo cáo hoàn thành
       </button>
     </div>
-  `).join('');
+  `;}).join('');
 }
 
 window.validateRpt=function(id,max){
