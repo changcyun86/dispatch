@@ -452,20 +452,52 @@ window.parseOrderPaste=async function(){
     if(!name||qty<=0){if(idx===0&&(name.includes('品名')||dateVal.includes('日期')))return;skipped++;return;}
     if(!price){const f=lookupProduct(name);if(f)price=f.price;}
     let ds=dateVal.replace(/\//g,'-').replace(/(\d{4})-(\d{1,2})-(\d{1,2})/,(_,y,m,d)=>`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`);
-    // ID 加上索引確保唯一，避免快速批次時重複
     const uid=`ORD-${Date.now().toString(36).toUpperCase()}-${String(imported.length).padStart(3,'0')}`;
     imported.push({id:uid,date:ds,orderno,name,spec,qty,price,done:0,defect:0,shortage:0,createdAt:new Date().toISOString()});
   });
   if(!imported.length){alert('無法解析資料，請確認格式');return;}
-  toast(`匯入中，共 ${imported.length} 筆，請稍候...`);
+
+  // 偵測重複：以訂單號+品名+規格比對
+  const duplicates=imported.filter(imp=>
+    window.DB.orders.some(o=>
+      o.orderno&&imp.orderno&&o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||'')
+    )
+  );
+
+  let toImport=imported;
+  if(duplicates.length>0){
+    const dupList=duplicates.map(d=>`${d.orderno} ${d.name}${d.spec?' '+d.spec:''}`).join('\n');
+    const choice=confirm(`發現 ${duplicates.length} 筆重複訂單：\n${dupList}\n\n點「確定」→ 覆蓋重複的訂單\n點「取消」→ 跳過重複，只匯入新訂單`);
+    if(choice){
+      // 覆蓋：刪除舊的重複訂單，全部匯入
+      for(const imp of duplicates){
+        const old=window.DB.orders.find(o=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''));
+        if(old){
+          await deleteDoc(doc(db,'orders',old.id));
+          const toDelete=window.DB.dispatches.filter(d=>d.orderId===old.id);
+          for(const d of toDelete)await deleteDoc(doc(db,'dispatches',String(d.id)));
+        }
+      }
+    }else{
+      // 跳過：排除重複的
+      toImport=imported.filter(imp=>
+        !window.DB.orders.some(o=>
+          o.orderno&&imp.orderno&&o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||'')
+        )
+      );
+    }
+  }
+
+  if(!toImport.length){toast('無新訂單需要匯入');return;}
+  toast(`匯入中，共 ${toImport.length} 筆，請稍候...`);
   let count=0;
-  for(const o of imported){
+  for(const o of toImport){
     await saveOrder(o);
     count++;
-    if(count%5===0)toast(`匯入中 ${count}/${imported.length}...`);
+    if(count%5===0)toast(`匯入中 ${count}/${toImport.length}...`);
   }
   closePanel('order-paste-panel');document.getElementById('order-paste-input').value='';
-  toast(`成功匯入 ${imported.length} 筆${skipped?`，跳過${skipped}列`:''}`);
+  toast(`成功匯入 ${toImport.length} 筆${skipped?`，跳過${skipped}列`:''}${duplicates.length?`，處理重複 ${duplicates.length} 筆`:''}`)
 }
 window.saveManual=async function(){
   const name=document.getElementById('m-name').value.trim(),qty=parseFloat(document.getElementById('m-qty').value)||0;
@@ -503,7 +535,8 @@ function renderOrders(){
   if(orderFilter!=='all'){
     list=list.filter(o=>{
       const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-      const st=reported<=0?'待派工':reported>=o.qty?'已完成':'加工中';
+      const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
+      const st=reported>=o.qty&&o.qty>0?'已完成':(reported>0||hasDispatch)?'加工中':'待派工';
       return st===orderFilter;
     });
   }
@@ -512,7 +545,9 @@ function renderOrders(){
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const undone=Math.max(0,o.qty-reported);
     const pct=o.qty>0?Math.min(100,Math.round(reported/o.qty*100)):0;
-    const amt=o.qty*(o.price||0),st=reported<=0?'待派工':reported>=o.qty?'已完成':'加工中';
+    const amt=o.qty*(o.price||0);
+    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
+    const st=reported>=o.qty&&o.qty>0?'已完成':(reported>0||hasDispatch)?'加工中':'待派工';
     const sc={'待派工':'bp','加工中':'ba','已完成':'bd'};
     return`<tr><td style="white-space:nowrap">${o.date||'-'}</td><td style="color:#888">${o.orderno||'-'}</td><td style="font-weight:600">${o.name}</td><td style="color:#888">${o.spec||'-'}</td>
       <td class="col-num">${(o.qty||0).toLocaleString()}</td><td class="col-num">$${o.price||0}</td><td class="col-num" style="font-weight:600;color:#1565C0">${amt>0?'$'+amt.toLocaleString():'—'}</td>
@@ -972,10 +1007,65 @@ function updateSysInfo(){['orders','emps','disps','prods'].forEach((k,i)=>{const
 window.addEmp=async function(){const n=document.getElementById('new-emp').value.trim();if(!n)return;if(window.DB.employees.includes(n))return alert('員工已存在');window.DB.employees.push(n);document.getElementById('new-emp').value='';await saveEmployees();toast(`已新增員工：${n}`);}
 window.removeEmp=async function(i){if(!confirm('確定移除？'))return;window.DB.employees.splice(i,1);await saveEmployees();}
 window.parseProdPaste=async function(){
-  const raw=document.getElementById('prod-paste-input').value.trim();if(!raw){alert('請先貼上資料');return;}
-  const lines=raw.split('\n').map(l=>l.trim()).filter(l=>l);let added=0,updated=0,skipped=0;
-  lines.forEach((line,idx)=>{const cols=line.split('\t').map(c=>c.trim());const name=cols[0]||'';let spec='',price=0;if(cols.length>=3){spec=cols[1];price=parseFloat(cols[2])||0;}else{price=parseFloat(cols[1])||0;}if(!name||price<=0){if(idx===0&&name.includes('品名'))return;skipped++;return;}const ei=window.DB.products.findIndex(p=>p.name===name&&(p.spec||'')===spec);if(ei>=0){window.DB.products[ei].price=price;updated++;}else{window.DB.products.push({name,spec,price});added++;}});
-  await saveProducts();closePanel('prod-paste-panel');document.getElementById('prod-paste-input').value='';toast(`新增 ${added} 筆，更新 ${updated} 筆${skipped?`，跳過${skipped}列`:''}`);
+  const raw=document.getElementById('prod-paste-input').value.trim();
+  if(!raw){alert('請先貼上資料');return;}
+  const lines=raw.split('\n').map(l=>l.trim()).filter(l=>l);
+  const toProcess=[];let skipped=0;
+  lines.forEach((line,idx)=>{
+    const cols=line.split('\t').map(c=>c.trim());
+    const name=cols[0]||'';let spec='',price=0;
+    if(cols.length>=3){spec=cols[1];price=parseFloat(cols[2])||0;}
+    else{price=parseFloat(cols[1])||0;}
+    if(!name||price<=0){
+      if(idx===0&&(name.includes('品名')||name.toLowerCase().includes('name')))return;
+      skipped++;return;
+    }
+    toProcess.push({name,spec:spec||'',price});
+  });
+  if(!toProcess.length){alert('無可匯入的資料，請確認格式');return;}
+
+  // 先確認解析數量
+  const confirmMsg=`解析到 ${toProcess.length} 筆品名資料${skipped?`（跳過 ${skipped} 列）`:''}，確認匯入？`;
+  if(!confirm(confirmMsg))return;
+
+  // 偵測重複（品名+規格相同但單價不同）
+  const duplicates=toProcess.filter(p=>{
+    const ei=window.DB.products.findIndex(x=>x.name===p.name&&(x.spec||'')===(p.spec||''));
+    return ei>=0&&window.DB.products[ei].price!==p.price;
+  });
+
+  let overwrite=false;
+  if(duplicates.length>0){
+    const showMax=10;
+    const dupList=duplicates.slice(0,showMax).map(p=>{
+      const old=window.DB.products.find(x=>x.name===p.name&&(x.spec||'')===(p.spec||''));
+      return `${p.name}${p.spec?' '+p.spec:''} $${old?.price}→$${p.price}`;
+    }).join('\n')+(duplicates.length>showMax?`\n...還有 ${duplicates.length-showMax} 筆`:'');
+    overwrite=confirm(`發現 ${duplicates.length} 筆單價不同的品名：\n${dupList}\n\n確定 → 覆蓋為新單價\n取消 → 保留原單價，只新增全新品名`);
+  }
+
+  let added=0,updated=0;
+  toProcess.forEach(p=>{
+    const ei=window.DB.products.findIndex(x=>x.name===p.name&&(x.spec||'')===(p.spec||''));
+    if(ei>=0){
+      if(overwrite){window.DB.products[ei].price=p.price;updated++;}
+    }else{
+      window.DB.products.push({name:p.name,spec:p.spec,price:p.price});added++;
+    }
+  });
+
+  setSS('syncing');
+  try{
+    await setDoc(doc(db,'system','products'),{list:window.DB.products});
+    setSS('ok');
+    renderProducts();
+    closePanel('prod-paste-panel');
+    document.getElementById('prod-paste-input').value='';
+    toast(`✓ 新增 ${added} 筆，更新 ${updated} 筆，資料庫共 ${window.DB.products.length} 筆${skipped?`（跳過${skipped}列）`:''}`);
+  }catch(e){
+    setSS('err');
+    alert(`儲存失敗：${e.message||e}\n\n請檢查網路連線後重試`);
+  }
 }
 window.addProduct=async function(){const name=document.getElementById('np-name').value.trim(),spec=document.getElementById('np-spec').value.trim(),price=parseFloat(document.getElementById('np-price').value)||0;if(!name)return alert('請輸入品名');if(price<=0)return alert('請輸入有效單價');const ei=window.DB.products.findIndex(p=>p.name===name&&(p.spec||'')===spec);if(ei>=0){if(!confirm(`「${name}」已存在，覆蓋單價嗎？`))return;window.DB.products[ei].price=price;}else window.DB.products.push({name,spec,price});document.getElementById('np-name').value='';document.getElementById('np-spec').value='';document.getElementById('np-price').value='';await saveProducts();toast('品名已儲存');}
 window.removeProd=async function(i){if(!confirm('確定移除？'))return;window.DB.products.splice(i,1);await saveProducts();}
