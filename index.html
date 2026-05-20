@@ -275,9 +275,9 @@ textarea{resize:vertical;min-height:70px}
     </div>
     <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
       <span style="font-size:12px;color:#888;align-self:center">快速選擇：</span>
-      <button class="btn btn-sm" onclick="setPayPeriod(0)">本期（上個月整月）</button>
-      <button class="btn btn-sm" onclick="setPayPeriod(-1)">上期</button>
-      <button class="btn btn-sm" onclick="setPayPeriod(-2)">上上期</button>
+      <button class="btn btn-sm" id="sp-0" onclick="setPayPeriod(0,this)">本月</button>
+      <button class="btn btn-sm" id="sp-1" onclick="setPayPeriod(-1,this)">上月</button>
+      <button class="btn btn-sm" id="sp-2" onclick="setPayPeriod(-2,this)">上上月</button>
     </div>
   </div>
   <div id="sal-result"></div>
@@ -887,18 +887,25 @@ function renderCheckins(){
 }
 
 // ── 薪資 ──
-function setPayPeriod(offset){
-  // offset=0 → 本次發薪對應的上個月；offset=-1 → 上上個月，以此類推
+function setPayPeriod(offset,btn){
+  // offset=0 → 本月；offset=-1 → 上月；offset=-2 → 上上月
   const now=new Date();
-  // 本次發薪日對應的統計月份 = 上個月 + offset
-  let year=now.getFullYear(),month=now.getMonth()-1+offset; // getMonth()是0-based，-1=上個月
+  let year=now.getFullYear(),month=now.getMonth()+offset;
   while(month<0){month+=12;year--;}while(month>11){month-=12;year++;}
   const pad=n=>String(n).padStart(2,'0');
   const lastDay=new Date(year,month+1,0).getDate();
   document.getElementById('sal-from').value=`${year}-${pad(month+1)}-01`;
   document.getElementById('sal-to').value=`${year}-${pad(month+1)}-${lastDay}`;
+  // 高亮選中的按鈕
+  ['sp-0','sp-1','sp-2'].forEach(id=>{
+    const el=document.getElementById(id);
+    if(el){el.style.background='';el.style.color='';el.style.borderColor='';}
+  });
+  if(btn){btn.style.background='#185FA5';btn.style.color='#fff';btn.style.borderColor='#185FA5';}
 }
-function initSalDates(){if(!document.getElementById('sal-from').value)setPayPeriod(0);}
+function initSalDates(){
+  if(!document.getElementById('sal-from').value)setPayPeriod(0,document.getElementById('sp-0'));
+}
 function renderSalaryWorkers(){
   const sel=document.getElementById('sal-worker');if(!sel)return;const cur=sel.value;
   sel.innerHTML='<option value="">全部員工</option>'+window.DB.employees.map(e=>`<option value="${e}" ${e===cur?'selected':''}>${e}</option>`).join('');
@@ -951,9 +958,29 @@ window.calcSalary=function(){
     <button class="btn btn-sm" onclick="copySalaryTSV()">📋 複製到 Excel</button>
     <span id="copy-msg" style="font-size:12px;color:#2E7D32;align-self:center;display:none">✓ 已複製，可直接貼到 Excel！</span>
   </div>
-  ${!filterWorker?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem"><div class="tbl-wrap"><table class="tbl">
-    <thead><tr><th>員工</th><th class="col-num">完工數量</th><th class="col-num">不良品</th><th class="col-num">來料不足</th><th class="col-num" style="color:#2E7D32">薪資</th></tr></thead>
-    <tbody>${ws.map(w=>`<tr><td style="font-weight:600">${w}</td><td class="col-num">${map[w].done}</td><td class="col-num" style="color:#C62828">${map[w].defect}</td><td class="col-num" style="color:#E65100">${map[w].shortage}</td><td class="col-num" style="font-weight:600;color:#2E7D32">$${map[w].salary.toFixed(0)}</td></tr>`).join('')}</tbody>
+  ${!filterWorker?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem"><div class="tbl-wrap"><table class="tbl" style="table-layout:fixed">
+    <thead><tr>
+      <th style="width:25%">員工</th>
+      <th class="col-num" style="width:18%">完工數量</th>
+      <th class="col-num" style="width:18%">不良品</th>
+      <th class="col-num" style="width:18%">來料不足</th>
+      <th class="col-num" style="width:21%;color:#2E7D32">薪資</th>
+    </tr></thead>
+    <tbody>${ws.map(w=>`<tr>
+      <td style="font-weight:600">${w}</td>
+      <td class="col-num">${map[w].done}</td>
+      <td class="col-num" style="color:#C62828">${map[w].defect}</td>
+      <td class="col-num" style="color:#E65100">${map[w].shortage}</td>
+      <td class="col-num" style="font-weight:600;color:#2E7D32">$${map[w].salary.toFixed(0)}</td>
+    </tr>`).join('')}
+    <tr style="background:#f0f7f0;font-weight:600">
+      <td>合計</td>
+      <td class="col-num">${ws.reduce((a,w)=>a+map[w].done,0)}</td>
+      <td class="col-num" style="color:#C62828">${ws.reduce((a,w)=>a+map[w].defect,0)}</td>
+      <td class="col-num" style="color:#E65100">${ws.reduce((a,w)=>a+map[w].shortage,0)}</td>
+      <td class="col-num" style="color:#2E7D32">$${grand.toFixed(0)}</td>
+    </tr>
+    </tbody>
   </table></div></div>`:''}
   <div id="sal-detail-tbl" class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="tbl">
     <thead><tr><th>日期</th><th>加工者</th><th>訂單號</th><th>品名</th><th>規格</th><th class="col-num">加工單價</th><th class="col-num">完成數量</th><th class="col-num" style="color:#2E7D32">金額</th></tr></thead>
