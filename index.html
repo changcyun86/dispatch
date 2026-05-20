@@ -584,15 +584,16 @@ window.createDispatch=async function(){
   if(!orderId)return alert('請選擇訂單');
   if(!selectedWorkers.length)return alert('請選擇至少一名員工');
   const o=window.DB.orders.find(x=>x.id===orderId);
-  // 每位員工的工單都帶入「整筆訂單數量」，回報時驗證總數不超過訂單數量
+  const batchId=genId('B'); // 同一批派工共用同一個 batchId
+  const now=new Date().toISOString();
   for(const worker of selectedWorkers){
     await saveDispatch({
       id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
       orderNo:o.orderno||'',itemPrice:o.price,worker,
-      assignQty:o.qty, // 帶入整筆訂單數量供員工參考
+      assignQty:o.qty,batchId,
       doneQty:0,defectQty:0,shortageQty:0,
       note:document.getElementById('d-note').value,
-      status:'待完成',createdAt:new Date().toISOString()
+      status:'待完成',createdAt:now
     });
   }
   document.getElementById('d-note').value='';

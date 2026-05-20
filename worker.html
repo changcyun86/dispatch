@@ -579,14 +579,33 @@ window.saveEdit=async function(id){
 function renderWorkerMain(){
   if(!currentWorker)return;
   const myAll=dispatches.filter(d=>d.worker===currentWorker);
-  // 待辦：訂單所有人回報總數 < 訂單數量
+
+  // 待辦邏輯：
+  // 1. 訂單尚未完成
+  // 2. 此派工記錄的 batchId 是針對此訂單「最新一批」的派工
+  //    → 第1天派給A，第2天改派給B，A的舊記錄就不再顯示
   const myPending=myAll.filter(d=>{
     const o=orders.find(x=>x.id===d.orderId);
     const orderQty=o?o.qty:d.assignQty;
+
+    // 訂單已完成 → 不顯示
     const allReported=dispatches
       .filter(x=>x.orderId===d.orderId)
       .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-    return allReported<orderQty;
+    if(allReported>=orderQty)return false;
+
+    // 找出此訂單最新一批的 batchId（以 createdAt 最新的那筆為準）
+    const allForOrder=dispatches.filter(x=>x.orderId===d.orderId);
+    const latestBatchId=allForOrder.reduce((latest,x)=>{
+      if(!latest)return x.batchId||x.id;
+      const latestTime=allForOrder.find(a=>(a.batchId||a.id)===latest)?.createdAt||'';
+      const xTime=x.createdAt||'';
+      return xTime>latestTime?(x.batchId||x.id):latest;
+    },null);
+
+    // 本人這筆是否屬於最新一批
+    const myBatch=d.batchId||d.id;
+    return myBatch===latestBatchId;
   });
   const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
   const totalEarned=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
