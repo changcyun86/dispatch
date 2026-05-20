@@ -309,10 +309,44 @@ function renderHistory(){
   const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
   el.innerHTML=myAll.map(d=>{
     const earn=(d.doneQty||0)*(d.itemPrice||0);
+    const isEditing=editingId===d.id;
+    if(isEditing){
+      return`<div class="card" style="padding:0.875rem;border:1.5px solid #185FA5">
+        <div style="font-weight:600;margin-bottom:10px">${d.orderName}${d.orderSpec?' '+d.orderSpec:''}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+          <div>
+            <div style="font-size:11px;color:#2E7D32;font-weight:600;margin-bottom:3px">✓ 加工完成 / Hoàn thành</div>
+            <input type="number" id="eh-done-${d.id}" min="0" value="${d.doneQty||0}" oninput="validateEdit('${d.id}',${d.assignQty})" inputmode="numeric">
+            <div style="font-size:11px;color:#2E7D32;margin-top:2px">計入薪資</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#C62828;font-weight:600;margin-bottom:3px">✗ 不良品 / Hàng lỗi</div>
+            <input type="number" id="eh-def-${d.id}" min="0" value="${d.defectQty||0}" oninput="validateEdit('${d.id}',${d.assignQty})" inputmode="numeric">
+            <div style="font-size:11px;color:#C62828;margin-top:2px">不計薪資</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:#E65100;font-weight:600;margin-bottom:3px">✗ 來料不足 / Thiếu NVL</div>
+            <input type="number" id="eh-sho-${d.id}" min="0" value="${d.shortageQty||0}" oninput="validateEdit('${d.id}',${d.assignQty})" inputmode="numeric">
+            <div style="font-size:11px;color:#E65100;margin-top:2px">不計薪資</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#888;text-align:right;margin-bottom:6px">
+          已回報總數：<span id="etotal-${d.id}" style="font-weight:600;color:#185FA5">${(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)}</span> ／ 指派 ${d.assignQty}
+        </div>
+        <div id="ee-${d.id}" class="err-box"></div>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-primary btn-sm" onclick="saveEdit('${d.id}',${d.assignQty})" style="flex:1;padding:10px">儲存 / Lưu</button>
+          <button class="btn btn-sm" onclick="cancelEdit()" style="padding:10px">取消</button>
+        </div>
+      </div>`;
+    }
     return`<div class="card" style="padding:0.875rem">
-      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+      <div style="display:flex;justify-content:space-between;margin-bottom:4px;align-items:center">
         <span style="font-weight:600">${d.orderName}${d.orderSpec?' '+d.orderSpec:''}</span>
-        <span style="font-weight:600;color:#2E7D32">$${earn.toFixed(0)}</span>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span style="font-weight:600;color:#2E7D32">$${earn.toFixed(0)}</span>
+          <button class="btn btn-sm" onclick="startEdit('${d.id}')" style="font-size:11px;padding:3px 8px">調整 / Sửa</button>
+        </div>
       </div>
       <div style="font-size:12px;color:#888;line-height:1.8">
         <span style="color:#888">${(d.createdAt||'').slice(0,10)}</span> ·
@@ -323,6 +357,46 @@ function renderHistory(){
       <div style="font-size:11px;color:#aaa">指派 ${d.assignQty} 件 × $${d.itemPrice}</div>
     </div>`;
   }).join('')+`<div style="text-align:right;font-size:13px;color:#888;padding:4px 4px 8px">合計完工 <strong>${totalDone}</strong> 件 ／ 薪資 <strong style="color:#2E7D32;font-size:15px">$${totalEarn.toFixed(0)}</strong></div>`;
+}
+
+let editingId=null;
+window.startEdit=function(id){editingId=id;renderHistory();}
+window.cancelEdit=function(){editingId=null;renderHistory();}
+window.validateEdit=function(id,max){
+  const done=parseInt(document.getElementById('eh-done-'+id).value)||0;
+  const def=parseInt(document.getElementById('eh-def-'+id).value)||0;
+  const sho=parseInt(document.getElementById('eh-sho-'+id).value)||0;
+  const total=done+def+sho;
+  const totalEl=document.getElementById('etotal-'+id);
+  if(totalEl)totalEl.textContent=total;
+  const err=document.getElementById('ee-'+id);
+  if(total>max){err.style.display='block';err.textContent=`總數(${total})不能超過指派數量(${max}) / Tổng không được vượt quá ${max}`;return false;}
+  err.style.display='none';return true;
+}
+window.saveEdit=async function(id,max){
+  if(!validateEdit(id,max))return;
+  const d=dispatches.find(x=>x.id===id);if(!d)return;
+  const done=parseInt(document.getElementById('eh-done-'+id).value)||0;
+  const def=parseInt(document.getElementById('eh-def-'+id).value)||0;
+  const sho=parseInt(document.getElementById('eh-sho-'+id).value)||0;
+  const totalRep=done+def+sho;
+  setSS('syncing');
+  try{
+    const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
+      status:totalRep>=d.assignQty?'已完成':'回報中',
+      lastReportAt:new Date().toISOString()};
+    await setDoc(doc(db,'dispatches',String(id)),updated);
+    const o=orders.find(x=>x.id===d.orderId);
+    if(o){
+      const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
+      await setDoc(doc(db,'orders',o.id),{...o,
+        done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),
+        defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
+        shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)});
+    }
+    editingId=null;
+    setSS('ok');toast('已儲存 / Đã lưu ✓');
+  }catch(e){setSS('err');toast('儲存失敗，請重試');}
 }
 
 // ── 工單主畫面 ──
@@ -401,14 +475,22 @@ window.submitRpt=async function(id,max){
   const done=parseInt(document.getElementById('rd-'+id).value)||0;
   const def=parseInt(document.getElementById('rf-'+id).value)||0;
   const sho=parseInt(document.getElementById('rs-'+id).value)||0;
+  const totalReported=done+def+sho;
   setSS('syncing');
   try{
-    const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,status:done>=d.assignQty?'已完成':'待完成',lastReportAt:new Date().toISOString()};
+    // 總回報數 >= 指派數量 → 已完成，不再有「待完成」狀態
+    const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
+      status:totalReported>=d.assignQty?'已完成':'回報中',
+      lastReportAt:new Date().toISOString()};
     await setDoc(doc(db,'dispatches',String(id)),updated);
     const o=orders.find(x=>x.id===d.orderId);
     if(o){
       const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
-      await setDoc(doc(db,'orders',o.id),{...o,done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)});
+      const totalDone=allDisp.reduce((a,x)=>a+(x.doneQty||0),0);
+      const totalDef=allDisp.reduce((a,x)=>a+(x.defectQty||0),0);
+      const totalSho=allDisp.reduce((a,x)=>a+(x.shortageQty||0),0);
+      const totalRep=totalDone+totalDef+totalSho;
+      await setDoc(doc(db,'orders',o.id),{...o,done:totalDone,defect:totalDef,shortage:totalSho});
     }
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}

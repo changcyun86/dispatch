@@ -625,9 +625,12 @@ window.openAdjust=function(id){
 window.submitAdjust=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
   const done=parseInt(document.getElementById('adj-done').value)||0;
-  if(done>d.assignQty)return alert(`完成數量不能超過指派數量(${d.assignQty})`);
-  d.doneQty=done;d.defectQty=parseInt(document.getElementById('adj-def').value)||0;d.shortageQty=parseInt(document.getElementById('adj-sho').value)||0;
-  if(done>=d.assignQty)d.status='已完成';
+  const def=parseInt(document.getElementById('adj-def').value)||0;
+  const sho=parseInt(document.getElementById('adj-sho').value)||0;
+  const totalRep=done+def+sho;
+  if(totalRep>d.assignQty)return alert(`總回報數量(${totalRep})不能超過指派數量(${d.assignQty})`);
+  d.doneQty=done;d.defectQty=def;d.shortageQty=sho;
+  d.status=totalRep>=d.assignQty?'已完成':'回報中';
   await saveDispatch(d);
   const o=window.DB.orders.find(x=>x.id===d.orderId);
   if(o){const all=window.DB.dispatches.filter(x=>x.orderId===d.orderId);o.done=all.reduce((a,x)=>a+(x.doneQty||0),0);o.defect=all.reduce((a,x)=>a+(x.defectQty||0),0);o.shortage=all.reduce((a,x)=>a+(x.shortageQty||0),0);await saveOrder(o);}
