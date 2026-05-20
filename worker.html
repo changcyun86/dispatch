@@ -360,10 +360,10 @@ window.doLeave=async function(){
   if(!currentWorker)return;
   const ci=getTodayCheckin();
   if(ci&&(ci.inTime||ci.leave))return toast('今日已有打卡或請假記錄 / Hôm nay đã có ghi chép');
-  const leaveTypes=['特休 / Nghỉ phép năm','病假 / Nghỉ ốm','事假 / Nghỉ việc riêng','其他 / Khác'];
-  const typeChoice=prompt(`請選擇假別（輸入數字）/ Chọn loại nghỉ phép:\n1. 特休 / Nghỉ phép năm\n2. 病假 / Nghỉ ốm\n3. 事假 / Nghỉ việc riêng\n4. 其他 / Khác`);
+  const leaveTypes=['病假 / Nghỉ ốm','事假 / Nghỉ việc riêng','其他 / Khác'];
+  const typeChoice=prompt(`請選擇假別（輸入數字）/ Chọn loại nghỉ phép:\n1. 病假 / Nghỉ ốm\n2. 事假 / Nghỉ việc riêng\n3. 其他 / Khác`);
   if(!typeChoice)return;
-  const leaveType=leaveTypes[(parseInt(typeChoice)||1)-1]||leaveTypes[3];
+  const leaveType=leaveTypes[(parseInt(typeChoice)||1)-1]||leaveTypes[2];
   const leaveNote=prompt('備註說明（可不填）/ Ghi chú (có thể bỏ trống):')||'';
   const today=new Date().toISOString().slice(0,10);
   setSS('syncing');
@@ -579,10 +579,14 @@ window.saveEdit=async function(id){
 function renderWorkerMain(){
   if(!currentWorker)return;
   const myAll=dispatches.filter(d=>d.worker===currentWorker);
-  // 待辦：總回報數 < 指派數量
+  // 待辦：訂單所有人回報總數 < 訂單數量
   const myPending=myAll.filter(d=>{
-    const rep=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
-    return rep<d.assignQty;
+    const o=orders.find(x=>x.id===d.orderId);
+    const orderQty=o?o.qty:d.assignQty;
+    const allReported=dispatches
+      .filter(x=>x.orderId===d.orderId)
+      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    return allReported<orderQty;
   });
   const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
   const totalEarned=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);

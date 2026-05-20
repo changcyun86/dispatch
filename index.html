@@ -856,7 +856,8 @@ window.calcSalary=function(){
     d.itemPrice||0,d.doneQty||0,((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)
   ].join('\t'));
   const tsvTotal=`合計\t\t\t\t\t\t${rows.reduce((a,d)=>a+(d.doneQty||0),0)}\t${grand.toFixed(0)}`;
-  const tsvAll=[tsvHeader,...tsvRows,tsvTotal].join('\n');
+  // 複製版本不含標題列，方便直接貼到 Excel 已有標題的表格
+  const tsvForCopy=[...tsvRows,tsvTotal].join('\n');
 
   el.innerHTML=`<div class="grid4" style="margin-bottom:1rem">
     <div class="metric"><div class="metric-label">${filterWorker?'員工':'計薪員工數'}</div><div class="metric-val">${filterWorker||ws.length}</div></div>
@@ -889,8 +890,8 @@ window.calcSalary=function(){
     </tbody>
   </table></div></div>`;
 
-  // 儲存 TSV 供複製
-  window._salaryTSV=tsvAll;
+  // 儲存 TSV 供複製（不含標題列）
+  window._salaryTSV=tsvForCopy;
 }
 window.copySalaryTSV=function(){
   if(!window._salaryTSV)return;
