@@ -452,10 +452,18 @@ window.parseOrderPaste=async function(){
     if(!name||qty<=0){if(idx===0&&(name.includes('品名')||dateVal.includes('日期')))return;skipped++;return;}
     if(!price){const f=lookupProduct(name);if(f)price=f.price;}
     let ds=dateVal.replace(/\//g,'-').replace(/(\d{4})-(\d{1,2})-(\d{1,2})/,(_,y,m,d)=>`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`);
-    imported.push({id:genId('ORD'),date:ds,orderno,name,spec,qty,price,done:0,defect:0,shortage:0,createdAt:new Date().toISOString()});
+    // ID 加上索引確保唯一，避免快速批次時重複
+    const uid=`ORD-${Date.now().toString(36).toUpperCase()}-${String(imported.length).padStart(3,'0')}`;
+    imported.push({id:uid,date:ds,orderno,name,spec,qty,price,done:0,defect:0,shortage:0,createdAt:new Date().toISOString()});
   });
   if(!imported.length){alert('無法解析資料，請確認格式');return;}
-  for(const o of imported)await saveOrder(o);
+  toast(`匯入中，共 ${imported.length} 筆，請稍候...`);
+  let count=0;
+  for(const o of imported){
+    await saveOrder(o);
+    count++;
+    if(count%5===0)toast(`匯入中 ${count}/${imported.length}...`);
+  }
   closePanel('order-paste-panel');document.getElementById('order-paste-input').value='';
   toast(`成功匯入 ${imported.length} 筆${skipped?`，跳過${skipped}列`:''}`);
 }
@@ -526,7 +534,15 @@ window.delOrder=async function(id){
 // ── 派工 ──
 function renderDispatchOrders(){
   const sel=document.getElementById('d-order');if(!sel)return;const cur=sel.value;
-  sel.innerHTML='<option value="">-- 選擇訂單 --</option>'+window.DB.orders.filter(o=>(o.done||0)<o.qty).map(o=>`<option value="${o.id}" ${o.id===cur?'selected':''}>${o.orderno?o.orderno+' ':''}${o.name}${o.spec?' ('+o.spec+')':''}</option>`).join('');
+  // 只顯示「待派工」：尚無任何派工記錄，且 reported < qty
+  const dispatchedOrderIds=new Set(window.DB.dispatches.map(d=>d.orderId));
+  const pendingOrders=window.DB.orders.filter(o=>{
+    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    if(reported>=o.qty)return false; // 已完成
+    if(dispatchedOrderIds.has(o.id))return false; // 已派工
+    return true;
+  });
+  sel.innerHTML='<option value="">-- 選擇訂單 --</option>'+pendingOrders.map(o=>`<option value="${o.id}" ${o.id===cur?'selected':''}>${o.orderno?o.orderno+' ':''}${o.name}${o.spec?' ('+o.spec+')':''}</option>`).join('');
   if(cur)onOrderChange();
 }
 function renderDispatchWorkers(){
