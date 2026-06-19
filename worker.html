@@ -163,13 +163,13 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 
 <div class="toast" id="toast"></div>
 
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, collection, onSnapshot, setDoc, addDoc } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
 
 const firebaseConfig={apiKey:"AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",authDomain:"changcyun-19b9b.firebaseapp.com",projectId:"changcyun-19b9b",storageBucket:"changcyun-19b9b.firebasestorage.app",messagingSenderId:"853660333384",appId:"1:853660333384:web:183107f8390c6c2ac92f7d"};
-const app=initializeApp(firebaseConfig);
-const db=getFirestore(app);
+const app=firebase.initializeApp(firebaseConfig);
+const db=firebase.firestore();
 
 let currentWorker=localStorage.getItem('worker_name')||null;
 let employees=[],dispatches=[],orders=[],checkins=[],workerPins={};
@@ -181,17 +181,17 @@ let pinPending=''; // 暫存第一次設定的PIN
 let pinTargetWorker=''; // 正在設定/驗證的員工名稱
 
 // 監聽 PIN 資料
-onSnapshot(doc(db,'system','workerPins'),snap=>{
-  workerPins=snap.exists()?snap.data()||{}:{};
+db.collection('system').doc('workerPins').onSnapshot(snap=>{
+  workerPins=snap.exists?snap.data()||{}:{};
 });
 
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
 
-onSnapshot(doc(db,'system','employees'),snap=>{setSS('ok');employees=snap.exists()?snap.data().list||[]:[];if(!currentWorker)renderSelectScreen();},{error:()=>setSS('err')});
-onSnapshot(collection(db,'dispatches'),snap=>{dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}});
-onSnapshot(collection(db,'orders'),snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
-onSnapshot(collection(db,'checkins'),snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker)renderCheckinStatus();});
+db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');employees=snap.exists?snap.data().list||[]:[];if(!currentWorker)renderSelectScreen();},()=>setSS('err'));
+db.collection('dispatches').onSnapshot(snap=>{dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}});
+db.collection('orders').onSnapshot(snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
+db.collection('checkins').onSnapshot(snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker)renderCheckinStatus();});
 
 function init(){
   if(currentWorker){
@@ -278,7 +278,7 @@ async function processPIN(){
       // 儲存 PIN 到 Firebase
       const newPins={...workerPins,[pinTargetWorker]:pinBuffer};
       try{
-        await setDoc(doc(db,'system','workerPins'),newPins);
+        await db.collection('system').doc('workerPins').set(newPins);
         workerPins=newPins;
         localStorage.setItem('worker_name',pinTargetWorker);
         currentWorker=pinTargetWorker;
@@ -369,7 +369,7 @@ window.doLeave=async function(){
   setSS('syncing');
   try{
     const id=`CI-${currentWorker}-${today}`;
-    await setDoc(doc(db,'checkins',id),{worker:currentWorker,date:today,leave:true,leaveType,leaveNote,inTime:null,outTime:null,inLat:null,inLng:null,outLat:null,outLng:null});
+    await db.collection('checkins').doc(id).set({worker:currentWorker,date:today,leave:true,leaveType,leaveNote,inTime:null,outTime:null,inLat:null,inLng:null,outLat:null,outLng:null});
     setSS('ok');toast('請假申請已送出 / Đã gửi yêu cầu nghỉ phép ✓');
   }catch(e){setSS('err');toast('送出失敗，請重試');}
 }
@@ -423,10 +423,10 @@ window.doCheckin=async function(type){
   try{
     const id=`CI-${currentWorker}-${today}`;
     if(type==='in'){
-      await setDoc(doc(db,'checkins',id),{worker:currentWorker,date:today,inTime:timeStr,inLat:lat,inLng:lng,inDist:distRound,outTime:null,outLat:null,outLng:null,outDist:null});
+      await db.collection('checkins').doc(id).set({worker:currentWorker,date:today,inTime:timeStr,inLat:lat,inLng:lng,inDist:distRound,outTime:null,outLat:null,outLng:null,outDist:null});
       setSS('ok');toast('上班打卡成功 / Vào ca thành công ✓');
     }else{
-      await setDoc(doc(db,'checkins',id),{...ci,outTime:timeStr,outLat:lat,outLng:lng,outDist:distRound});
+      await db.collection('checkins').doc(id).set({...ci,outTime:timeStr,outLat:lat,outLng:lng,outDist:distRound});
       setSS('ok');toast('下班打卡成功 / Ra ca thành công ✓');
     }
   }catch(e){setSS('err');toast('打卡失敗，請重試');}
@@ -561,11 +561,11 @@ window.saveEdit=async function(id){
     const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
       status:totalRep>=d.assignQty?'已完成':'回報中',
       lastReportAt:new Date().toISOString()};
-    await setDoc(doc(db,'dispatches',String(id)),updated);
+    await db.collection('dispatches').doc(String(id)).set(updated);
     const o=orders.find(x=>x.id===d.orderId);
     if(o){
       const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
-      await setDoc(doc(db,'orders',o.id),{...o,
+      await db.collection('orders').doc(o.id).set({...o,
         done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),
         defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
         shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)});
@@ -719,10 +719,10 @@ window.submitRpt=async function(id){
     const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
       status:totalReported>=d.assignQty?'已完成':'回報中',
       lastReportAt:new Date().toISOString()};
-    await setDoc(doc(db,'dispatches',String(id)),updated);
+    await db.collection('dispatches').doc(String(id)).set(updated);
     if(o){
       const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
-      await setDoc(doc(db,'orders',o.id),{...o,
+      await db.collection('orders').doc(o.id).set({...o,
         done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),
         defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
         shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)});

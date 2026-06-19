@@ -188,21 +188,28 @@ textarea{resize:vertical;min-height:70px}
 <!-- 派工 -->
 <div id="pg-dispatch" class="page">
   <div class="section-hdr"><strong style="font-size:15px">派工作業</strong></div>
+  <!-- 搜尋框：獨立存在，不在任何會重新渲染的容器內 -->
+  <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:13px;color:#888;white-space:nowrap">🔍 搜尋：</span>
+      <input type="text" id="dispatch-search" placeholder="輸入品名或訂單號搜尋..." style="flex:1;max-width:400px" oninput="onDispatchSearch()">
+      <button class="btn btn-sm" onclick="document.getElementById('dispatch-search').value='';onDispatchSearch()">清除</button>
+    </div>
+  </div>
   <div class="grid2">
     <div class="card">
-      <div class="card-title">建立派工單</div>
-      <label>選擇訂單</label>
-      <select id="d-order" onchange="onOrderChange()"><option value="">-- 選擇訂單 --</option></select>
-      <div id="d-order-info" style="font-size:12px;color:#888;margin-top:6px;line-height:1.8;background:#f7f7f7;border-radius:8px;padding:8px 10px;display:none"></div>
-      <label>指派員工（可多選）</label>
+      <div class="card-title">待派工訂單</div>
+      <div id="d-order-list" style="max-height:280px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;margin-top:4px"></div>
+      <div id="d-order-info" style="font-size:12px;color:#888;margin-top:8px;line-height:1.8;background:#E3F2FD;border:1px solid #90CAF9;border-radius:8px;padding:8px 10px;display:none"></div>
+      <label style="margin-top:12px">指派員工（可多選）</label>
       <div id="d-worker-checks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-top:4px;max-height:150px;overflow-y:auto;padding:4px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa"></div>
       <label>備註 <span style="color:#aaa;font-weight:400">（選填）</span></label>
       <textarea id="d-note" placeholder="填寫備註說明...（可不填）" style="min-height:60px"></textarea>
       <div style="margin-top:14px"><button class="btn btn-primary btn-sm" onclick="createDispatch()">確認派工</button></div>
     </div>
     <div class="card">
-      <div class="card-title">待派工訂單</div>
-      <div id="pending-dispatch-list" style="font-size:12px"></div>
+      <div class="card-title">加工中訂單</div>
+      <div id="pending-dispatch-list" style="font-size:12px;max-height:280px;overflow-y:auto"></div>
       <div style="border-top:1px solid #eee;margin:12px -1.25rem 12px;padding:0"></div>
       <div class="card-title" style="margin-top:0">最近派工記錄</div>
       <div id="dispatch-log" style="font-size:12px"></div>
@@ -363,35 +370,43 @@ textarea{resize:vertical;min-height:70px}
 
 <div class="toast" id="toast"></div>
 
-<script type="module">
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, doc, collection, onSnapshot, setDoc, deleteDoc, getDocs, getDoc, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
+<!-- 登入邏輯放在普通 script，確保 onclick 能呼叫到 -->
+<script>
 const ADMIN_PWD='0423';
 function showAdminApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('main-app').style.display='block';
-  document.getElementById('m-date').value=new Date().toISOString().slice(0,10);
+  const md=document.getElementById('m-date');if(md)md.value=new Date().toISOString().slice(0,10);
 }
-window.adminLogout=function(){
+function checkPwd(){
+  const val=document.getElementById('pwd-input').value;
+  if(val===ADMIN_PWD){
+    sessionStorage.setItem('admin_auth','1');
+    showAdminApp();
+  }else{
+    document.getElementById('login-err').style.display='block';
+    document.getElementById('pwd-input').value='';
+  }
+}
+function adminLogout(){
   sessionStorage.removeItem('admin_auth');
   document.getElementById('main-app').style.display='none';
   document.getElementById('login-screen').style.display='flex';
   document.getElementById('pwd-input').value='';
 }
-// 頁面載入時檢查是否已登入（同一個瀏覽器分頁 session）
+// 頁面載入時若已登入直接進入
 if(sessionStorage.getItem('admin_auth')==='1')showAdminApp();
+</script>
 
-window.checkPwd=function(){
-  if(document.getElementById('pwd-input').value===ADMIN_PWD){
-    sessionStorage.setItem('admin_auth','1');
-    showAdminApp();
-  }else{document.getElementById('login-err').style.display='block';document.getElementById('pwd-input').value='';}
-}
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+
+
 
 const firebaseConfig={apiKey:"AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",authDomain:"changcyun-19b9b.firebaseapp.com",projectId:"changcyun-19b9b",storageBucket:"changcyun-19b9b.firebasestorage.app",messagingSenderId:"853660333384",appId:"1:853660333384:web:183107f8390c6c2ac92f7d"};
-const app=initializeApp(firebaseConfig);
-const db=getFirestore(app);
+const app=firebase.initializeApp(firebaseConfig);
+const db=firebase.firestore();
 
 window.DB={employees:[],products:[],orders:[],dispatches:[],checkins:[]};
 let orderFilter='all';
@@ -400,16 +415,16 @@ function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElem
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
 function genId(p){return p+'-'+Date.now().toString(36).toUpperCase();}
 
-onSnapshot(doc(db,'system','employees'),snap=>{setSS('ok');window.DB.employees=snap.exists()?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},{error:()=>setSS('err')});
-onSnapshot(doc(db,'system','products'),snap=>{window.DB.products=snap.exists()?snap.data().list||[]:[];renderProducts();});
-onSnapshot(collection(db,'orders'),snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
-onSnapshot(collection(db,'dispatches'),snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderDispatchLog();updateSysInfo();});
-onSnapshot(collection(db,'checkins'),snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();});
+db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB.employees=snap.exists?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},()=>setSS('err'));
+db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});
+db.collection('orders').onSnapshot(snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
+db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();});
+db.collection('checkins').onSnapshot(snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();});
 
-async function saveOrder(o){setSS('syncing');try{await setDoc(doc(db,'orders',o.id),o);setSS('ok');}catch(e){setSS('err');toast('儲存失敗');}}
-async function saveDispatch(d){setSS('syncing');try{await setDoc(doc(db,'dispatches',String(d.id)),d);setSS('ok');}catch(e){setSS('err');}}
-async function saveEmployees(){setSS('syncing');try{await setDoc(doc(db,'system','employees'),{list:window.DB.employees});setSS('ok');}catch(e){setSS('err');}}
-async function saveProducts(){setSS('syncing');try{await setDoc(doc(db,'system','products'),{list:window.DB.products});setSS('ok');}catch(e){setSS('err');}}
+async function saveOrder(o){setSS('syncing');try{await db.collection('orders').doc(o.id).set(o);setSS('ok');}catch(e){setSS('err');toast('儲存失敗');}}
+async function saveDispatch(d){setSS('syncing');try{await db.collection('dispatches').doc(String(d.id)).set(d);setSS('ok');}catch(e){setSS('err');}}
+async function saveEmployees(){setSS('syncing');try{await db.collection('system').doc('employees').set({list:window.DB.employees});setSS('ok');}catch(e){setSS('err');}}
+async function saveProducts(){setSS('syncing');try{await db.collection('system').doc('products').set({list:window.DB.products});setSS('ok');}catch(e){setSS('err');}}
 
 // ── 品名自動帶入 ──
 function lookupProduct(name){const n=(name||'').trim().toLowerCase();return window.DB.products.find(p=>p.name.toLowerCase()===n)||null;}
@@ -473,9 +488,9 @@ window.parseOrderPaste=async function(){
       for(const imp of duplicates){
         const old=window.DB.orders.find(o=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''));
         if(old){
-          await deleteDoc(doc(db,'orders',old.id));
+          await db.collection('orders').doc(old.id).delete();
           const toDelete=window.DB.dispatches.filter(d=>d.orderId===old.id);
-          for(const d of toDelete)await deleteDoc(doc(db,'dispatches',String(d.id)));
+          for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
         }
       }
     }else{
@@ -585,66 +600,102 @@ window.editOrderNo=async function(orderId, currentNo){
 }
 window.delOrder=async function(id){
   if(!confirm('確定刪除此訂單？'))return;
-  await deleteDoc(doc(db,'orders',id));
+  await db.collection('orders').doc(id).delete();
   const toDelete=window.DB.dispatches.filter(d=>d.orderId===id);
-  for(const d of toDelete)await deleteDoc(doc(db,'dispatches',String(d.id)));
+  for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
   toast('已刪除');
 }
 
 // ── 派工 ──
+window._selectedOrderId='';
+let _dispatchSearchTimer=null;
+window.onDispatchSearch=function(){
+  clearTimeout(_dispatchSearchTimer);
+  _dispatchSearchTimer=setTimeout(()=>{
+    renderDispatchOrders();
+    renderPendingDispatch();
+    renderDispatchLog();
+  },300);
+}
+function getDispatchKeyword(){
+  const el=document.getElementById('dispatch-search');
+  return el?el.value.trim().toLowerCase():'';
+}
+function matchOrder(o,kw){
+  if(!kw)return true;
+  return (o.name||'').toLowerCase().includes(kw)||
+         (o.orderno||'').toLowerCase().includes(kw)||
+         (o.spec||'').toLowerCase().includes(kw);
+}
 function renderDispatchOrders(){
-  const sel=document.getElementById('d-order');if(!sel)return;const cur=sel.value;
-  // 顯示尚未完成的訂單（reported < qty），讓管理員可多次派工
-  const availOrders=window.DB.orders.filter(o=>{
+  const el=document.getElementById('d-order-list');if(!el)return;
+  const kw=getDispatchKeyword();
+  // 只顯示待派工：無任何派工記錄的訂單
+  const pendingOrders=window.DB.orders.filter(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-    return reported<o.qty;
+    if(reported>=o.qty&&o.qty>0)return false;
+    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
+    if(hasDispatch)return false;
+    return matchOrder(o,kw);
   });
-  sel.innerHTML='<option value="">-- 選擇訂單 --</option>'+availOrders.map(o=>{
+  if(!pendingOrders.length){
+    el.innerHTML=`<div style="padding:12px;color:#aaa;font-size:13px;text-align:center">${kw?`無符合「${kw}」的待派工訂單`:'目前無待派工訂單'}</div>`;
+    if(window._selectedOrderId)onOrderChange();
+    return;
+  }
+  el.innerHTML=pendingOrders.map(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const remaining=o.qty-reported;
-    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
-    const label=`${o.orderno?o.orderno+' ':''}${o.name}${o.spec?' ('+o.spec+')':''} — 剩 ${remaining}`;
-    return`<option value="${o.id}" ${o.id===cur?'selected':''}>${label}</option>`;
+    const isSelected=window._selectedOrderId===o.id;
+    const highlight=(str)=>{
+      if(!kw||!str)return str||'';
+      return str.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark style="background:#FFF176;border-radius:2px;padding:0 1px">${m}</mark>`);
+    };
+    const bg=isSelected?'#E3F2FD':'#fff';
+    const bl=isSelected?'3px solid #185FA5':'3px solid transparent';
+    return`<div onclick="selectDispatchOrder('${o.id}')" style="padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;background:${bg};border-left:${bl};transition:background 0.1s">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="font-weight:600;font-size:13px">${highlight(o.name)}${o.spec?` <span style="color:#888;font-weight:400">(${highlight(o.spec)})</span>`:''}</span>
+        <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#FFF3E0;color:#E65100">待派工</span>
+      </div>
+      <div style="font-size:11px;color:#888">
+        ${o.orderno?`${highlight(o.orderno)} · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ <strong style="color:#185FA5">剩 ${remaining}</strong> ／ $${o.price}
+      </div>
+    </div>`;
   }).join('');
-  if(cur)onOrderChange();
+  if(window._selectedOrderId)onOrderChange();
+}
+window.selectDispatchOrder=function(id){
+  window._selectedOrderId=id;
+  renderDispatchOrders();
+  onOrderChange();
 }
 function renderDispatchWorkers(){
   const cont=document.getElementById('d-worker-checks');if(!cont)return;
   cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0" onchange="checkDispatchQty()"> ${e}</label>`).join('');
 }
 window.onOrderChange=function(){
-  const id=document.getElementById('d-order').value,o=window.DB.orders.find(x=>x.id===id);
-  const info=document.getElementById('d-order-info');if(!o){info.innerHTML='';return;}
-  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-  const dispatched=window.DB.dispatches.filter(d=>d.orderId===id&&d.status!=='已完成').reduce((a,d)=>a+(d.assignQty||0),0);
-  const avail=Math.max(0,o.qty-reported-dispatched);
-  info.innerHTML=`總量 ${o.qty} ／ 已加工 ${o.done||0} ／ 不良 ${o.defect||0} ／ 來料不足 ${o.shortage||0} ／ 可派 <strong style="color:#185FA5">${avail}</strong> ／ 單價 $${o.price}`;
-  document.getElementById('d-qty').value=avail>0?avail:'';
-  checkDispatchQty();
-}
-window.onOrderChange=function(){
-  const id=document.getElementById('d-order').value;
+  const id=window._selectedOrderId;
   const o=window.DB.orders.find(x=>x.id===id);
   const info=document.getElementById('d-order-info');
   if(!o){info.style.display='none';return;}
   const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
   const remaining=Math.max(0,o.qty-reported);
   info.style.display='block';
-  info.innerHTML=`
-    <div style="display:flex;gap:16px;flex-wrap:wrap">
-      <span>訂單總量：<strong>${o.qty}</strong></span>
-      <span>已處理：<strong style="color:#2E7D32">${reported}</strong></span>
-      <span>剩餘未加工：<strong style="color:#185FA5">${remaining}</strong></span>
-      <span>單價：<strong>$${o.price}</strong></span>
-    </div>`;
+  info.innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap">
+    <span>訂單總量：<strong>${o.qty}</strong></span>
+    <span>已處理：<strong style="color:#2E7D32">${reported}</strong></span>
+    <span>剩餘未加工：<strong style="color:#185FA5">${remaining}</strong></span>
+    <span>單價：<strong>$${o.price}</strong></span>
+  </div>`;
 }
 window.createDispatch=async function(){
-  const orderId=document.getElementById('d-order').value;
+  const orderId=window._selectedOrderId;
   const selectedWorkers=Array.from(document.querySelectorAll('#d-worker-checks input:checked')).map(c=>c.value);
-  if(!orderId)return alert('請選擇訂單');
+  if(!orderId)return alert('請從清單選擇訂單');
   if(!selectedWorkers.length)return alert('請選擇至少一名員工');
   const o=window.DB.orders.find(x=>x.id===orderId);
-  const batchId=genId('B'); // 同一批派工共用同一個 batchId
+  const batchId=genId('B');
   const now=new Date().toISOString();
   for(const worker of selectedWorkers){
     await saveDispatch({
@@ -658,50 +709,233 @@ window.createDispatch=async function(){
   }
   document.getElementById('d-note').value='';
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
+  window._selectedOrderId='';
+  renderDispatchOrders();
   toast(`已派工給 ${selectedWorkers.join('、')}：${o.name}（訂單數量 ${o.qty}）`);
 }
-function renderPendingDispatch(){
-  const el=document.getElementById('pending-dispatch-list');if(!el)return;
-  const pending=window.DB.orders.filter(o=>{
+window._selectedOrderId='';
+function renderDispatchOrders(){
+  const el=document.getElementById('d-order-list');if(!el)return;
+  // 需求1：只顯示「待派工」— 尚無任何派工記錄的訂單
+  const pendingOrders=window.DB.orders.filter(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-    return reported<o.qty;
-  }).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  if(!pending.length){el.innerHTML='<div style="color:#aaa;padding:4px 0">目前無待派工訂單</div>';return;}
-  el.innerHTML=pending.map(o=>{
+    if(reported>=o.qty)return false; // 已完成
+    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
+    return !hasDispatch; // 沒有任何派工記錄才顯示
+  });
+  if(!pendingOrders.length){
+    el.innerHTML='<div style="padding:12px;color:#aaa;font-size:13px;text-align:center">目前無待派工訂單</div>';
+    if(window._selectedOrderId)onOrderChange();
+    return;
+  }
+  el.innerHTML=pendingOrders.map(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const remaining=o.qty-reported;
-    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
-    const st=reported<=0&&!hasDispatch?'待派工':reported>=o.qty?'已完成':'加工中';
-    const activeDispatches=window.DB.dispatches.filter(d=>d.orderId===o.id&&d.status!=='已完成');
-    const activeWorkers=activeDispatches.map(d=>d.worker).join('、');
-    return`<div style="padding:7px 0;border-bottom:1px solid #f0f0f0;cursor:pointer" onclick="document.getElementById('d-order').value='${o.id}';onOrderChange()">
+    const isSelected=window._selectedOrderId===o.id;
+    return`<div onclick="selectDispatchOrder('${o.id}')" style="
+      padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;
+      background:${isSelected?'#E3F2FD':'#fff'};
+      border-left:${isSelected?'3px solid #185FA5':'3px solid transparent'};
+      transition:background 0.1s">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="font-weight:600;font-size:13px">${o.name}${o.spec?' <span style="color:#888;font-weight:400">('+o.spec+')</span>':''}</span>
+        <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#FFF3E0;color:#E65100">待派工</span>
+      </div>
+      <div style="font-size:11px;color:#888">
+        ${o.orderno?`<span>${o.orderno}</span> · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ <strong style="color:#185FA5">剩 ${remaining}</strong> ／ $${o.price}
+      </div>
+    </div>`;
+  }).join('');
+  if(window._selectedOrderId)onOrderChange();
+}
+window.selectDispatchOrder=function(id){
+  window._selectedOrderId=id;
+  renderDispatchOrders();
+  onOrderChange();
+}
+function renderDispatchWorkers(){
+  const cont=document.getElementById('d-worker-checks');if(!cont)return;
+  cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0" onchange="checkDispatchQty()"> ${e}</label>`).join('');
+}
+window.onOrderChange=function(){
+  const id=window._selectedOrderId;
+  const o=window.DB.orders.find(x=>x.id===id);
+  const info=document.getElementById('d-order-info');
+  if(!o){info.style.display='none';return;}
+  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+  const remaining=Math.max(0,o.qty-reported);
+  info.style.display='block';
+  info.innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap">
+    <span>訂單總量：<strong>${o.qty}</strong></span>
+    <span>已處理：<strong style="color:#2E7D32">${reported}</strong></span>
+    <span>剩餘未加工：<strong style="color:#185FA5">${remaining}</strong></span>
+    <span>單價：<strong>$${o.price}</strong></span>
+  </div>`;
+}
+window.createDispatch=async function(){
+  const orderId=window._selectedOrderId;
+  const selectedWorkers=Array.from(document.querySelectorAll('#d-worker-checks input:checked')).map(c=>c.value);
+  if(!orderId)return alert('請從清單選擇訂單');
+  if(!selectedWorkers.length)return alert('請選擇至少一名員工');
+  const o=window.DB.orders.find(x=>x.id===orderId);
+  const batchId=genId('B');
+  const now=new Date().toISOString();
+  for(const worker of selectedWorkers){
+    await saveDispatch({
+      id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
+      orderNo:o.orderno||'',itemPrice:o.price,worker,
+      assignQty:o.qty,batchId,
+      doneQty:0,defectQty:0,shortageQty:0,
+      note:document.getElementById('d-note').value,
+      status:'待完成',createdAt:now
+    });
+  }
+  document.getElementById('d-note').value='';
+  document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
+  window._selectedOrderId='';
+  renderDispatchOrders();
+  toast(`已派工給 ${selectedWorkers.join('、')}：${o.name}（訂單數量 ${o.qty}）`);
+}
+
+// 需求2：右欄改為「加工中訂單」，也套用搜尋關鍵字
+function renderPendingDispatch(){
+  const el=document.getElementById('pending-dispatch-list');if(!el)return;
+  const kw=getDispatchKeyword();
+  // 加工中：已有派工記錄且尚未完成
+  const inProgress=window.DB.orders.filter(o=>{
+    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    if(reported>=o.qty&&o.qty>0)return false;
+    if(!window.DB.dispatches.some(d=>d.orderId===o.id))return false;
+    return matchOrder(o,kw);
+  }).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  if(!inProgress.length){
+    el.innerHTML=`<div style="color:#aaa;padding:4px 0">${kw?`無符合「${kw}」的加工中訂單`:'目前無加工中訂單'}</div>`;
+    return;
+  }
+  const highlight=(str)=>kw&&str?str.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark style="background:#FFF176;border-radius:2px">${m}</mark>`):str;
+  el.innerHTML=inProgress.map(o=>{
+    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    const remaining=o.qty-reported;
+    const activeWorkers=window.DB.dispatches.filter(d=>d.orderId===o.id).map(d=>d.worker).join('、');
+    return`<div style="padding:7px 0;border-bottom:1px solid #f0f0f0">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span style="font-weight:600">${o.name}${o.spec?' <span style="color:#aaa;font-size:11px">'+o.spec+'</span>':''}</span>
-        <span class="badge ${st==='待派工'?'bp':'ba'}">${st}</span>
+        <span style="font-weight:600">${highlight(o.name)}${o.spec?' <span style="color:#aaa;font-size:11px">('+highlight(o.spec)+')</span>':''}</span>
+        <span class="badge ba">加工中</span>
       </div>
       <div style="color:#888;font-size:11px;margin-top:2px">
-        ${o.orderno?`${o.orderno} · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ <strong style="color:#185FA5">剩餘 ${remaining}</strong>
+        ${o.orderno?`${highlight(o.orderno)} · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ <strong style="color:#185FA5">剩餘 ${remaining}</strong>
       </div>
-      ${activeWorkers?`<div style="color:#888;font-size:11px;margin-top:1px">加工中：${activeWorkers}</div>`:''}
+      ${activeWorkers?`<div style="color:#888;font-size:11px;margin-top:1px">加工人員：${activeWorkers}</div>`:''}
     </div>`;
   }).join('');
 }
+
+// 需求3：派工記錄可新增/刪除加工人員，並套用搜尋關鍵字
 function renderDispatchLog(){
   renderPendingDispatch();
   const el=document.getElementById('dispatch-log');if(!el)return;
-  const list=[...window.DB.dispatches].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||'')).slice(0,20);
-  if(!list.length){el.innerHTML='<div style="color:#aaa">尚無派工記錄</div>';return;}
-  el.innerHTML=list.map(d=>`<div style="padding:7px 0;border-bottom:1px solid #f0f0f0">
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <span style="font-weight:600">${d.worker}</span>
-      <div style="display:flex;gap:6px;align-items:center">
-        <button class="btn btn-sm btn-warn" onclick="openAdjust('${d.id}')">調整</button>
-        <button class="btn btn-sm" onclick="openDispatchDetail('${d.id}')">詳情</button>
-        <span class="badge ${d.status==='已完成'?'bd':'ba'}">${d.status}</span>
+  const kw=getDispatchKeyword();
+  const highlight=(str)=>{
+    if(!kw||!str)return str||'';
+    return str.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark style="background:#FFF176;border-radius:2px;padding:0 1px">${m}</mark>`);
+  };
+  // 依訂單分組
+  let allDispatches=[...window.DB.dispatches].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  const grouped={};
+  allDispatches.forEach(d=>{
+    if(!grouped[d.orderId])grouped[d.orderId]={orderName:d.orderName,orderSpec:d.orderSpec,orderNo:d.orderNo,orderId:d.orderId,dispatches:[]};
+    grouped[d.orderId].dispatches.push(d);
+  });
+  // 套用關鍵字篩選（比對訂單名稱、規格、訂單號）
+  let groups=Object.values(grouped);
+  if(kw){
+    groups=groups.filter(g=>
+      (g.orderName||'').toLowerCase().includes(kw)||
+      (g.orderNo||'').toLowerCase().includes(kw)||
+      (g.orderSpec||'').toLowerCase().includes(kw)
+    );
+  }
+  // 最多顯示20個訂單群組
+  groups=groups.slice(0,20);
+  if(!groups.length){
+    el.innerHTML=`<div style="color:#aaa">${kw?`無符合「${kw}」的派工記錄`:'尚無派工記錄'}</div>`;
+    return;
+  }
+  el.innerHTML=groups.map(g=>`
+    <div style="margin-bottom:12px;border:1px solid #f0f0f0;border-radius:8px;overflow:hidden">
+      <div style="background:#f7f7f7;padding:8px 10px;font-size:12px;font-weight:600;display:flex;justify-content:space-between;align-items:center">
+        <span>${highlight(g.orderName)}${g.orderSpec?' ('+highlight(g.orderSpec)+')':''}</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${g.orderNo?`<span style="color:#888;font-weight:400">${highlight(g.orderNo)}</span>`:''}
+          <button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 8px" onclick="addWorkerToOrder('${g.orderId}')">+ 新增人員</button>
+        </div>
       </div>
+      ${g.dispatches.map(d=>`
+        <div style="padding:7px 10px;border-bottom:1px solid #f5f5f5;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <span style="font-weight:600;font-size:13px">${d.worker}</span>
+            <span style="color:#888;font-size:11px;margin-left:8px">完 ${d.doneQty||0} ／ 不良 ${d.defectQty||0} ／ 來料不足 ${d.shortageQty||0}</span>
+          </div>
+          <div style="display:flex;gap:4px;align-items:center">
+            <button class="btn btn-sm btn-warn" onclick="openAdjust('${d.id}')" style="font-size:11px;padding:3px 8px">調整</button>
+            <button class="btn btn-sm" onclick="openDispatchDetail('${d.id}')" style="font-size:11px;padding:3px 8px">詳情</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteDispatch('${d.id}')" style="font-size:11px;padding:3px 8px">刪除</button>
+            <span class="badge ${d.status==='已完成'?'bd':d.status==='回報中'?'ba':'bp'}" style="font-size:10px">${d.status}</span>
+          </div>
+        </div>`).join('')}
+    </div>`).join('');
+}
+window.addWorkerToOrder=function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  const existWorkers=window.DB.dispatches.filter(d=>d.orderId===orderId).map(d=>d.worker);
+  const available=window.DB.employees.filter(e=>!existWorkers.includes(e));
+  if(!available.length)return alert('所有員工都已在此訂單的派工記錄中');
+  // 顯示選擇員工的 modal
+  document.getElementById('modal-title-txt').textContent=`新增人員：${o.name}`;
+  document.getElementById('modal-content').innerHTML=`
+    <div style="font-size:13px;color:#888;margin-bottom:12px">選擇要加入的員工（可多選）</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin-bottom:16px">
+      ${available.map(e=>`<label style="display:flex;align-items:center;gap:6px;padding:8px;border:1px solid #e0e0e0;border-radius:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" value="${e}" id="add-w-${e}" style="width:auto"> ${e}
+      </label>`).join('')}
     </div>
-    <div style="color:#888;font-size:11px;margin-top:2px">${d.orderName} × ${d.assignQty}（完 ${d.doneQty||0} 不良 ${d.defectQty||0} 來料不足 ${d.shortageQty||0}）</div>
-  </div>`).join('');
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" onclick="confirmAddWorkers('${orderId}')">確認新增</button>
+      <button class="btn btn-sm" onclick="closeModal()">取消</button>
+    </div>`;
+  document.getElementById('dispatch-modal').style.display='flex';
+}
+window.confirmAddWorkers=async function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  const selected=Array.from(document.querySelectorAll('[id^="add-w-"]:checked')).map(c=>c.value);
+  if(!selected.length)return alert('請至少選擇一名員工');
+  const batchId=genId('B');
+  const now=new Date().toISOString();
+  for(const worker of selected){
+    await saveDispatch({
+      id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
+      orderNo:o.orderno||'',itemPrice:o.price,worker,
+      assignQty:o.qty,batchId,
+      doneQty:0,defectQty:0,shortageQty:0,
+      note:'',status:'待完成',createdAt:now
+    });
+  }
+  closeModal();
+  toast(`已新增 ${selected.join('、')} 至 ${o.name}`);
+}
+window.deleteDispatch=async function(id){
+  const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
+  if(!confirm(`確定刪除「${d.worker}」的派工記錄？\n（已回報的數量也會從訂單中扣除）`))return;
+  // 從訂單扣除此人的回報數量
+  const o=window.DB.orders.find(x=>x.id===d.orderId);
+  if(o){
+    o.done=Math.max(0,(o.done||0)-(d.doneQty||0));
+    o.defect=Math.max(0,(o.defect||0)-(d.defectQty||0));
+    o.shortage=Math.max(0,(o.shortage||0)-(d.shortageQty||0));
+    await saveOrder(o);
+  }
+  await db.collection('dispatches').doc(String(id)).delete();
+  toast('已刪除派工記錄');
 }
 window.openDispatchDetail=function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
@@ -1047,10 +1281,10 @@ window.resetEmployeePin=async function(){
   if(!emp)return alert('請選擇員工');
   if(!confirm(`確定重設「${emp}」的 PIN 碼？\n重設後員工下次登入需重新設定新 PIN。`))return;
   try{
-    const pinsSnap=await getDoc(doc(db,'system','workerPins'));
-    const pins=pinsSnap.exists()?{...pinsSnap.data()}:{};
+    const pinsSnap=await db.collection('system').doc('workerPins').get();
+    const pins=pinsSnap.exists?{...pinsSnap.data()}:{};
     delete pins[emp];
-    await setDoc(doc(db,'system','workerPins'),pins);
+    await db.collection('system').doc('workerPins').set(pins);
     toast(`已重設「${emp}」的 PIN 碼`);
   }catch(e){toast('重設失敗，請重試');}
 }
@@ -1108,7 +1342,7 @@ window.parseProdPaste=async function(){
 
   setSS('syncing');
   try{
-    await setDoc(doc(db,'system','products'),{list:window.DB.products});
+    await db.collection('system').doc('products').set({list:window.DB.products});
     setSS('ok');
     renderProducts();
     closePanel('prod-paste-panel');
@@ -1129,13 +1363,13 @@ window.clearCompleted=async function(){
   if(!completed.length)return alert('目前沒有已完成的訂單');
   if(!confirm(`確定刪除 ${completed.length} 筆已完成訂單及其派工記錄？此操作無法復原！`))return;
   for(const o of completed){
-    await deleteDoc(doc(db,'orders',o.id));
+    await db.collection('orders').doc(o.id).delete();
     const toDelete=window.DB.dispatches.filter(d=>d.orderId===o.id);
-    for(const d of toDelete)await deleteDoc(doc(db,'dispatches',String(d.id)));
+    for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
   }
   toast(`已刪除 ${completed.length} 筆已完成訂單`);
 }
-window.clearAll=async function(){if(!confirm('確定清除所有訂單與派工記錄？'))return;const oSnap=await getDocs(collection(db,'orders'));for(const d of oSnap.docs)await deleteDoc(d.ref);const dSnap=await getDocs(collection(db,'dispatches'));for(const d of dSnap.docs)await deleteDoc(d.ref);toast('已清除');}
+window.clearAll=async function(){if(!confirm('確定清除所有訂單與派工記錄？'))return;const oSnap=await db.collection('orders').get();for(const d of oSnap.docs)await d.ref.delete();const dSnap=await db.collection('dispatches').get();for(const d of dSnap.docs)await d.ref.delete();toast('已清除');}
 
 // ── 頁面切換 ──
 window.sw=function(p){
