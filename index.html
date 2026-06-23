@@ -542,7 +542,7 @@ window.clearOrderDate=function(){
 }
 function renderOrders(){
   const tb=document.getElementById('order-tbody');if(!tb)return;
-  let list=window.DB.orders;
+  let list=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.createdAt||'').localeCompare(b.createdAt||''));
   const dateFrom=document.getElementById('order-from').value;
   const dateTo=document.getElementById('order-to').value;
   if(dateFrom)list=list.filter(o=>(o.date||'')>=dateFrom);
