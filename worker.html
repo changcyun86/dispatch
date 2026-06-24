@@ -581,34 +581,62 @@ function renderWorkerMain(){
   const myAll=dispatches.filter(d=>d.worker===currentWorker);
 
   // 待辦邏輯：
-  // 1. 訂單尚未完成
-  // 2. 此派工記錄的 batchId 是針對此訂單「最新一批」的派工
-  //    → 第1天派給A，第2天改派給B，A的舊記錄就不再顯示
-  const myPending=myAll.filter(d=>{
-    // 本人只要有回報過任何數量 → 不顯示
-    const myReported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
-    if(myReported>0)return false;
-
-    // 訂單整體已完成 → 不顯示
-    const o=orders.find(x=>x.id===d.orderId);
-    const orderQty=o?o.qty:d.assignQty;
-    const allReported=dispatches
-      .filter(x=>x.orderId===d.orderId)
-      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-    if(allReported>=orderQty)return false;
-
-    // 找出此訂單最新一批的 batchId
-    const allForOrder=dispatches.filter(x=>x.orderId===d.orderId);
+  // 1. 尚未回報
+  // 2. 屬於此訂單/合併群組最新一批的 batchId
+  function isLatestBatch(d){
+    // 合併派工：用 mergedOrderIds 的第一筆訂單找最新 batch
+    const refOrderId=d.orderId;
+    const allForOrder=dispatches.filter(x=>x.orderId===refOrderId||(x.mergedOrderIds&&x.mergedOrderIds.includes(refOrderId)));
     const latestBatchId=allForOrder.reduce((latest,x)=>{
       if(!latest)return x.batchId||x.id;
       const latestTime=allForOrder.find(a=>(a.batchId||a.id)===latest)?.createdAt||'';
       const xTime=x.createdAt||'';
       return xTime>latestTime?(x.batchId||x.id):latest;
     },null);
-
-    // 本人這筆是否屬於最新一批
-    const myBatch=d.batchId||d.id;
-    return myBatch===latestBatchId;
+    return (d.batchId||d.id)===latestBatchId;
+  }
+  function getMergedRemain(d){
+    // 計算合併群組的總剩餘可回報量（其他員工已回報的加總）
+    if(!d.isMerged||!d.mergedOrderIds){
+      // 單筆訂單
+      const o=orders.find(x=>x.id===d.orderId);
+      const orderQty=o?o.qty:d.assignQty;
+      const othersReported=dispatches
+        .filter(x=>x.orderId===d.orderId&&x.id!==d.id)
+        .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+      return Math.max(0,orderQty-othersReported);
+    }
+    // 合併訂單：各訂單剩餘量加總（其他員工已回報的）
+    let total=0;
+    for(const oid of d.mergedOrderIds){
+      const o=orders.find(x=>x.id===oid);
+      if(!o)continue;
+      const othersReported=dispatches
+        .filter(x=>x.orderId===oid&&x.id!==d.id)
+        .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+      total+=Math.max(0,o.qty-othersReported);
+    }
+    return total;
+  }
+  const myPending=myAll.filter(d=>{
+    const myReported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+    if(myReported>0)return false;
+    // 判斷合併群組整體是否已完成
+    if(d.isMerged&&d.mergedOrderIds){
+      const allDone=d.mergedOrderIds.every(oid=>{
+        const o=orders.find(x=>x.id===oid);
+        if(!o)return true;
+        const rep=dispatches.filter(x=>x.orderId===oid).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+        return rep>=o.qty;
+      });
+      if(allDone)return false;
+    }else{
+      const o=orders.find(x=>x.id===d.orderId);
+      const orderQty=o?o.qty:d.assignQty;
+      const allReported=dispatches.filter(x=>x.orderId===d.orderId).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+      if(allReported>=orderQty)return false;
+    }
+    return isLatestBatch(d);
   });
   const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
   const totalEarned=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
@@ -621,20 +649,19 @@ function renderWorkerMain(){
   const tasks=document.getElementById('wm-tasks');
   if(!myPending.length){tasks.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單<br>Không có công việc chờ xử lý</div>';return;}
   tasks.innerHTML=myPending.map(d=>{
-    const o=orders.find(x=>x.id===d.orderId);
-    const orderQty=o?o.qty:d.assignQty;
-    const allReported=dispatches
-      .filter(x=>x.orderId===d.orderId)
-      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-    const remain=Math.max(0,orderQty-allReported);
+    const remain=getMergedRemain(d);
+    const orderLabel=d.isMerged&&d.mergedOrderIds
+      ? `合併 ${d.mergedOrderIds.length} 張訂單`+(d.mergedOrderNos&&d.mergedOrderNos.length?`（${d.mergedOrderNos.join('、')}）`:'')
+      : (d.orderId||'');
     return`
     <div class="card">
       <div style="display:flex;justify-content:space-between;margin-bottom:8px">
         <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
-        <span style="font-size:12px;color:#888">${d.orderId||''}</span>
+        <span style="font-size:11px;color:#888;text-align:right;max-width:50%">${orderLabel}</span>
       </div>
+      ${d.isMerged?`<div style="font-size:11px;background:#FFF3E0;color:#E65100;border-radius:6px;padding:4px 8px;margin-bottom:8px">⚡ 合併派工，系統將依先進先出自動分配回報數量至各訂單<br><span style="color:#aaa">Lệnh ghép, hệ thống tự phân bổ theo thứ tự</span></div>`:''}
       <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
-        <div>訂單總量 / <span style="color:#aaa">Tổng đơn hàng</span>：<strong>${orderQty}</strong></div>
+        <div>總量 / <span style="color:#aaa">Tổng</span>：<strong>${d.assignQty}</strong></div>
         <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
         <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5" id="remain-${d.id}">${remain}</strong></div>
         ${d.note?`<div>備註：${d.note}</div>`:''}
@@ -664,7 +691,7 @@ function renderWorkerMain(){
         回報完工 / Báo cáo hoàn thành
       </button>
     </div>
-  `;}).join('');
+  `}).join('');
 }
 
 window.validateRpt=function(id){
@@ -677,25 +704,31 @@ window.validateRpt=function(id){
   const totalEl=document.getElementById('rtotal-'+id);
   if(totalEl)totalEl.textContent=myTotal;
 
-  // 計算其他員工已回報的總數（不含自己這筆）
-  const o=orders.find(x=>x.id===d.orderId);
-  const orderQty=o?o.qty:d.assignQty;
-  const othersReported=dispatches
-    .filter(x=>x.orderId===d.orderId&&x.id!==id)
-    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-  const avail=Math.max(0,orderQty-othersReported);
-
-  // 更新可回報數量顯示
+  let avail;
+  if(d.isMerged&&d.mergedOrderIds){
+    let total=0;
+    for(const oid of d.mergedOrderIds){
+      const o=orders.find(x=>x.id===oid);if(!o)continue;
+      const othersReported=dispatches.filter(x=>x.orderId===oid&&x.id!==id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+      total+=Math.max(0,o.qty-othersReported);
+    }
+    avail=total;
+  }else{
+    const o=orders.find(x=>x.id===d.orderId);
+    const orderQty=o?o.qty:d.assignQty;
+    const othersReported=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    avail=Math.max(0,orderQty-othersReported);
+  }
   const remainEl=document.getElementById('remain-'+id);
-  if(remainEl)remainEl.textContent=Math.max(0,avail-myTotal)+myTotal>avail?avail:avail;
-
+  if(remainEl)remainEl.textContent=avail;
   if(myTotal>avail){
     err.style.display='block';
-    err.textContent=`本次回報數量(${myTotal})超過可回報數量(${avail})，其他員工已回報 ${othersReported} 件 / Vượt quá giới hạn (${avail})`;
+    err.textContent=`本次回報數量(${myTotal})超過可回報數量(${avail}) / Vượt quá giới hạn (${avail})`;
     return false;
   }
   err.style.display='none';return true;
 }
+
 window.submitRpt=async function(id){
   if(!validateRpt(id))return;
   const d=dispatches.find(x=>x.id===id);if(!d)return;
@@ -704,33 +737,63 @@ window.submitRpt=async function(id){
   const sho=parseInt(document.getElementById('rs-'+id).value)||0;
   const myTotal=done+def+sho;
 
-  // 再次確認訂單總量
-  const o=orders.find(x=>x.id===d.orderId);
-  const orderQty=o?o.qty:d.assignQty;
-  const othersReported=dispatches
-    .filter(x=>x.orderId===d.orderId&&x.id!==id)
-    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-  if(myTotal+othersReported>orderQty)
-    return alert(`回報後總數(${myTotal+othersReported})會超過訂單數量(${orderQty})，請修正`);
-
-  const totalReported=myTotal;
   setSS('syncing');
   try{
-    const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
-      status:totalReported>=d.assignQty?'已完成':'回報中',
-      lastReportAt:new Date().toISOString()};
-    await db.collection('dispatches').doc(String(id)).set(updated);
-    if(o){
-      const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
-      await db.collection('orders').doc(o.id).set({...o,
-        done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),
-        defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
-        shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)});
+    if(d.isMerged&&d.mergedOrderIds){
+      // ── 先進先出分配 ──
+      // 依收單日期排序各訂單
+      const mergedOrders=d.mergedOrderIds
+        .map(oid=>orders.find(x=>x.id===oid))
+        .filter(Boolean)
+        .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+      let remainToAllocate=myTotal; // 只分配 done（完工）；defect/shortage 以總量比例分配
+      // 分配完工數到各訂單（先進先出）
+      const allocations=[];
+      for(const o of mergedOrders){
+        const othersReported=dispatches.filter(x=>x.orderId===o.id&&x.id!==id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+        const canTake=Math.max(0,o.qty-othersReported);
+        const take=Math.min(remainToAllocate,canTake);
+        allocations.push({o,take});
+        remainToAllocate-=take;
+        if(remainToAllocate<=0)break;
+      }
+      // 更新各訂單的 done 欄位
+      for(const {o,take} of allocations){
+        const allDisp=dispatches.filter(x=>x.orderId===o.id);
+        const othersDone=allDisp.filter(x=>x.id!==id).reduce((a,x)=>a+(x.doneQty||0),0);
+        await db.collection('orders').doc(o.id).set({...o,
+          done:othersDone+take,
+          defect:allDisp.filter(x=>x.id!==id).reduce((a,x)=>a+(x.defectQty||0),0),
+          shortage:allDisp.filter(x=>x.id!==id).reduce((a,x)=>a+(x.shortageQty||0),0)
+        });
+      }
+      // 儲存 dispatch 記錄，帶上分配明細
+      const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
+        mergedAllocations:allocations.map(({o,take})=>({orderId:o.id,orderNo:o.orderno||'',allocated:take})),
+        status:'回報中',lastReportAt:new Date().toISOString()};
+      await db.collection('dispatches').doc(String(id)).set(updated);
+    }else{
+      // 單筆訂單（原有邏輯）
+      const o=orders.find(x=>x.id===d.orderId);
+      const orderQty=o?o.qty:d.assignQty;
+      const othersReported=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+      if(myTotal+othersReported>orderQty)
+        return alert(`回報後總數(${myTotal+othersReported})會超過訂單數量(${orderQty})，請修正`);
+      const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
+        status:myTotal>=d.assignQty?'已完成':'回報中',
+        lastReportAt:new Date().toISOString()};
+      await db.collection('dispatches').doc(String(id)).set(updated);
+      if(o){
+        const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
+        await db.collection('orders').doc(o.id).set({...o,
+          done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),
+          defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
+          shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)});
+      }
     }
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
 }
-
 init();
 </script>
 </body>

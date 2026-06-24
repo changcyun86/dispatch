@@ -417,7 +417,7 @@ function genId(p){return p+'-'+Date.now().toString(36).toUpperCase();}
 
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB.employees=snap.exists?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},()=>setSS('err'));
 db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});
-db.collection('orders').onSnapshot(snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.createdAt||'').localeCompare(b.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
+db.collection('orders').onSnapshot(snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
 db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();});
 db.collection('checkins').onSnapshot(snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();});
 
@@ -542,7 +542,7 @@ window.clearOrderDate=function(){
 }
 function renderOrders(){
   const tb=document.getElementById('order-tbody');if(!tb)return;
-  let list=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.createdAt||'').localeCompare(b.createdAt||''));
+  let list=window.DB.orders;
   const dateFrom=document.getElementById('order-from').value;
   const dateTo=document.getElementById('order-to').value;
   if(dateFrom)list=list.filter(o=>(o.date||'')>=dateFrom);
@@ -607,7 +607,7 @@ window.delOrder=async function(id){
 }
 
 // ── 派工 ──
-window._selectedOrderId='';
+window._selectedOrderIds=new Set(); // 複選訂單
 let _dispatchSearchTimer=null;
 window.onDispatchSearch=function(){
   clearTimeout(_dispatchSearchTimer);
@@ -630,8 +630,7 @@ function matchOrder(o,kw){
 function renderDispatchOrders(){
   const el=document.getElementById('d-order-list');if(!el)return;
   const kw=getDispatchKeyword();
-  // 只顯示待派工：無任何派工記錄的訂單
-  const pendingOrders=window.DB.orders.filter(o=>{
+  const pendingOrders=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).filter(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     if(reported>=o.qty&&o.qty>0)return false;
     const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
@@ -640,124 +639,117 @@ function renderDispatchOrders(){
   });
   if(!pendingOrders.length){
     el.innerHTML=`<div style="padding:12px;color:#aaa;font-size:13px;text-align:center">${kw?`無符合「${kw}」的待派工訂單`:'目前無待派工訂單'}</div>`;
-    if(window._selectedOrderId)onOrderChange();
+    updateSelectedInfo();
     return;
   }
+  const highlight=(str)=>{
+    if(!kw||!str)return str||'';
+    return str.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark style="background:#FFF176;border-radius:2px;padding:0 1px">${m}</mark>`);
+  };
   el.innerHTML=pendingOrders.map(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const remaining=o.qty-reported;
-    const isSelected=window._selectedOrderId===o.id;
-    const highlight=(str)=>{
-      if(!kw||!str)return str||'';
-      return str.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark style="background:#FFF176;border-radius:2px;padding:0 1px">${m}</mark>`);
-    };
+    const isSelected=window._selectedOrderIds.has(o.id);
     const bg=isSelected?'#E3F2FD':'#fff';
     const bl=isSelected?'3px solid #185FA5':'3px solid transparent';
-    return`<div onclick="selectDispatchOrder('${o.id}')" style="padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;background:${bg};border-left:${bl};transition:background 0.1s">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
-        <span style="font-weight:600;font-size:13px">${highlight(o.name)}${o.spec?` <span style="color:#888;font-weight:400">(${highlight(o.spec)})</span>`:''}</span>
-        <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#FFF3E0;color:#E65100">待派工</span>
-      </div>
-      <div style="font-size:11px;color:#888">
-        ${o.orderno?`${highlight(o.orderno)} · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ <strong style="color:#185FA5">剩 ${remaining}</strong> ／ $${o.price}
+    return`<div onclick="toggleDispatchOrder('${o.id}')" style="padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;background:${bg};border-left:${bl};transition:background 0.1s;display:flex;align-items:flex-start;gap:8px">
+      <input type="checkbox" ${isSelected?'checked':''} onclick="event.stopPropagation();toggleDispatchOrder('${o.id}')" style="width:auto;margin-top:3px;cursor:pointer;accent-color:#185FA5">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+          <span style="font-weight:600;font-size:13px">${highlight(o.name)}${o.spec?` <span style="color:#888;font-weight:400">(${highlight(o.spec)})</span>`:''}</span>
+          <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#FFF3E0;color:#E65100;flex-shrink:0;margin-left:6px">待派工</span>
+        </div>
+        <div style="font-size:11px;color:#888">
+          ${o.orderno?`${highlight(o.orderno)} · `:''}收單 ${o.date||'-'} ／ 總量 ${o.qty} ／ 剩 <strong style="color:#185FA5">${remaining}</strong> ／ $${o.price}
+        </div>
       </div>
     </div>`;
   }).join('');
-  if(window._selectedOrderId)onOrderChange();
+  updateSelectedInfo();
 }
-window.selectDispatchOrder=function(id){
-  window._selectedOrderId=id;
+window.toggleDispatchOrder=function(id){
+  if(window._selectedOrderIds.has(id)){
+    window._selectedOrderIds.delete(id);
+  }else{
+    window._selectedOrderIds.add(id);
+  }
   renderDispatchOrders();
-  onOrderChange();
 }
 function renderDispatchWorkers(){
   const cont=document.getElementById('d-worker-checks');if(!cont)return;
-  cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0" onchange="checkDispatchQty()"> ${e}</label>`).join('');
+  cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0"> ${e}</label>`).join('');
 }
-window.onOrderChange=function(){
-  const id=window._selectedOrderId;
-  const o=window.DB.orders.find(x=>x.id===id);
+function updateSelectedInfo(){
   const info=document.getElementById('d-order-info');
-  if(!o){info.style.display='none';return;}
-  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-  const remaining=Math.max(0,o.qty-reported);
+  const ids=[...window._selectedOrderIds];
+  if(!ids.length){info.style.display='none';return;}
+  const selected=window.DB.orders.filter(o=>ids.includes(o.id));
+  // 群組：同品名+規格+單價 合併顯示
+  const groups={};
+  selected.forEach(o=>{
+    const key=`${o.name}||${o.spec||''}||${o.price||0}`;
+    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,totalQty:0,orders:[]};
+    const remaining=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
+    groups[key].totalQty+=remaining;
+    groups[key].orders.push(o);
+  });
+  const gList=Object.values(groups);
   info.style.display='block';
-  info.innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap">
-    <span>訂單總量：<strong>${o.qty}</strong></span>
-    <span>已處理：<strong style="color:#2E7D32">${reported}</strong></span>
-    <span>剩餘未加工：<strong style="color:#185FA5">${remaining}</strong></span>
-    <span>單價：<strong>$${o.price}</strong></span>
-  </div>`;
+  info.innerHTML=`<div style="font-size:12px;font-weight:600;color:#185FA5;margin-bottom:6px">已選 ${ids.length} 筆訂單 → ${gList.length} 組派工</div>`+
+    gList.map(g=>`<div style="background:#fff;border-radius:6px;padding:5px 8px;margin-bottom:4px;font-size:11px;color:#555">
+      <span style="font-weight:600;color:#1a1a1a">${g.name}</span>${g.spec?` <span style="color:#aaa">(${g.spec})</span>`:''} ／ $${g.price} ／ 合計剩餘 <strong style="color:#185FA5">${g.totalQty}</strong> 件
+      <span style="color:#aaa;font-size:10px">（${g.orders.length} 張訂單：${g.orders.map(o=>o.orderno||o.id).join('、')}）</span>
+    </div>`).join('');
 }
 window.createDispatch=async function(){
-  const orderId=window._selectedOrderId;
+  const ids=[...window._selectedOrderIds];
   const selectedWorkers=Array.from(document.querySelectorAll('#d-worker-checks input:checked')).map(c=>c.value);
-  if(!orderId)return alert('請從清單選擇訂單');
+  if(!ids.length)return alert('請勾選至少一筆訂單');
   if(!selectedWorkers.length)return alert('請選擇至少一名員工');
-  const o=window.DB.orders.find(x=>x.id===orderId);
+  const note=document.getElementById('d-note').value;
   const batchId=genId('B');
   const now=new Date().toISOString();
-  for(const worker of selectedWorkers){
-    await saveDispatch({
-      id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
-      orderNo:o.orderno||'',itemPrice:o.price,worker,
-      assignQty:o.qty,batchId,
-      doneQty:0,defectQty:0,shortageQty:0,
-      note:document.getElementById('d-note').value,
-      status:'待完成',createdAt:now
-    });
+  // 依品名+規格+單價分組
+  const groups={};
+  const selectedOrders=window.DB.orders.filter(o=>ids.includes(o.id))
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||'')); // 先進先出排序
+  selectedOrders.forEach(o=>{
+    const key=`${o.name}||${o.spec||''}||${o.price||0}`;
+    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,orders:[]};
+    groups[key].orders.push(o);
+  });
+  // 每組建立 mergedGroup 記錄，寫入 dispatch
+  for(const g of Object.values(groups)){
+    const totalQty=g.orders.reduce((a,o)=>a+Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0))),0);
+    const mergedOrderIds=g.orders.map(o=>o.id);
+    const mergedOrderNos=g.orders.map(o=>o.orderno||'').filter(Boolean);
+    for(const worker of selectedWorkers){
+      await saveDispatch({
+        id:genId('D'),
+        // 合併群組標記
+        isMerged:g.orders.length>1,
+        mergedOrderIds,
+        mergedOrderNos,
+        // 相容舊欄位（取第一筆）
+        orderId:g.orders[0].id,
+        orderName:g.name,orderSpec:g.spec,
+        orderNo:mergedOrderNos[0]||'',
+        itemPrice:g.price,
+        worker,
+        assignQty:totalQty,
+        batchId,
+        doneQty:0,defectQty:0,shortageQty:0,
+        note,status:'待完成',createdAt:now
+      });
+    }
   }
   document.getElementById('d-note').value='';
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
-  window._selectedOrderId='';
+  window._selectedOrderIds=new Set();
   renderDispatchOrders();
-  toast(`已派工給 ${selectedWorkers.join('、')}：${o.name}（訂單數量 ${o.qty}）`);
+  const totalOrders=ids.length;
+  toast(`已派工給 ${selectedWorkers.join('、')}：${totalOrders} 筆訂單`);
 }
-window._selectedOrderId='';
-function renderDispatchWorkers(){
-  const cont=document.getElementById('d-worker-checks');if(!cont)return;
-  cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0" onchange="checkDispatchQty()"> ${e}</label>`).join('');
-}
-window.onOrderChange=function(){
-  const id=window._selectedOrderId;
-  const o=window.DB.orders.find(x=>x.id===id);
-  const info=document.getElementById('d-order-info');
-  if(!o){info.style.display='none';return;}
-  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-  const remaining=Math.max(0,o.qty-reported);
-  info.style.display='block';
-  info.innerHTML=`<div style="display:flex;gap:16px;flex-wrap:wrap">
-    <span>訂單總量：<strong>${o.qty}</strong></span>
-    <span>已處理：<strong style="color:#2E7D32">${reported}</strong></span>
-    <span>剩餘未加工：<strong style="color:#185FA5">${remaining}</strong></span>
-    <span>單價：<strong>$${o.price}</strong></span>
-  </div>`;
-}
-window.createDispatch=async function(){
-  const orderId=window._selectedOrderId;
-  const selectedWorkers=Array.from(document.querySelectorAll('#d-worker-checks input:checked')).map(c=>c.value);
-  if(!orderId)return alert('請從清單選擇訂單');
-  if(!selectedWorkers.length)return alert('請選擇至少一名員工');
-  const o=window.DB.orders.find(x=>x.id===orderId);
-  const batchId=genId('B');
-  const now=new Date().toISOString();
-  for(const worker of selectedWorkers){
-    await saveDispatch({
-      id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
-      orderNo:o.orderno||'',itemPrice:o.price,worker,
-      assignQty:o.qty,batchId,
-      doneQty:0,defectQty:0,shortageQty:0,
-      note:document.getElementById('d-note').value,
-      status:'待完成',createdAt:now
-    });
-  }
-  document.getElementById('d-note').value='';
-  document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
-  window._selectedOrderId='';
-  renderDispatchOrders();
-  toast(`已派工給 ${selectedWorkers.join('、')}：${o.name}（訂單數量 ${o.qty}）`);
-}
-
 // 需求2：右欄改為「加工中訂單」，也套用搜尋關鍵字
 function renderPendingDispatch(){
   const el=document.getElementById('pending-dispatch-list');if(!el)return;
