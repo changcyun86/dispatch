@@ -583,10 +583,14 @@ window.delSelectedOrders=async function(){
   if(!ids.length)return;
   if(!confirm(`確定刪除選取的 ${ids.length} 筆訂單？\n（相關派工記錄也會一併刪除）`))return;
   setSS('syncing');
+  // 收集所有要刪除的 dispatch（避免重複刪除同一筆合併記錄）
+  const dispatchIdsToDelete=new Set();
   for(const id of ids){
     await db.collection('orders').doc(id).delete();
-    const toDelete=window.DB.dispatches.filter(d=>d.orderId===id);
-    for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
+    findRelatedDispatches(id).forEach(d=>dispatchIdsToDelete.add(String(d.id)));
+  }
+  for(const did of dispatchIdsToDelete){
+    await db.collection('dispatches').doc(did).delete();
   }
   window._selectedOrderForDel=new Set();
   setSS('ok');
@@ -681,10 +685,16 @@ window.editOrderNo=async function(orderId, currentNo){
     toast('訂單號已更新');
   }
 }
+function findRelatedDispatches(orderId){
+  // 同時找：直接 orderId 符合，或合併派工 mergedOrderIds 包含此訂單
+  return window.DB.dispatches.filter(d=>
+    d.orderId===orderId||(d.mergedOrderIds&&d.mergedOrderIds.includes(orderId))
+  );
+}
 window.delOrder=async function(id){
   if(!confirm('確定刪除此訂單？'))return;
   await db.collection('orders').doc(id).delete();
-  const toDelete=window.DB.dispatches.filter(d=>d.orderId===id);
+  const toDelete=findRelatedDispatches(id);
   for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
   toast('已刪除');
 }
