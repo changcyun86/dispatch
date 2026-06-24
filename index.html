@@ -121,6 +121,14 @@ textarea{resize:vertical;min-height:70px}
       <button class="btn btn-primary btn-sm" onclick="togglePanel('manual-panel','order-paste-panel')">+ 手動新增</button>
     </div>
   </div>
+  <!-- 搜尋列 -->
+  <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:13px;color:#888;white-space:nowrap">🔍 搜尋：</span>
+      <input type="text" id="order-search" placeholder="輸入訂單號或品名..." style="flex:1;max-width:400px" oninput="onOrderSearch()">
+      <button class="btn btn-sm" onclick="document.getElementById('order-search').value='';onOrderSearch()">清除</button>
+    </div>
+  </div>
   <!-- 日期篩選列 -->
   <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
     <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
@@ -584,23 +592,47 @@ window.delSelectedOrders=async function(){
   setSS('ok');
   toast(`已刪除 ${ids.length} 筆訂單`);
 }
+let _orderSearchTimer=null;
+window.onOrderSearch=function(){
+  clearTimeout(_orderSearchTimer);
+  _orderSearchTimer=setTimeout(renderOrders,250);
+}
+function getOrderKeyword(){
+  const el=document.getElementById('order-search');
+  return el?el.value.trim().toLowerCase():'';
+}
 function renderOrders(){
   const tb=document.getElementById('order-tbody');if(!tb)return;
+  const kw=getOrderKeyword();
   let list=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.createdAt||'').localeCompare(b.createdAt||''));
-  const dateFrom=document.getElementById('order-from').value;
-  const dateTo=document.getElementById('order-to').value;
-  if(dateFrom)list=list.filter(o=>(o.date||'')>=dateFrom);
-  if(dateTo)list=list.filter(o=>(o.date||'')<=dateTo);
-  if(orderFilter!=='all'){
-    list=list.filter(o=>{
-      const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-      const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
-      const st=reported>=o.qty&&o.qty>0?'已完成':(reported>0||hasDispatch)?'加工中':'待派工';
-      return st===orderFilter;
-    });
+  // 關鍵字搜尋（獨立，不受日期/狀態影響）
+  if(kw){
+    list=list.filter(o=>
+      (o.name||'').toLowerCase().includes(kw)||
+      (o.orderno||'').toLowerCase().includes(kw)
+    );
+  }else{
+    // 無關鍵字：套用日期與狀態篩選
+    const dateFrom=document.getElementById('order-from').value;
+    const dateTo=document.getElementById('order-to').value;
+    if(dateFrom)list=list.filter(o=>(o.date||'')>=dateFrom);
+    if(dateTo)list=list.filter(o=>(o.date||'')<=dateTo);
+    if(orderFilter!=='all'){
+      list=list.filter(o=>{
+        const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+        const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
+        const st=reported>=o.qty&&o.qty>0?'已完成':(reported>0||hasDispatch)?'加工中':'待派工';
+        return st===orderFilter;
+      });
+    }
   }
+  const hlRe=kw?new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'):null;
+  const hl=(str)=>{
+    if(!hlRe||!str)return str||'';
+    return str.replace(hlRe,m=>`<mark style="background:#FFF176;border-radius:2px;padding:0 1px">${m}</mark>`);
+  };
   if(!list.length){
-    tb.innerHTML=`<tr><td colspan="15" style="text-align:center;padding:2rem;color:#aaa">${orderFilter==='all'&&!dateFrom&&!dateTo?'尚無訂單':'查無符合條件的訂單'}</td></tr>`;
+    tb.innerHTML=`<tr><td colspan="15" style="text-align:center;padding:2rem;color:#aaa">${kw?`無符合「${kw}」的訂單`:'查無符合條件的訂單'}</td></tr>`;
     updateOrderSelUI();return;
   }
   tb.innerHTML=list.map(o=>{
@@ -616,8 +648,8 @@ function renderOrders(){
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
       <td style="white-space:nowrap">${o.date||'-'}</td>
       <td><span style="color:#888;cursor:pointer;text-decoration:underline dotted" title="點擊編輯訂單號" onclick="editOrderNo('${o.id}','${(o.orderno||'').replace(/'/g,"\'")}')">
-        ${o.orderno||'<span style="color:#ccc">點擊輸入</span>'}</span></td>
-      <td style="font-weight:600">${o.name}</td><td style="color:#888">${o.spec||'-'}</td>
+        ${hl(o.orderno)||'<span style="color:#ccc">點擊輸入</span>'}</span></td>
+      <td style="font-weight:600">${hl(o.name)}</td><td style="color:#888">${o.spec||'-'}</td>
       <td class="col-num">${(o.qty||0).toLocaleString()}</td><td class="col-num">$${o.price||0}</td><td class="col-num" style="font-weight:600;color:#1565C0">${amt>0?'$'+amt.toLocaleString():'—'}</td>
       <td class="col-num" style="color:#2E7D32;font-weight:600">${o.done||0}</td><td class="col-num" style="color:#1565C0;font-weight:600">${undone}</td>
       <td class="col-num" style="color:#C62828">${o.defect||0}</td><td class="col-num" style="color:#E65100">${o.shortage||0}</td>
