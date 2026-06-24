@@ -714,45 +714,6 @@ window.createDispatch=async function(){
   toast(`已派工給 ${selectedWorkers.join('、')}：${o.name}（訂單數量 ${o.qty}）`);
 }
 window._selectedOrderId='';
-function renderDispatchOrders(){
-  const el=document.getElementById('d-order-list');if(!el)return;
-  // 需求1：只顯示「待派工」— 尚無任何派工記錄的訂單
-  const pendingOrders=window.DB.orders.filter(o=>{
-    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-    if(reported>=o.qty)return false; // 已完成
-    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
-    return !hasDispatch; // 沒有任何派工記錄才顯示
-  });
-  if(!pendingOrders.length){
-    el.innerHTML='<div style="padding:12px;color:#aaa;font-size:13px;text-align:center">目前無待派工訂單</div>';
-    if(window._selectedOrderId)onOrderChange();
-    return;
-  }
-  el.innerHTML=pendingOrders.map(o=>{
-    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-    const remaining=o.qty-reported;
-    const isSelected=window._selectedOrderId===o.id;
-    return`<div onclick="selectDispatchOrder('${o.id}')" style="
-      padding:10px 12px;cursor:pointer;border-bottom:1px solid #f0f0f0;
-      background:${isSelected?'#E3F2FD':'#fff'};
-      border-left:${isSelected?'3px solid #185FA5':'3px solid transparent'};
-      transition:background 0.1s">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
-        <span style="font-weight:600;font-size:13px">${o.name}${o.spec?' <span style="color:#888;font-weight:400">('+o.spec+')</span>':''}</span>
-        <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#FFF3E0;color:#E65100">待派工</span>
-      </div>
-      <div style="font-size:11px;color:#888">
-        ${o.orderno?`<span>${o.orderno}</span> · `:''}總量 ${o.qty} ／ 已處理 ${reported} ／ <strong style="color:#185FA5">剩 ${remaining}</strong> ／ $${o.price}
-      </div>
-    </div>`;
-  }).join('');
-  if(window._selectedOrderId)onOrderChange();
-}
-window.selectDispatchOrder=function(id){
-  window._selectedOrderId=id;
-  renderDispatchOrders();
-  onOrderChange();
-}
 function renderDispatchWorkers(){
   const cont=document.getElementById('d-worker-checks');if(!cont)return;
   cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0" onchange="checkDispatchQty()"> ${e}</label>`).join('');
