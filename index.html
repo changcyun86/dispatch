@@ -114,7 +114,9 @@ textarea{resize:vertical;min-height:70px}
         <button class="filter-btn" onclick="setOrderFilter('已完成',this)">已完成</button>
       </div>
     </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span id="order-sel-info" style="font-size:12px;color:#888;display:none"></span>
+      <button id="btn-del-selected" class="btn btn-sm btn-danger" onclick="delSelectedOrders()" style="display:none">🗑 刪除選取</button>
       <button class="btn btn-sm" onclick="togglePanel('order-paste-panel','manual-panel')">📋 貼上 Excel</button>
       <button class="btn btn-primary btn-sm" onclick="togglePanel('manual-panel','order-paste-panel')">+ 手動新增</button>
     </div>
@@ -173,13 +175,14 @@ textarea{resize:vertical;min-height:70px}
     <div class="tbl-wrap">
       <table class="tbl">
         <thead><tr>
+          <th style="width:36px"><input type="checkbox" id="order-check-all" onclick="toggleAllOrders(this)" style="cursor:pointer;accent-color:#185FA5"></th>
           <th>接單日期</th><th>訂單號</th><th>品名</th><th>規格</th>
           <th class="col-num">數量</th><th class="col-num">單價</th><th class="col-num">加工金額</th>
           <th class="col-num">已加工</th><th class="col-num">未加工</th>
           <th class="col-num">不良品</th><th class="col-num">來料不足</th>
           <th>狀態</th><th>進度</th><th></th>
         </tr></thead>
-        <tbody id="order-tbody"><tr><td colspan="14" style="text-align:center;padding:2rem;color:#aaa">載入中...</td></tr></tbody>
+        <tbody id="order-tbody"><tr><td colspan="15" style="text-align:center;padding:2rem;color:#aaa">載入中...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -540,9 +543,50 @@ window.clearOrderDate=function(){
   document.getElementById('order-to').value='';
   renderOrders();
 }
+window._selectedOrderForDel=new Set();
+function updateOrderSelUI(){
+  const n=window._selectedOrderForDel.size;
+  const info=document.getElementById('order-sel-info');
+  const btn=document.getElementById('btn-del-selected');
+  if(info){info.style.display=n?'inline':'none';info.textContent=`已選 ${n} 筆`;}
+  if(btn)btn.style.display=n?'inline-block':'none';
+  const allCk=document.getElementById('order-check-all');
+  if(allCk){
+    const rows=document.querySelectorAll('.order-row-ck');
+    allCk.checked=rows.length>0&&[...rows].every(c=>c.checked);
+    allCk.indeterminate=n>0&&!allCk.checked;
+  }
+}
+window.toggleOrderSel=function(id,ck){
+  if(ck)window._selectedOrderForDel.add(id);
+  else window._selectedOrderForDel.delete(id);
+  updateOrderSelUI();
+}
+window.toggleAllOrders=function(allCk){
+  document.querySelectorAll('.order-row-ck').forEach(c=>{
+    c.checked=allCk.checked;
+    if(allCk.checked)window._selectedOrderForDel.add(c.dataset.id);
+    else window._selectedOrderForDel.delete(c.dataset.id);
+  });
+  updateOrderSelUI();
+}
+window.delSelectedOrders=async function(){
+  const ids=[...window._selectedOrderForDel];
+  if(!ids.length)return;
+  if(!confirm(`確定刪除選取的 ${ids.length} 筆訂單？\n（相關派工記錄也會一併刪除）`))return;
+  setSS('syncing');
+  for(const id of ids){
+    await db.collection('orders').doc(id).delete();
+    const toDelete=window.DB.dispatches.filter(d=>d.orderId===id);
+    for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
+  }
+  window._selectedOrderForDel=new Set();
+  setSS('ok');
+  toast(`已刪除 ${ids.length} 筆訂單`);
+}
 function renderOrders(){
   const tb=document.getElementById('order-tbody');if(!tb)return;
-  let list=window.DB.orders;
+  let list=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.createdAt||'').localeCompare(b.createdAt||''));
   const dateFrom=document.getElementById('order-from').value;
   const dateTo=document.getElementById('order-to').value;
   if(dateFrom)list=list.filter(o=>(o.date||'')>=dateFrom);
@@ -555,7 +599,10 @@ function renderOrders(){
       return st===orderFilter;
     });
   }
-  if(!list.length){tb.innerHTML=`<tr><td colspan="14" style="text-align:center;padding:2rem;color:#aaa">${orderFilter==='all'&&!dateFrom&&!dateTo?'尚無訂單':'查無符合條件的訂單'}</td></tr>`;return;}
+  if(!list.length){
+    tb.innerHTML=`<tr><td colspan="15" style="text-align:center;padding:2rem;color:#aaa">${orderFilter==='all'&&!dateFrom&&!dateTo?'尚無訂單':'查無符合條件的訂單'}</td></tr>`;
+    updateOrderSelUI();return;
+  }
   tb.innerHTML=list.map(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const undone=Math.max(0,o.qty-reported);
@@ -564,8 +611,11 @@ function renderOrders(){
     const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
     const st=reported>=o.qty&&o.qty>0?'已完成':(reported>0||hasDispatch)?'加工中':'待派工';
     const sc={'待派工':'bp','加工中':'ba','已完成':'bd'};
-    return`<tr><td style="white-space:nowrap">${o.date||'-'}</td>
-      <td><span style="color:#888;cursor:pointer;text-decoration:underline dotted" title="點擊編輯訂單號" onclick="editOrderNo('${o.id}','${(o.orderno||'').replace(/'/g,"\\'")}')">
+    const isSel=window._selectedOrderForDel.has(o.id);
+    return`<tr style="background:${isSel?'#FFF8E1':''}">
+      <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
+      <td style="white-space:nowrap">${o.date||'-'}</td>
+      <td><span style="color:#888;cursor:pointer;text-decoration:underline dotted" title="點擊編輯訂單號" onclick="editOrderNo('${o.id}','${(o.orderno||'').replace(/'/g,"\'")}')">
         ${o.orderno||'<span style="color:#ccc">點擊輸入</span>'}</span></td>
       <td style="font-weight:600">${o.name}</td><td style="color:#888">${o.spec||'-'}</td>
       <td class="col-num">${(o.qty||0).toLocaleString()}</td><td class="col-num">$${o.price||0}</td><td class="col-num" style="font-weight:600;color:#1565C0">${amt>0?'$'+amt.toLocaleString():'—'}</td>
@@ -575,6 +625,7 @@ function renderOrders(){
       <td style="min-width:70px">${pct}%<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div></td>
       <td><button class="btn btn-sm btn-danger" onclick="delOrder('${o.id}')">🗑</button></td></tr>`;
   }).join('');
+  updateOrderSelUI();
 }
 window.editOrderNo=async function(orderId, currentNo){
   const newNo=prompt('修改訂單號：', currentNo);
