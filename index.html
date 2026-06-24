@@ -627,15 +627,41 @@ function matchOrder(o,kw){
          (o.orderno||'').toLowerCase().includes(kw)||
          (o.spec||'').toLowerCase().includes(kw);
 }
+function isOrderAllReportedButIncomplete(o){
+  // 取得此訂單所有相關的 dispatch（含合併派工）
+  const relatedDisp=window.DB.dispatches.filter(d=>
+    d.orderId===o.id||(d.mergedOrderIds&&d.mergedOrderIds.includes(o.id))
+  );
+  if(!relatedDisp.length)return false;
+  // 找出最新一批 batchId
+  const latestBatchId=relatedDisp.reduce((latest,x)=>{
+    if(!latest)return x.batchId||x.id;
+    const latestTime=relatedDisp.find(a=>(a.batchId||a.id)===latest)?.createdAt||'';
+    const xTime=x.createdAt||'';
+    return xTime>latestTime?(x.batchId||x.id):latest;
+  },null);
+  const latestBatch=relatedDisp.filter(d=>(d.batchId||d.id)===latestBatchId);
+  // 最新一批所有員工都已回報（doneQty+defectQty+shortageQty > 0）
+  const allReported=latestBatch.every(d=>(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0);
+  if(!allReported)return false;
+  // 訂單整體尚未完成
+  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+  return reported<o.qty;
+}
 function renderDispatchOrders(){
   const el=document.getElementById('d-order-list');if(!el)return;
   const kw=getDispatchKeyword();
   const pendingOrders=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||'')).filter(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     if(reported>=o.qty&&o.qty>0)return false;
-    const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
-    if(hasDispatch)return false;
-    return matchOrder(o,kw);
+    const hasDispatch=window.DB.dispatches.some(d=>
+      d.orderId===o.id||(d.mergedOrderIds&&d.mergedOrderIds.includes(o.id))
+    );
+    // 無派工記錄 → 待派工
+    if(!hasDispatch)return matchOrder(o,kw);
+    // 有派工記錄：所有員工都回報完但未達100% → 也回到待派工
+    if(isOrderAllReportedButIncomplete(o))return matchOrder(o,kw);
+    return false;
   });
   if(!pendingOrders.length){
     el.innerHTML=`<div style="padding:12px;color:#aaa;font-size:13px;text-align:center">${kw?`無符合「${kw}」的待派工訂單`:'目前無待派工訂單'}</div>`;
@@ -657,10 +683,12 @@ function renderDispatchOrders(){
       <div style="flex:1;min-width:0">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
           <span style="font-weight:600;font-size:13px">${highlight(o.name)}${o.spec?` <span style="color:#888;font-weight:400">(${highlight(o.spec)})</span>`:''}</span>
-          <span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#FFF3E0;color:#E65100;flex-shrink:0;margin-left:6px">待派工</span>
+          ${isOrderAllReportedButIncomplete(o)
+            ?'<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#FCE4EC;color:#C62828;flex-shrink:0;margin-left:6px">需補派</span>'
+            :'<span style="font-size:11px;padding:2px 8px;border-radius:20px;background:#FFF3E0;color:#E65100;flex-shrink:0;margin-left:6px">待派工</span>'}
         </div>
         <div style="font-size:11px;color:#888">
-          ${o.orderno?`${highlight(o.orderno)} · `:''}收單 ${o.date||'-'} ／ 總量 ${o.qty} ／ 剩 <strong style="color:#185FA5">${remaining}</strong> ／ $${o.price}
+          ${o.orderno?`${highlight(o.orderno)} · `:''}收單 ${o.date||'-'} ／ 總量 ${o.qty} ／ 已完成 ${(o.done||0)+(o.defect||0)+(o.shortage||0)} ／ 剩 <strong style="color:#C62828">${remaining}</strong> ／ $${o.price}
         </div>
       </div>
     </div>`;
@@ -720,17 +748,19 @@ window.createDispatch=async function(){
   });
   // 每組建立 mergedGroup 記錄，寫入 dispatch
   for(const g of Object.values(groups)){
+    // assignQty 使用剩餘未完成數量（支援補派）
     const totalQty=g.orders.reduce((a,o)=>a+Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0))),0);
     const mergedOrderIds=g.orders.map(o=>o.id);
     const mergedOrderNos=g.orders.map(o=>o.orderno||'').filter(Boolean);
+    // 判斷是否為補派（任一訂單已有回報記錄）
+    const isReDispatch=g.orders.some(o=>(o.done||0)+(o.defect||0)+(o.shortage||0)>0);
     for(const worker of selectedWorkers){
       await saveDispatch({
         id:genId('D'),
-        // 合併群組標記
         isMerged:g.orders.length>1,
+        isReDispatch,
         mergedOrderIds,
         mergedOrderNos,
-        // 相容舊欄位（取第一筆）
         orderId:g.orders[0].id,
         orderName:g.name,orderSpec:g.spec,
         orderNo:mergedOrderNos[0]||'',
