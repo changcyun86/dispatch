@@ -687,6 +687,10 @@ function renderWorkerMain(){
         本次回報總數：<span id="rtotal-${d.id}" style="font-weight:600;color:#185FA5">${(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)}</span>
       </div>
       <div id="re-${d.id}" class="err-box"></div>
+      <div style="margin-top:10px">
+        <div class="bilabel" style="margin-bottom:4px"><span class="zh">📝 備註</span><span class="vi">Ghi chú</span></div>
+        <input type="text" id="rn-${d.id}" placeholder="可填寫備註說明 / Nhập ghi chú nếu cần" value="${d.workerNote||''}" style="width:100%;box-sizing:border-box">
+      </div>
       <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px" onclick="submitRpt('${d.id}')">
         回報完工 / Báo cáo hoàn thành
       </button>
@@ -735,6 +739,7 @@ window.submitRpt=async function(id){
   const done=parseInt(document.getElementById('rd-'+id).value)||0;
   const def=parseInt(document.getElementById('rf-'+id).value)||0;
   const sho=parseInt(document.getElementById('rs-'+id).value)||0;
+  const workerNote=(document.getElementById('rn-'+id)||{}).value||'';
   const myTotal=done+def+sho;
 
   setSS('syncing');
@@ -769,6 +774,7 @@ window.submitRpt=async function(id){
       }
       // 儲存 dispatch 記錄，帶上分配明細
       const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
+        workerNote,
         mergedAllocations:allocations.map(({o,take})=>({orderId:o.id,orderNo:o.orderno||'',allocated:take})),
         status:'回報中',lastReportAt:new Date().toISOString()};
       await db.collection('dispatches').doc(String(id)).set(updated);
@@ -780,6 +786,7 @@ window.submitRpt=async function(id){
       if(myTotal+othersReported>orderQty)
         return alert(`回報後總數(${myTotal+othersReported})會超過訂單數量(${orderQty})，請修正`);
       const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
+        workerNote,
         status:myTotal>=d.assignQty?'已完成':'回報中',
         lastReportAt:new Date().toISOString()};
       await db.collection('dispatches').doc(String(id)).set(updated);
