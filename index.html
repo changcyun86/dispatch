@@ -654,7 +654,18 @@ function renderOrders(){
       <td><span style="color:#888;cursor:pointer;text-decoration:underline dotted" title="點擊編輯訂單號" onclick="editOrderNo('${o.id}','${(o.orderno||'').replace(/'/g,"\'")}')">
         ${hl(o.orderno)||'<span style="color:#ccc">點擊輸入</span>'}</span></td>
       <td style="font-weight:600">${hl(o.name)}</td><td style="color:#888">${o.spec||'-'}</td>
-      <td class="col-num">${(o.qty||0).toLocaleString()}</td><td class="col-num">$${o.price||0}</td><td class="col-num" style="font-weight:600;color:#1565C0">${amt>0?'$'+amt.toLocaleString():'—'}</td>
+      <td class="col-num">${(o.qty||0).toLocaleString()}</td>
+      <td class="col-num" style="padding:2px 4px">
+        <div style="display:flex;align-items:center;gap:2px">
+          <span style="color:#888;font-size:12px">$</span>
+          <input type="number" min="0" step="0.01" value="${o.price||0}"
+            style="width:64px;padding:3px 4px;font-size:13px;text-align:right;border:1px solid #e0e0e0;border-radius:4px;background:#fafafa"
+            onchange="editOrderPrice('${o.id}',this.value,this)"
+            onfocus="this.style.borderColor='#185FA5';this.style.background='#fff'"
+            onblur="this.style.borderColor='#e0e0e0';this.style.background='#fafafa'">
+        </div>
+      </td>
+      <td class="col-num" style="font-weight:600;color:#1565C0" id="amt-${o.id}">${amt>0?'$'+amt.toLocaleString():'—'}</td>
       <td class="col-num" style="color:#2E7D32;font-weight:600">${o.done||0}</td><td class="col-num" style="color:#1565C0;font-weight:600">${undone}</td>
       <td class="col-num" style="color:#C62828">${o.defect||0}</td><td class="col-num" style="color:#E65100">${o.shortage||0}</td>
       <td><span class="badge ${sc[st]}">${st}</span></td>
@@ -684,6 +695,29 @@ window.editOrderNo=async function(orderId, currentNo){
   }else{
     toast('訂單號已更新');
   }
+}
+window.editOrderPrice=async function(orderId, newVal, inputEl){
+  const price=parseFloat(newVal);
+  if(isNaN(price)||price<0){inputEl.value=0;return;}
+  const o=window.DB.orders.find(x=>x.id===orderId);
+  if(!o)return;
+  if(price===(o.price||0))return; // 沒有變更
+  o.price=price;
+  await saveOrder(o);
+  // 同步更新所有相關派工記錄的 itemPrice
+  const related=findRelatedDispatches(orderId);
+  if(related.length){
+    for(const d of related){
+      d.itemPrice=price;
+      await saveDispatch(d);
+    }
+    toast(`單價已更新為 $${price}，同步 ${related.length} 筆派工記錄`);
+  }else{
+    toast(`單價已更新為 $${price}`);
+  }
+  // 更新加工金額欄
+  const amtEl=document.getElementById('amt-'+orderId);
+  if(amtEl){const amt=o.qty*price;amtEl.textContent=amt>0?'$'+amt.toLocaleString():'—';}
 }
 function findRelatedDispatches(orderId){
   // 同時找：直接 orderId 符合，或合併派工 mergedOrderIds 包含此訂單
@@ -1300,16 +1334,52 @@ window.calcSalary=function(){
       <td style="color:#888">${d.orderNo||'-'}</td>
       <td>${d.orderName}</td>
       <td style="color:#888">${d.orderSpec||'-'}</td>
-      <td class="col-num">$${d.itemPrice||0}</td>
+      <td class="col-num" style="padding:2px 4px">
+        <div style="display:flex;align-items:center;gap:2px;justify-content:flex-end">
+          <span style="color:#888;font-size:12px">$</span>
+          <input type="number" min="0" step="0.01" value="${d.itemPrice||0}"
+            style="width:64px;padding:3px 4px;font-size:13px;text-align:right;border:1px solid #e0e0e0;border-radius:4px;background:#fafafa"
+            onchange="editSalaryPrice('${d.id}','${d.orderId||''}',this.value,this)"
+            onfocus="this.style.borderColor='#185FA5';this.style.background='#fff'"
+            onblur="this.style.borderColor='#e0e0e0';this.style.background='#fafafa'">
+        </div>
+      </td>
       <td class="col-num" style="color:#2E7D32;font-weight:600">${d.doneQty||0}</td>
-      <td class="col-num" style="font-weight:600;color:#2E7D32">$${((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)}</td>
+      <td class="col-num" style="font-weight:600;color:#2E7D32" id="sal-amt-${d.id}">$${((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)}</td>
     </tr>`).join('')}
-    <tr style="background:#f0f7f0;font-weight:600"><td colspan="6" style="text-align:right;padding:8px 10px">合計</td><td class="col-num">${rows.reduce((a,d)=>a+(d.doneQty||0),0)}</td><td class="col-num" style="color:#2E7D32">$${grand.toFixed(0)}</td></tr>
+    <tr style="background:#f0f7f0;font-weight:600"><td colspan="6" style="text-align:right;padding:8px 10px">合計</td><td class="col-num">${rows.reduce((a,d)=>a+(d.doneQty||0),0)}</td><td class="col-num" style="color:#2E7D32" id="sal-grand-total">$${grand.toFixed(0)}</td></tr>
     </tbody>
   </table></div></div>`;
 
   // 儲存 TSV 供複製（不含標題列）
   window._salaryTSV=tsvForCopy;
+}
+window.editSalaryPrice=async function(dispatchId, orderId, newVal, inputEl){
+  const price=parseFloat(newVal);
+  if(isNaN(price)||price<0){inputEl.value=0;return;}
+  const d=window.DB.dispatches.find(x=>x.id===dispatchId);
+  if(!d||price===(d.itemPrice||0))return;
+  // 找出此訂單所有相關派工記錄（含合併派工）
+  const related=findRelatedDispatches(orderId||d.orderId);
+  // 同步所有派工記錄
+  for(const rd of related){
+    rd.itemPrice=price;
+    await saveDispatch(rd);
+    // 即時更新金額欄
+    const amtEl=document.getElementById('sal-amt-'+rd.id);
+    if(amtEl)amtEl.textContent='$'+((rd.doneQty||0)*price).toFixed(0);
+    // 同步其他 input
+    if(rd.id!==dispatchId){
+      const otherInput=document.querySelector(`input[onchange*="editSalaryPrice('${rd.id}'"]`);
+      if(otherInput)otherInput.value=price;
+    }
+  }
+  // 回寫訂單單價（不動產品資料庫）
+  const o=window.DB.orders.find(x=>x.id===(orderId||d.orderId));
+  if(o){o.price=price;await saveOrder(o);}
+  // 重新渲染薪資表（更新合計）
+  renderSalaryWorkers();
+  toast(`單價已更新為 $${price}，同步 ${related.length} 筆派工記錄`);
 }
 window.copySalaryTSV=function(){
   if(!window._salaryTSV)return;
