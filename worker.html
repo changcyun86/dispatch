@@ -849,11 +849,14 @@ window.submitMergedRpt=async function(dispId){
         done:newDone, defect:newDefect, shortage:newShortage
       });
     }
-    // 儲存 dispatch 記錄（doneQty 存總完工數）
+    // 儲存 dispatch 記錄
+    // doneQty 存 orderId（第一張訂單）對應的完工數，避免被其他邏輯誤用總數
+    const firstOrderReport=subReports.find(r=>r.o.id===d.orderId)||subReports[0];
     const updated={...d,
-      doneQty:totalDone,
-      defectQty:subReports.reduce((a,r)=>a+r.def,0),
-      shortageQty:subReports.reduce((a,r)=>a+r.sho,0),
+      doneQty:firstOrderReport?firstOrderReport.done:totalDone,
+      defectQty:firstOrderReport?firstOrderReport.def:subReports.reduce((a,r)=>a+r.def,0),
+      shortageQty:firstOrderReport?firstOrderReport.sho:subReports.reduce((a,r)=>a+r.sho,0),
+      totalDoneQty:totalDone,
       workerNote,
       subReports:subReports.map(({o,done,def,sho})=>({orderId:o.id,orderNo:o.orderno||'',done,def,sho})),
       status:'回報中',lastReportAt:new Date().toISOString()
@@ -885,6 +888,11 @@ window.validateRpt=function(id){
 const _submitting=new Set();
 window.submitRpt=async function(id){
   if(_submitting.has(id))return;
+  // 合併派工應走 submitMergedRpt，防止誤呼叫
+  const _d=dispatches.find(x=>x.id===id);
+  if(_d&&_d.isMerged&&_d.mergedOrderIds&&_d.mergedOrderIds.length>1){
+    return submitMergedRpt(id);
+  }
   _submitting.add(id);
   if(!validateRpt(id)){_submitting.delete(id);return;}
   const d=dispatches.find(x=>x.id===id);if(!d){_submitting.delete(id);return;}
