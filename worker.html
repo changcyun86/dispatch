@@ -185,16 +185,19 @@ db.collection('system').doc('workerPins').onSnapshot(snap=>{
   workerPins=snap.exists?snap.data()||{}:{};
 });
 
+const _migratedIds=new Set(); // 防止重複處理
 async function migrateMergedDispatches(){
   // 修補舊有合併派工記錄：補上 mergedAllocations 欄位
-  // 條件：isMerged=true，且 mergedAllocations 不存在或是空陣列
+  // 條件：isMerged=true，且 mergedAllocations 不存在或是空陣列，且尚未處理過
   const targets=dispatches.filter(d=>
     d.isMerged&&d.mergedOrderIds&&d.mergedOrderIds.length>0&&
-    (!d.mergedAllocations||d.mergedAllocations.length===0)
+    (!d.mergedAllocations||d.mergedAllocations.length===0)&&
+    !_migratedIds.has(d.id)
   );
   if(!targets.length)return;
   for(const d of targets){
-    // 依收單日期先進先出，用 assignQty（派工數量）分配，不用目前剩餘量
+    _migratedIds.add(d.id); // 先標記，避免 onSnapshot 觸發時重複處理
+    // 依收單日期先進先出，用 assignQty（派工數量）分配
     const mergedOrders=d.mergedOrderIds
       .map(oid=>orders.find(x=>x.id===oid))
       .filter(Boolean)
@@ -202,20 +205,17 @@ async function migrateMergedDispatches(){
     let remain=d.assignQty||0;
     const allocations=[];
     for(const o of mergedOrders){
-      // 用訂單原始數量（qty）做先進先出，不扣 done（避免已回報數量干擾分配）
       const take=Math.min(remain,o.qty||0);
       allocations.push({orderId:o.id,orderNo:o.orderno||'',allocated:take});
       remain-=take;
       if(remain<=0)break;
     }
-    // 補上剩餘（若 assignQty > 所有訂單 qty 加總）
     if(remain>0&&allocations.length>0){
       allocations[allocations.length-1].allocated+=remain;
     }
-    const updated={...d,mergedAllocations:allocations};
     try{
-      await db.collection('dispatches').doc(String(d.id)).set(updated);
-    }catch(e){console.warn('migrate failed',d.id,e);}
+      await db.collection('dispatches').doc(String(d.id)).set({...d,mergedAllocations:allocations});
+    }catch(e){console.warn('migrate failed',d.id,e);_migratedIds.delete(d.id);}
   }
 }
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
@@ -782,9 +782,12 @@ window.validateRpt=function(id){
   err.style.display='none';return true;
 }
 
+const _submitting=new Set();
 window.submitRpt=async function(id){
-  if(!validateRpt(id))return;
-  const d=dispatches.find(x=>x.id===id);if(!d)return;
+  if(_submitting.has(id))return;
+  _submitting.add(id);
+  if(!validateRpt(id)){_submitting.delete(id);return;}
+  const d=dispatches.find(x=>x.id===id);if(!d){_submitting.delete(id);return;}
   const done=parseInt(document.getElementById('rd-'+id).value)||0;
   const def=parseInt(document.getElementById('rf-'+id).value)||0;
   const sho=parseInt(document.getElementById('rs-'+id).value)||0;
@@ -851,6 +854,7 @@ window.submitRpt=async function(id){
     }
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
+  finally{_submitting.delete(id);}
 }
 init();
 </script>
