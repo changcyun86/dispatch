@@ -676,11 +676,11 @@ function renderWorkerMain(){
     return Math.max(0,o.qty-rep);
   }
 
-  // 同 batchId + 同品名的 dispatch 群組化
+  // 同 batchId + 同品名 + 同員工的 dispatch 群組化
   function groupPendingByBatch(pendingList){
     const groups={};
     for(const d of pendingList){
-      const key=d.isMerged?`${d.batchId}||${d.groupName||d.orderName}`:d.id;
+      const key=d.isMerged?`${d.batchId}||${d.groupName||d.orderName}||${d.worker}`:d.id;
       if(!groups[key])groups[key]=[];
       groups[key].push(d);
     }
