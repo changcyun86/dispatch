@@ -187,13 +187,14 @@ db.collection('system').doc('workerPins').onSnapshot(snap=>{
 
 async function migrateMergedDispatches(){
   // 修補舊有合併派工記錄：補上 mergedAllocations 欄位
+  // 條件：isMerged=true，且 mergedAllocations 不存在或是空陣列
   const targets=dispatches.filter(d=>
-    d.isMerged&&d.mergedOrderIds&&d.mergedOrderIds.length>0&&!d.mergedAllocations&&
-    (d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)===0 // 只修補尚未回報的
+    d.isMerged&&d.mergedOrderIds&&d.mergedOrderIds.length>0&&
+    (!d.mergedAllocations||d.mergedAllocations.length===0)
   );
   if(!targets.length)return;
   for(const d of targets){
-    // 依收單日期先進先出，模擬分配 assignQty 到各訂單
+    // 依收單日期先進先出，用 assignQty（派工數量）分配，不用目前剩餘量
     const mergedOrders=d.mergedOrderIds
       .map(oid=>orders.find(x=>x.id===oid))
       .filter(Boolean)
@@ -201,11 +202,15 @@ async function migrateMergedDispatches(){
     let remain=d.assignQty||0;
     const allocations=[];
     for(const o of mergedOrders){
-      const canTake=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
-      const take=Math.min(remain,canTake);
+      // 用訂單原始數量（qty）做先進先出，不扣 done（避免已回報數量干擾分配）
+      const take=Math.min(remain,o.qty||0);
       allocations.push({orderId:o.id,orderNo:o.orderno||'',allocated:take});
       remain-=take;
       if(remain<=0)break;
+    }
+    // 補上剩餘（若 assignQty > 所有訂單 qty 加總）
+    if(remain>0&&allocations.length>0){
+      allocations[allocations.length-1].allocated+=remain;
     }
     const updated={...d,mergedAllocations:allocations};
     try{
@@ -640,19 +645,17 @@ function renderWorkerMain(){
   }
   function calcOrderRemain(o,excludeDispatchId){
     // 計算單一訂單的剩餘可回報量
-    // 先扣訂單層級已記錄的完成量，再扣其他員工這次的回報
-    const orderDone=(o.done||0)+(o.defect||0)+(o.shortage||0);
-    // 其他 dispatch（同一訂單或含此訂單的合併 dispatch）已回報的數量
     const othersReported=dispatches
       .filter(x=>x.id!==excludeDispatchId&&(
         x.orderId===o.id||(x.mergedOrderIds&&x.mergedOrderIds.includes(o.id))
       ))
       .reduce((a,x)=>{
-        // 若是合併 dispatch，依 mergedAllocations 找此訂單分到的數量
-        if(x.mergedAllocations){
-          const alloc=x.mergedAllocations.find(a=>a.orderId===o.id);
+        if(x.mergedAllocations&&x.mergedAllocations.length>0){
+          // 合併 dispatch 有分配明細，取此訂單的分配量
+          const alloc=x.mergedAllocations.find(m=>m.orderId===o.id);
           return a+(alloc?alloc.allocated:0);
         }
+        // 單筆 dispatch 或無分配明細：用 doneQty+defectQty+shortageQty
         return a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0);
       },0);
     return Math.max(0,o.qty-othersReported);
@@ -795,30 +798,34 @@ window.submitRpt=async function(id){
   try{
     if(d.isMerged&&d.mergedOrderIds){
       // ── 先進先出分配 ──
-      // 依收單日期排序各訂單
       const mergedOrders=d.mergedOrderIds
         .map(oid=>orders.find(x=>x.id===oid))
         .filter(Boolean)
         .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-      let remainToAllocate=myTotal; // 只分配 done（完工）；defect/shortage 以總量比例分配
-      // 分配完工數到各訂單（先進先出）
+      let remainToAllocate=myTotal;
       const allocations=[];
       for(const o of mergedOrders){
-        const othersReported=dispatches.filter(x=>x.orderId===o.id&&x.id!==id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-        const canTake=Math.max(0,o.qty-othersReported);
+        // 用 calcOrderRemain 正確計算剩餘（含其他合併派工的分配量）
+        const canTake=calcOrderRemain(o,id);
         const take=Math.min(remainToAllocate,canTake);
         allocations.push({o,take});
         remainToAllocate-=take;
         if(remainToAllocate<=0)break;
       }
-      // 更新各訂單的 done 欄位
+      // 更新各訂單的 done 欄位：用「其他所有 dispatch 的累計」加上本次分配
       for(const {o,take} of allocations){
-        const allDisp=dispatches.filter(x=>x.orderId===o.id);
-        const othersDone=allDisp.filter(x=>x.id!==id).reduce((a,x)=>a+(x.doneQty||0),0);
-        await db.collection('orders').doc(o.id).set({...o,
-          done:othersDone+take,
-          defect:allDisp.filter(x=>x.id!==id).reduce((a,x)=>a+(x.defectQty||0),0),
-          shortage:allDisp.filter(x=>x.id!==id).reduce((a,x)=>a+(x.shortageQty||0),0)
+        // 其他 dispatch 對此訂單的累計已分配量
+        const othersDone=dispatches.filter(x=>x.id!==id&&(
+          x.orderId===o.id||(x.mergedOrderIds&&x.mergedOrderIds.includes(o.id))
+        )).reduce((a,x)=>{
+          if(x.mergedAllocations&&x.mergedAllocations.length>0){
+            const al=x.mergedAllocations.find(m=>m.orderId===o.id);
+            return a+(al?al.allocated:0);
+          }
+          return a+(x.doneQty||0);
+        },0);
+        await db.collection('orders').doc(o.id).update({
+          done:Math.min(o.qty,othersDone+take)
         });
       }
       // 儲存 dispatch 記錄，帶上分配明細
