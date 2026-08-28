@@ -329,6 +329,12 @@ textarea{resize:vertical;min-height:70px}
           <button class="btn btn-sm" onclick="closePanel('prod-paste-panel')">取消</button>
         </div>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:13px;color:#888;white-space:nowrap">🔍 搜尋：</span>
+        <input type="text" id="prod-search" placeholder="輸入品名..." style="flex:1;max-width:300px" oninput="renderProducts()">
+        <button class="btn btn-sm" onclick="document.getElementById('prod-search').value='';renderProducts()">清除</button>
+        <span id="prod-search-count" style="font-size:12px;color:#aaa;white-space:nowrap"></span>
+      </div>
       <div style="overflow-x:auto;margin-bottom:10px;max-height:200px;overflow-y:auto">
         <table class="tbl"><thead><tr><th>品名</th><th>規格</th><th class="col-num">單價</th><th></th></tr></thead>
         <tbody id="product-tbody"><tr><td colspan="4" style="text-align:center;color:#aaa;padding:1rem">尚無品名資料</td></tr></tbody></table>
@@ -1435,7 +1441,35 @@ window.resetEmployeePin=async function(){
     toast(`已重設「${emp}」的 PIN 碼`);
   }catch(e){toast('重設失敗，請重試');}
 }
-function renderProducts(){const ptb=document.getElementById('product-tbody');if(!ptb)return;if(!window.DB.products.length){ptb.innerHTML='<tr><td colspan="4" style="text-align:center;color:#aaa;padding:1rem">尚無品名資料</td></tr>';return;}ptb.innerHTML=window.DB.products.map((p,i)=>`<tr><td style="font-weight:600">${p.name}</td><td style="color:#888">${p.spec||'—'}</td><td class="col-num">$${p.price}</td><td><button class="btn btn-sm btn-danger" onclick="removeProd(${i})">🗑</button></td></tr>`).join('');}
+function renderProducts(){
+  const ptb=document.getElementById('product-tbody');if(!ptb)return;
+  const kw=(document.getElementById('prod-search')||{}).value?.trim().toLowerCase()||'';
+  const countEl=document.getElementById('prod-search-count');
+  if(!window.DB.products.length){
+    ptb.innerHTML='<tr><td colspan="4" style="text-align:center;color:#aaa;padding:1rem">尚無品名資料</td></tr>';
+    if(countEl)countEl.textContent='';return;
+  }
+  const hlRe=kw?new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'):null;
+  const hl=(str)=>{
+    if(!hlRe||!str)return str||'';
+    return str.replace(hlRe,m=>`<mark style="background:#FFF176;border-radius:2px;padding:0 1px">${m}</mark>`);
+  };
+  // 依品名過濾，保留原始 index 供刪除用
+  const filtered=window.DB.products.map((p,i)=>({p,i})).filter(({p})=>
+    !kw||(p.name||'').toLowerCase().includes(kw)
+  );
+  if(countEl)countEl.textContent=kw?`${filtered.length} / ${window.DB.products.length} 筆`:`共 ${window.DB.products.length} 筆`;
+  if(!filtered.length){
+    ptb.innerHTML=`<tr><td colspan="4" style="text-align:center;color:#aaa;padding:1rem">無符合「${kw}」的品名</td></tr>`;
+    return;
+  }
+  ptb.innerHTML=filtered.map(({p,i})=>`<tr>
+    <td style="font-weight:600">${hl(p.name)}</td>
+    <td style="color:#888">${p.spec||'—'}</td>
+    <td class="col-num">$${p.price}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="removeProd(${i})">🗑</button></td>
+  </tr>`).join('');
+}
 function updateSysInfo(){['orders','emps','disps','prods'].forEach((k,i)=>{const el=document.getElementById('si-'+k);if(el)el.textContent=[window.DB.orders,window.DB.employees,window.DB.dispatches,window.DB.products][i].length;});}
 window.addEmp=async function(){const n=document.getElementById('new-emp').value.trim();if(!n)return;if(window.DB.employees.includes(n))return alert('員工已存在');window.DB.employees.push(n);document.getElementById('new-emp').value='';await saveEmployees();toast(`已新增員工：${n}`);}
 window.removeEmp=async function(i){if(!confirm('確定移除？'))return;window.DB.employees.splice(i,1);await saveEmployees();}
