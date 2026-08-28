@@ -1043,13 +1043,31 @@ window.confirmAddWorkers=async function(orderId){
 window.deleteDispatch=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
   if(!confirm(`確定刪除「${d.worker}」的派工記錄？\n（已回報的數量也會從訂單中扣除）`))return;
-  // 從訂單扣除此人的回報數量
-  const o=window.DB.orders.find(x=>x.id===d.orderId);
-  if(o){
-    o.done=Math.max(0,(o.done||0)-(d.doneQty||0));
-    o.defect=Math.max(0,(o.defect||0)-(d.defectQty||0));
-    o.shortage=Math.max(0,(o.shortage||0)-(d.shortageQty||0));
-    await saveOrder(o);
+  if(d.isMerged&&d.mergedOrderIds&&d.mergedOrderIds.length){
+    // 合併派工：依 mergedAllocations 各別還原各訂單
+    const allocList=d.mergedAllocations||[];
+    for(const oid of d.mergedOrderIds){
+      const o=window.DB.orders.find(x=>x.id===oid);if(!o)continue;
+      // 重算此訂單其他所有 dispatch 的累計回報量
+      const otherDisp=window.DB.dispatches.filter(x=>x.id!==id&&(
+        x.orderId===oid||(x.mergedOrderIds&&x.mergedOrderIds.includes(oid))
+      ));
+      const newDone=otherDisp.reduce((a,x)=>{
+        if(x.mergedAllocations){const al=x.mergedAllocations.find(m=>m.orderId===oid);return a+(al?al.allocated:0);}
+        return a+(x.doneQty||0);
+      },0);
+      const newDefect=otherDisp.reduce((a,x)=>a+(x.defectQty||0),0);
+      const newShortage=otherDisp.reduce((a,x)=>a+(x.shortageQty||0),0);
+      await saveOrder({...o,done:Math.max(0,newDone),defect:Math.max(0,newDefect),shortage:Math.max(0,newShortage)});
+    }
+  }else{
+    // 單筆派工：直接扣除
+    const o=window.DB.orders.find(x=>x.id===d.orderId);
+    if(o)await saveOrder({...o,
+      done:Math.max(0,(o.done||0)-(d.doneQty||0)),
+      defect:Math.max(0,(o.defect||0)-(d.defectQty||0)),
+      shortage:Math.max(0,(o.shortage||0)-(d.shortageQty||0))
+    });
   }
   await db.collection('dispatches').doc(String(id)).delete();
   toast('已刪除派工記錄');
