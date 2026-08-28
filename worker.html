@@ -185,11 +185,43 @@ db.collection('system').doc('workerPins').onSnapshot(snap=>{
   workerPins=snap.exists?snap.data()||{}:{};
 });
 
+async function migrateMergedDispatches(){
+  // 修補舊有合併派工記錄：補上 mergedAllocations 欄位
+  const targets=dispatches.filter(d=>
+    d.isMerged&&d.mergedOrderIds&&d.mergedOrderIds.length>0&&!d.mergedAllocations&&
+    (d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)===0 // 只修補尚未回報的
+  );
+  if(!targets.length)return;
+  for(const d of targets){
+    // 依收單日期先進先出，模擬分配 assignQty 到各訂單
+    const mergedOrders=d.mergedOrderIds
+      .map(oid=>orders.find(x=>x.id===oid))
+      .filter(Boolean)
+      .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    let remain=d.assignQty||0;
+    const allocations=[];
+    for(const o of mergedOrders){
+      const canTake=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
+      const take=Math.min(remain,canTake);
+      allocations.push({orderId:o.id,orderNo:o.orderno||'',allocated:take});
+      remain-=take;
+      if(remain<=0)break;
+    }
+    const updated={...d,mergedAllocations:allocations};
+    try{
+      await db.collection('dispatches').doc(String(d.id)).set(updated);
+    }catch(e){console.warn('migrate failed',d.id,e);}
+  }
+}
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
 
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');employees=snap.exists?snap.data().list||[]:[];if(!currentWorker)renderSelectScreen();},()=>setSS('err'));
-db.collection('dispatches').onSnapshot(snap=>{dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}});
+db.collection('dispatches').onSnapshot(snap=>{
+  dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));
+  migrateMergedDispatches();
+  if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}
+});
 db.collection('orders').onSnapshot(snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
 db.collection('checkins').onSnapshot(snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker)renderCheckinStatus();});
 
