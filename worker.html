@@ -678,20 +678,17 @@ function renderWorkerMain(){
   const myPending=myAll.filter(d=>{
     const myReported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
     if(myReported>0)return false;
-    // 判斷合併群組整體是否已完成
+    // 判斷合併群組整體是否已完成：用 calcOrderRemain 判斷每張訂單剩餘
     if(d.isMerged&&d.mergedOrderIds){
-      const allDone=d.mergedOrderIds.every(oid=>{
+      // 所有訂單剩餘量加總為 0 才算完成
+      const totalRemain=d.mergedOrderIds.reduce((t,oid)=>{
         const o=orders.find(x=>x.id===oid);
-        if(!o)return true;
-        const rep=dispatches.filter(x=>x.orderId===oid).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-        return rep>=o.qty;
-      });
-      if(allDone)return false;
+        return t+(o?calcOrderRemain(o,d.id):0);
+      },0);
+      if(totalRemain<=0)return false;
     }else{
       const o=orders.find(x=>x.id===d.orderId);
-      const orderQty=o?o.qty:d.assignQty;
-      const allReported=dispatches.filter(x=>x.orderId===d.orderId).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-      if(allReported>=orderQty)return false;
+      if(o&&calcOrderRemain(o,d.id)<=0)return false;
     }
     return isLatestBatch(d);
   });
