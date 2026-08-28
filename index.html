@@ -424,7 +424,8 @@ let orderFilter='all';
 
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
-function genId(p){return p+'-'+Date.now().toString(36).toUpperCase();}
+let _genIdCounter=0;
+function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCounter++)%1000).toString(36).toUpperCase();}
 
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB.employees=snap.exists?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},()=>setSS('err'));
 db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});

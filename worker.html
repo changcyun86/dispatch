@@ -584,16 +584,27 @@ function renderWorkerMain(){
   // 1. 尚未回報
   // 2. 屬於此訂單/合併群組最新一批的 batchId
   function isLatestBatch(d){
-    // 合併派工：用 mergedOrderIds 的第一筆訂單找最新 batch
+    // 找出與此派工記錄「同一訂單」相關的所有 dispatch
     const refOrderId=d.orderId;
-    const allForOrder=dispatches.filter(x=>x.orderId===refOrderId||(x.mergedOrderIds&&x.mergedOrderIds.includes(refOrderId)));
-    const latestBatchId=allForOrder.reduce((latest,x)=>{
-      if(!latest)return x.batchId||x.id;
-      const latestTime=allForOrder.find(a=>(a.batchId||a.id)===latest)?.createdAt||'';
-      const xTime=x.createdAt||'';
-      return xTime>latestTime?(x.batchId||x.id):latest;
-    },null);
-    return (d.batchId||d.id)===latestBatchId;
+    const allForOrder=dispatches.filter(x=>
+      x.orderId===refOrderId||(x.mergedOrderIds&&x.mergedOrderIds.includes(refOrderId))
+    );
+    // 用 createdAt 找最新的 batchId（取最晚時間的那筆的 batchId）
+    let latestBatchId=null;
+    let latestTime='';
+    for(const x of allForOrder){
+      const t=x.createdAt||'';
+      if(t>latestTime){latestTime=t;latestBatchId=x.batchId||x.id;}
+    }
+    // 同一 batchId 的所有 dispatch 都算最新批次
+    // 若有多筆 createdAt 完全相同，只要屬於最新 batchId 就通過
+    if(!latestBatchId)return true;
+    // 找出最新的 batchId（可能有多筆 createdAt 相同，取出所有 batchId 後比 id 字串）
+    const maxTime=allForOrder.reduce((m,x)=>((x.createdAt||'')>m?(x.createdAt||''):m),'');
+    const latestBatchIds=new Set(
+      allForOrder.filter(x=>(x.createdAt||'')===maxTime).map(x=>x.batchId||x.id)
+    );
+    return latestBatchIds.has(d.batchId||d.id);
   }
   function getMergedRemain(d){
     // 計算合併群組的總剩餘可回報量（其他員工已回報的加總）
