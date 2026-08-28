@@ -606,26 +606,37 @@ function renderWorkerMain(){
     );
     return latestBatchIds.has(d.batchId||d.id);
   }
+  function calcOrderRemain(o,excludeDispatchId){
+    // 計算單一訂單的剩餘可回報量
+    // 先扣訂單層級已記錄的完成量，再扣其他員工這次的回報
+    const orderDone=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    // 其他 dispatch（同一訂單或含此訂單的合併 dispatch）已回報的數量
+    const othersReported=dispatches
+      .filter(x=>x.id!==excludeDispatchId&&(
+        x.orderId===o.id||(x.mergedOrderIds&&x.mergedOrderIds.includes(o.id))
+      ))
+      .reduce((a,x)=>{
+        // 若是合併 dispatch，依 mergedAllocations 找此訂單分到的數量
+        if(x.mergedAllocations){
+          const alloc=x.mergedAllocations.find(a=>a.orderId===o.id);
+          return a+(alloc?alloc.allocated:0);
+        }
+        return a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0);
+      },0);
+    return Math.max(0,o.qty-othersReported);
+  }
   function getMergedRemain(d){
-    // 計算合併群組的總剩餘可回報量（其他員工已回報的加總）
     if(!d.isMerged||!d.mergedOrderIds){
-      // 單筆訂單
       const o=orders.find(x=>x.id===d.orderId);
-      const orderQty=o?o.qty:d.assignQty;
-      const othersReported=dispatches
-        .filter(x=>x.orderId===d.orderId&&x.id!==d.id)
-        .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-      return Math.max(0,orderQty-othersReported);
+      if(!o)return Math.max(0,d.assignQty);
+      return calcOrderRemain(o,d.id);
     }
-    // 合併訂單：各訂單剩餘量加總（其他員工已回報的）
+    // 合併訂單：各訂單剩餘量加總
     let total=0;
     for(const oid of d.mergedOrderIds){
       const o=orders.find(x=>x.id===oid);
       if(!o)continue;
-      const othersReported=dispatches
-        .filter(x=>x.orderId===oid&&x.id!==d.id)
-        .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-      total+=Math.max(0,o.qty-othersReported);
+      total+=calcOrderRemain(o,d.id);
     }
     return total;
   }
@@ -721,18 +732,13 @@ window.validateRpt=function(id){
 
   let avail;
   if(d.isMerged&&d.mergedOrderIds){
-    let total=0;
-    for(const oid of d.mergedOrderIds){
-      const o=orders.find(x=>x.id===oid);if(!o)continue;
-      const othersReported=dispatches.filter(x=>x.orderId===oid&&x.id!==id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-      total+=Math.max(0,o.qty-othersReported);
-    }
-    avail=total;
+    avail=d.mergedOrderIds.reduce((t,oid)=>{
+      const o=orders.find(x=>x.id===oid);
+      return t+(o?calcOrderRemain(o,id):0);
+    },0);
   }else{
     const o=orders.find(x=>x.id===d.orderId);
-    const orderQty=o?o.qty:d.assignQty;
-    const othersReported=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-    avail=Math.max(0,orderQty-othersReported);
+    avail=o?calcOrderRemain(o,id):Math.max(0,d.assignQty);
   }
   const remainEl=document.getElementById('remain-'+id);
   if(remainEl)remainEl.textContent=avail;
