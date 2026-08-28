@@ -185,46 +185,13 @@ db.collection('system').doc('workerPins').onSnapshot(snap=>{
   workerPins=snap.exists?snap.data()||{}:{};
 });
 
-const _migratedIds=new Set(); // 防止重複處理
-async function migrateMergedDispatches(){
-  // 修補舊有合併派工記錄：補上 mergedAllocations 欄位
-  // 條件：isMerged=true，且 mergedAllocations 不存在或是空陣列，且尚未處理過
-  const targets=dispatches.filter(d=>
-    d.isMerged&&d.mergedOrderIds&&d.mergedOrderIds.length>0&&
-    (!d.mergedAllocations||d.mergedAllocations.length===0)&&
-    !_migratedIds.has(d.id)
-  );
-  if(!targets.length)return;
-  for(const d of targets){
-    _migratedIds.add(d.id); // 先標記，避免 onSnapshot 觸發時重複處理
-    // 依收單日期先進先出，用 assignQty（派工數量）分配
-    const mergedOrders=d.mergedOrderIds
-      .map(oid=>orders.find(x=>x.id===oid))
-      .filter(Boolean)
-      .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-    let remain=d.assignQty||0;
-    const allocations=[];
-    for(const o of mergedOrders){
-      const take=Math.min(remain,o.qty||0);
-      allocations.push({orderId:o.id,orderNo:o.orderno||'',allocated:take});
-      remain-=take;
-      if(remain<=0)break;
-    }
-    if(remain>0&&allocations.length>0){
-      allocations[allocations.length-1].allocated+=remain;
-    }
-    try{
-      await db.collection('dispatches').doc(String(d.id)).set({...d,mergedAllocations:allocations});
-    }catch(e){console.warn('migrate failed',d.id,e);_migratedIds.delete(d.id);}
-  }
-}
+
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
 
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');employees=snap.exists?snap.data().list||[]:[];if(!currentWorker)renderSelectScreen();},()=>setSS('err'));
 db.collection('dispatches').onSnapshot(snap=>{
   dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));
-  migrateMergedDispatches();
   if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}
 });
 db.collection('orders').onSnapshot(snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
@@ -645,20 +612,11 @@ function renderWorkerMain(){
   }
   function calcOrderRemain(o,excludeDispatchId){
     // 計算單一訂單的剩餘可回報量
+    // 其他員工對此訂單的已回報量
     const othersReported=dispatches
-      .filter(x=>x.id!==excludeDispatchId&&(
-        x.orderId===o.id||(x.mergedOrderIds&&x.mergedOrderIds.includes(o.id))
-      ))
-      .reduce((a,x)=>{
-        if(x.mergedAllocations&&x.mergedAllocations.length>0){
-          // 合併 dispatch 有分配明細，取此訂單的分配量
-          const alloc=x.mergedAllocations.find(m=>m.orderId===o.id);
-          return a+(alloc?alloc.allocated:0);
-        }
-        // 單筆 dispatch 或無分配明細：用 doneQty+defectQty+shortageQty
-        return a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0);
-      },0);
-    return Math.max(0,o.qty-othersReported);
+      .filter(x=>x.id!==excludeDispatchId&&x.orderId===o.id)
+      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    return Math.max(0, o.qty-othersReported);
   }
   function getMergedRemain(d){
     if(!d.isMerged||!d.mergedOrderIds){
@@ -702,56 +660,210 @@ function renderWorkerMain(){
   if(currentTab!=='pending')return;
   const tasks=document.getElementById('wm-tasks');
   if(!myPending.length){tasks.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單<br>Không có công việc chờ xử lý</div>';return;}
+  // 計算單張訂單剩餘可回報量
+  function getOrderRemain(o,excludeDispatchId){
+    const rep=dispatches.filter(x=>x.id!==excludeDispatchId&&x.orderId===o.id)
+      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    return Math.max(0,o.qty-rep);
+  }
+  // 產生單張訂單輸入區塊
+  function renderSubOrder(dispId,o,suggestDone){
+    const remain=getOrderRemain(o,dispId);
+    return`<div style="background:#f8f9fa;border-radius:8px;padding:10px;margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span style="font-size:12px;font-weight:600;color:#555">${o.orderno||o.id}</span>
+        <span style="font-size:11px;color:#888">總量 ${o.qty} ／ 可回報 <strong style="color:#185FA5">${remain}</strong></span>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div>
+          <div style="font-size:11px;color:#2E7D32;margin-bottom:2px">✓ 完成</div>
+          <input type="number" id="rd-${dispId}-${o.id}" min="0" max="${remain}" value="${suggestDone}" oninput="validateSubRpt('${dispId}','${o.id}')" inputmode="numeric">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#C62828;margin-bottom:2px">✗ 不良</div>
+          <input type="number" id="rf-${dispId}-${o.id}" min="0" max="${remain}" value="0" oninput="validateSubRpt('${dispId}','${o.id}')" inputmode="numeric">
+        </div>
+        <div>
+          <div style="font-size:11px;color:#E65100;margin-bottom:2px">✗ 來料不足</div>
+          <input type="number" id="rs-${dispId}-${o.id}" min="0" max="${remain}" value="0" oninput="validateSubRpt('${dispId}','${o.id}')" inputmode="numeric">
+        </div>
+      </div>
+      <div id="re-${dispId}-${o.id}" class="err-box" style="margin-top:4px"></div>
+    </div>`;
+  }
   tasks.innerHTML=myPending.map(d=>{
-    const remain=getMergedRemain(d);
-    const orderLabel=d.isMerged&&d.mergedOrderIds
-      ? `合併 ${d.mergedOrderIds.length} 張訂單`+(d.mergedOrderNos&&d.mergedOrderNos.length?`（${d.mergedOrderNos.join('、')}）`:'')
-      : (d.orderId||'');
-    return`
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-        <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
-        <span style="font-size:11px;color:#888;text-align:right;max-width:50%">${orderLabel}</span>
-      </div>
-      ${d.isMerged?`<div style="font-size:11px;background:#FFF3E0;color:#E65100;border-radius:6px;padding:4px 8px;margin-bottom:8px">⚡ 合併派工，系統將依先進先出自動分配回報數量至各訂單<br><span style="color:#aaa">Lệnh ghép, hệ thống tự phân bổ theo thứ tự</span></div>`:''}
-      <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
-        <div>總量 / <span style="color:#aaa">Tổng</span>：<strong>${d.assignQty}</strong></div>
-        <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
-        <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5" id="remain-${d.id}">${remain}</strong></div>
-        ${d.note?`<div>備註：${d.note}</div>`:''}
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
-        <div>
-          <div class="bilabel"><span class="zh">✓ 加工完成</span><span class="vi">Hoàn thành</span></div>
-          <input type="number" id="rd-${d.id}" min="0" value="${d.doneQty||0}" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
-          <div style="font-size:11px;color:#2E7D32;margin-top:2px">計入薪資</div>
+    if(d.isMerged&&d.mergedOrderIds&&d.mergedOrderIds.length>1){
+      // 合併派工：grouped 顯示
+      const mergedOrders=d.mergedOrderIds
+        .map(oid=>orders.find(x=>x.id===oid)).filter(Boolean)
+        .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+      const totalRemain=mergedOrders.reduce((a,o)=>a+getOrderRemain(o,d.id),0);
+      return`<div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+          <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
+          <span style="font-size:11px;background:#E3F2FD;color:#185FA5;padding:2px 8px;border-radius:12px">合併 ${mergedOrders.length} 張</span>
         </div>
-        <div>
-          <div class="bilabel"><span class="zh">✗ 不良品</span><span class="vi">Hàng lỗi</span></div>
-          <input type="number" id="rf-${d.id}" min="0" value="${d.defectQty||0}" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
-          <div style="font-size:11px;color:#C62828;margin-top:2px">不計薪資</div>
+        <div style="font-size:13px;color:#666;margin-bottom:10px">
+          單價：<strong>$${d.itemPrice}</strong>／件　總可回報：<strong style="color:#185FA5">${totalRemain}</strong> 件
+          ${d.note?`<div style="margin-top:4px">備註：${d.note}</div>`:''}
         </div>
-        <div>
-          <div class="bilabel"><span class="zh">✗ 來料不足</span><span class="vi">Thiếu NVL</span></div>
-          <input type="number" id="rs-${d.id}" min="0" value="${d.shortageQty||0}" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
-          <div style="font-size:11px;color:#E65100;margin-top:2px">不計薪資</div>
+        <div style="background:#E8F5E9;border-radius:8px;padding:10px;margin-bottom:10px">
+          <div style="font-size:12px;color:#2E7D32;font-weight:600;margin-bottom:6px">輸入完工總數，系統自動依先進先出分配<br><span style="font-weight:400;color:#888;font-size:11px">Nhập tổng hoàn thành, hệ thống tự phân bổ</span></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <input type="number" id="rtotal-input-${d.id}" min="0" max="${totalRemain}" placeholder="完工總數" inputmode="numeric"
+              style="flex:1;font-size:16px;font-weight:600;text-align:center" oninput="autoAllocate('${d.id}')">
+            <span style="font-size:12px;color:#888">/ ${totalRemain}</span>
+          </div>
         </div>
-      </div>
-      <div style="font-size:12px;color:#888;text-align:right;margin-bottom:4px">
-        本次回報總數：<span id="rtotal-${d.id}" style="font-weight:600;color:#185FA5">${(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)}</span>
-      </div>
-      <div id="re-${d.id}" class="err-box"></div>
-      <div style="margin-top:10px">
-        <div class="bilabel" style="margin-bottom:4px"><span class="zh">📝 備註</span><span class="vi">Ghi chú</span></div>
-        <input type="text" id="rn-${d.id}" placeholder="可填寫備註說明 / Nhập ghi chú nếu cần" value="${d.workerNote||''}" style="width:100%;box-sizing:border-box">
-      </div>
-      <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px" onclick="submitRpt('${d.id}')">
-        回報完工 / Báo cáo hoàn thành
-      </button>
-    </div>
-  `}).join('');
+        <div id="sub-orders-${d.id}">${mergedOrders.map(o=>renderSubOrder(d.id,o,0)).join('')}</div>
+        <div id="re-${d.id}" class="err-box"></div>
+        <div style="margin-top:10px">
+          <div class="bilabel" style="margin-bottom:4px"><span class="zh">📝 備註</span><span class="vi">Ghi chú</span></div>
+          <input type="text" id="rn-${d.id}" placeholder="可填寫備註說明 / Nhập ghi chú nếu cần" value="${d.workerNote||''}" style="width:100%;box-sizing:border-box">
+        </div>
+        <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px" onclick="submitMergedRpt('${d.id}')">
+          回報完工 / Báo cáo hoàn thành
+        </button>
+      </div>`;
+    }else{
+      // 單筆派工
+      const o=orders.find(x=>x.id===d.orderId);
+      const remain=o?getOrderRemain(o,d.id):Math.max(0,d.assignQty);
+      return`<div class="card">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
+          <span style="font-size:11px;color:#888">${d.orderNo||''}</span>
+        </div>
+        <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
+          <div>總量 / <span style="color:#aaa">Tổng</span>：<strong>${d.assignQty}</strong></div>
+          <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
+          <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5">${remain}</strong></div>
+          ${d.note?`<div>備註：${d.note}</div>`:''}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
+          <div>
+            <div class="bilabel"><span class="zh">✓ 加工完成</span><span class="vi">Hoàn thành</span></div>
+            <input type="number" id="rd-${d.id}" min="0" value="0" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
+            <div style="font-size:11px;color:#2E7D32;margin-top:2px">計入薪資</div>
+          </div>
+          <div>
+            <div class="bilabel"><span class="zh">✗ 不良品</span><span class="vi">Hàng lỗi</span></div>
+            <input type="number" id="rf-${d.id}" min="0" value="0" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
+            <div style="font-size:11px;color:#C62828;margin-top:2px">不計薪資</div>
+          </div>
+          <div>
+            <div class="bilabel"><span class="zh">✗ 來料不足</span><span class="vi">Thiếu NVL</span></div>
+            <input type="number" id="rs-${d.id}" min="0" value="0" oninput="validateRpt('${d.id}')" inputmode="numeric" style="margin-top:4px">
+            <div style="font-size:11px;color:#E65100;margin-top:2px">不計薪資</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:#888;text-align:right;margin-bottom:4px">
+          本次回報總數：<span id="rtotal-${d.id}" style="font-weight:600;color:#185FA5">0</span>
+        </div>
+        <div id="re-${d.id}" class="err-box"></div>
+        <div style="margin-top:10px">
+          <div class="bilabel" style="margin-bottom:4px"><span class="zh">📝 備註</span><span class="vi">Ghi chú</span></div>
+          <input type="text" id="rn-${d.id}" placeholder="可填寫備註說明 / Nhập ghi chú nếu cần" value="${d.workerNote||''}" style="width:100%;box-sizing:border-box">
+        </div>
+        <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px" onclick="submitRpt('${d.id}')">
+          回報完工 / Báo cáo hoàn thành
+        </button>
+      </div>`;
+    }
+  }).join('');}
+// ── 先進先出自動分配（合併派工用）──
+window.autoAllocate=function(dispId){
+  const d=dispatches.find(x=>x.id===dispId);if(!d||!d.mergedOrderIds)return;
+  const totalInput=parseInt(document.getElementById('rtotal-input-'+dispId).value)||0;
+  const mergedOrders=d.mergedOrderIds
+    .map(oid=>orders.find(x=>x.id===oid)).filter(Boolean)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  let remain=totalInput;
+  for(const o of mergedOrders){
+    const canTake=Math.max(0,o.qty-dispatches.filter(x=>x.id!==dispId&&x.orderId===o.id)
+      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0));
+    const take=Math.min(remain,canTake);
+    const el=document.getElementById('rd-'+dispId+'-'+o.id);
+    if(el)el.value=take;
+    remain-=take;
+  }
+  // 驗證每張訂單
+  d.mergedOrderIds.forEach(oid=>validateSubRpt(dispId,oid));
 }
-
+window.validateSubRpt=function(dispId,orderId){
+  const o=orders.find(x=>x.id===orderId);if(!o)return true;
+  const done=parseInt(document.getElementById('rd-'+dispId+'-'+orderId)?.value)||0;
+  const def=parseInt(document.getElementById('rf-'+dispId+'-'+orderId)?.value)||0;
+  const sho=parseInt(document.getElementById('rs-'+dispId+'-'+orderId)?.value)||0;
+  const myTotal=done+def+sho;
+  const othersRep=dispatches.filter(x=>x.id!==dispId&&x.orderId===orderId)
+    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+  const remain=Math.max(0,o.qty-othersRep);
+  const err=document.getElementById('re-'+dispId+'-'+orderId);
+  if(err){
+    if(myTotal>remain){
+      err.style.display='block';
+      err.textContent=`超過可回報量 ${remain} / Vượt quá ${remain}`;
+      return false;
+    }
+    err.style.display='none';
+  }
+  return true;
+}
+// ── 合併派工回報 ──
+const _submittingMerged=new Set();
+window.submitMergedRpt=async function(dispId){
+  if(_submittingMerged.has(dispId))return;
+  const d=dispatches.find(x=>x.id===dispId);if(!d||!d.mergedOrderIds)return;
+  const mergedOrders=d.mergedOrderIds
+    .map(oid=>orders.find(x=>x.id===oid)).filter(Boolean)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  // 驗證所有子訂單
+  let valid=true;
+  for(const o of mergedOrders){
+    if(!validateSubRpt(dispId,o.id))valid=false;
+  }
+  if(!valid)return;
+  // 收集各訂單回報數量
+  const subReports=mergedOrders.map(o=>({
+    o,
+    done:parseInt(document.getElementById('rd-'+dispId+'-'+o.id)?.value)||0,
+    def:parseInt(document.getElementById('rf-'+dispId+'-'+o.id)?.value)||0,
+    sho:parseInt(document.getElementById('rs-'+dispId+'-'+o.id)?.value)||0,
+  }));
+  const totalDone=subReports.reduce((a,r)=>a+r.done,0);
+  const workerNote=(document.getElementById('rn-'+dispId)||{}).value||'';
+  _submittingMerged.add(dispId);
+  setSS('syncing');
+  try{
+    // 更新各張訂單的 done（各自獨立）
+    for(const {o,done,def,sho} of subReports){
+      const othersRep=dispatches.filter(x=>x.id!==dispId&&x.orderId===o.id)
+        .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+      const newDone=Math.min(o.qty, othersRep+done);
+      const newDefect=dispatches.filter(x=>x.id!==dispId&&x.orderId===o.id)
+        .reduce((a,x)=>a+(x.defectQty||0),0)+def;
+      const newShortage=dispatches.filter(x=>x.id!==dispId&&x.orderId===o.id)
+        .reduce((a,x)=>a+(x.shortageQty||0),0)+sho;
+      await db.collection('orders').doc(o.id).update({
+        done:newDone, defect:newDefect, shortage:newShortage
+      });
+    }
+    // 儲存 dispatch 記錄（doneQty 存總完工數）
+    const updated={...d,
+      doneQty:totalDone,
+      defectQty:subReports.reduce((a,r)=>a+r.def,0),
+      shortageQty:subReports.reduce((a,r)=>a+r.sho,0),
+      workerNote,
+      subReports:subReports.map(({o,done,def,sho})=>({orderId:o.id,orderNo:o.orderno||'',done,def,sho})),
+      status:'回報中',lastReportAt:new Date().toISOString()
+    };
+    await db.collection('dispatches').doc(String(dispId)).set(updated);
+    setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
+  }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
+  finally{_submittingMerged.delete(dispId);}
+}
+// ── 單筆派工回報 ──
 window.validateRpt=function(id){
   const d=dispatches.find(x=>x.id===id);if(!d)return true;
   const done=parseInt(document.getElementById('rd-'+id).value)||0;
@@ -761,19 +873,8 @@ window.validateRpt=function(id){
   const err=document.getElementById('re-'+id);
   const totalEl=document.getElementById('rtotal-'+id);
   if(totalEl)totalEl.textContent=myTotal;
-
-  let avail;
-  if(d.isMerged&&d.mergedOrderIds){
-    avail=d.mergedOrderIds.reduce((t,oid)=>{
-      const o=orders.find(x=>x.id===oid);
-      return t+(o?calcOrderRemain(o,id):0);
-    },0);
-  }else{
-    const o=orders.find(x=>x.id===d.orderId);
-    avail=o?calcOrderRemain(o,id):Math.max(0,d.assignQty);
-  }
-  const remainEl=document.getElementById('remain-'+id);
-  if(remainEl)remainEl.textContent=avail;
+  const o=orders.find(x=>x.id===d.orderId);
+  const avail=o?getOrderRemain(o,id):Math.max(0,d.assignQty);
   if(myTotal>avail){
     err.style.display='block';
     err.textContent=`本次回報數量(${myTotal})超過可回報數量(${avail}) / Vượt quá giới hạn (${avail})`;
@@ -781,7 +882,6 @@ window.validateRpt=function(id){
   }
   err.style.display='none';return true;
 }
-
 const _submitting=new Set();
 window.submitRpt=async function(id){
   if(_submitting.has(id))return;
@@ -793,64 +893,19 @@ window.submitRpt=async function(id){
   const sho=parseInt(document.getElementById('rs-'+id).value)||0;
   const workerNote=(document.getElementById('rn-'+id)||{}).value||'';
   const myTotal=done+def+sho;
-
   setSS('syncing');
   try{
-    if(d.isMerged&&d.mergedOrderIds){
-      // ── 先進先出分配 ──
-      const mergedOrders=d.mergedOrderIds
-        .map(oid=>orders.find(x=>x.id===oid))
-        .filter(Boolean)
-        .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-      let remainToAllocate=myTotal;
-      const allocations=[];
-      for(const o of mergedOrders){
-        // 用 calcOrderRemain 正確計算剩餘（含其他合併派工的分配量）
-        const canTake=calcOrderRemain(o,id);
-        const take=Math.min(remainToAllocate,canTake);
-        allocations.push({o,take});
-        remainToAllocate-=take;
-        if(remainToAllocate<=0)break;
-      }
-      // 先儲存 dispatch 記錄（含本次分配明細）
-      const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
-        workerNote,
-        mergedAllocations:allocations.map(({o,take})=>({orderId:o.id,orderNo:o.orderno||'',allocated:take})),
-        status:'回報中',lastReportAt:new Date().toISOString()};
-      await db.collection('dispatches').doc(String(id)).set(updated);
-      // 再用包含本次回報的最新 dispatches 重算各訂單 done
-      const latestDispatches=[...dispatches.filter(x=>x.id!==id),updated];
-      for(const {o,take} of allocations){
-        const newDone=latestDispatches
-          .filter(x=>x.orderId===o.id||(x.mergedOrderIds&&x.mergedOrderIds.includes(o.id)))
-          .reduce((a,x)=>{
-            if(x.mergedAllocations&&x.mergedAllocations.length>0){
-              const al=x.mergedAllocations.find(m=>m.orderId===o.id);
-              return a+(al?al.allocated:0);
-            }
-            return a+(x.doneQty||0);
-          },0);
-        await db.collection('orders').doc(o.id).set({...o,done:Math.min(o.qty,newDone)});
-      }
-    }else{
-      // 單筆訂單（原有邏輯）
-      const o=orders.find(x=>x.id===d.orderId);
-      const orderQty=o?o.qty:d.assignQty;
-      const othersReported=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-      if(myTotal+othersReported>orderQty)
-        return alert(`回報後總數(${myTotal+othersReported})會超過訂單數量(${orderQty})，請修正`);
-      const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
-        workerNote,
-        status:myTotal>=d.assignQty?'已完成':'回報中',
-        lastReportAt:new Date().toISOString()};
-      await db.collection('dispatches').doc(String(id)).set(updated);
-      if(o){
-        const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
-        await db.collection('orders').doc(o.id).set({...o,
-          done:allDisp.reduce((a,x)=>a+(x.doneQty||0),0),
-          defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
-          shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)});
-      }
+    const o=orders.find(x=>x.id===d.orderId);
+    const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
+      workerNote,status:'回報中',lastReportAt:new Date().toISOString()};
+    await db.collection('dispatches').doc(String(id)).set(updated);
+    if(o){
+      const allDisp=dispatches.map(x=>x.id===id?updated:x).filter(x=>x.orderId===d.orderId);
+      await db.collection('orders').doc(o.id).update({
+        done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
+        defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
+        shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
+      });
     }
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
