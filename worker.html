@@ -761,7 +761,7 @@ function renderWorkerMain(){
           }
           return result;
         }
-        const groupId=`grp-${first.batchId}-${(first.groupName||first.orderName).replace(/[^a-zA-Z0-9]/g,'')}`;
+        const groupId=`grp-${first.batchId}`;
         const subRows=group.map(d=>{
           const o=orders.find(x=>x.id===d.orderId);
           const remain=o?getOrderRemain(o,d.id):0;
