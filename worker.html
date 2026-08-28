@@ -809,28 +809,26 @@ window.submitRpt=async function(id){
         remainToAllocate-=take;
         if(remainToAllocate<=0)break;
       }
-      // 更新各訂單的 done 欄位：用「其他所有 dispatch 的累計」加上本次分配
-      for(const {o,take} of allocations){
-        // 其他 dispatch 對此訂單的累計已分配量
-        const othersDone=dispatches.filter(x=>x.id!==id&&(
-          x.orderId===o.id||(x.mergedOrderIds&&x.mergedOrderIds.includes(o.id))
-        )).reduce((a,x)=>{
-          if(x.mergedAllocations&&x.mergedAllocations.length>0){
-            const al=x.mergedAllocations.find(m=>m.orderId===o.id);
-            return a+(al?al.allocated:0);
-          }
-          return a+(x.doneQty||0);
-        },0);
-        await db.collection('orders').doc(o.id).update({
-          done:Math.min(o.qty,othersDone+take)
-        });
-      }
-      // 儲存 dispatch 記錄，帶上分配明細
+      // 先儲存 dispatch 記錄（含本次分配明細）
       const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
         workerNote,
         mergedAllocations:allocations.map(({o,take})=>({orderId:o.id,orderNo:o.orderno||'',allocated:take})),
         status:'回報中',lastReportAt:new Date().toISOString()};
       await db.collection('dispatches').doc(String(id)).set(updated);
+      // 再用包含本次回報的最新 dispatches 重算各訂單 done
+      const latestDispatches=[...dispatches.filter(x=>x.id!==id),updated];
+      for(const {o,take} of allocations){
+        const newDone=latestDispatches
+          .filter(x=>x.orderId===o.id||(x.mergedOrderIds&&x.mergedOrderIds.includes(o.id)))
+          .reduce((a,x)=>{
+            if(x.mergedAllocations&&x.mergedAllocations.length>0){
+              const al=x.mergedAllocations.find(m=>m.orderId===o.id);
+              return a+(al?al.allocated:0);
+            }
+            return a+(x.doneQty||0);
+          },0);
+        await db.collection('orders').doc(o.id).set({...o,done:Math.min(o.qty,newDone)});
+      }
     }else{
       // 單筆訂單（原有邏輯）
       const o=orders.find(x=>x.id===d.orderId);
