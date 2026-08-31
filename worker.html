@@ -747,7 +747,9 @@ function renderWorkerMain(){
           const sorted=[...group].sort((a,b)=>{
             const oa=orders.find(x=>x.id===a.orderId);
             const ob=orders.find(x=>x.id===b.orderId);
-            return (oa?.date||'').localeCompare(ob?.date||'');
+            const dateDiff=(oa?.date||'').localeCompare(ob?.date||'');
+            if(dateDiff!==0)return dateDiff;
+            return (oa?.createdAt||'').localeCompare(ob?.createdAt||'');
           });
           let rem=totalInput;
           const result={};
@@ -829,7 +831,9 @@ window.autoAllocateGroup=function(groupId, dispIds){
     .sort((a,b)=>{
       const oa=orders.find(x=>x.id===a.orderId);
       const ob=orders.find(x=>x.id===b.orderId);
-      return (oa?.date||'').localeCompare(ob?.date||'');
+      const dateDiff=(oa?.date||'').localeCompare(ob?.date||'');
+      if(dateDiff!==0)return dateDiff;
+      return (oa?.createdAt||'').localeCompare(ob?.createdAt||'');
     });
   let remain=totalInput;
   for(const d of sortedDisps){
