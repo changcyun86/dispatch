@@ -859,24 +859,34 @@ window.submitGroupRpt=async function(dispIds,groupId){
   _submittingGroup.add(key);
   const workerNote=(document.getElementById('rn-grp-'+groupId)||{}).value||'';
   setSS('syncing');
+  // 先收集所有輸入值（讀取時 DOM 確定存在）
+  const reports=[];
+  for(const id of dispIds){
+    const d=dispatches.find(x=>x.id===id);if(!d)continue;
+    reports.push({
+      d,
+      done:parseInt(document.getElementById('rd-'+id)?.value)||0,
+      def:parseInt(document.getElementById('rf-'+id)?.value)||0,
+      sho:parseInt(document.getElementById('rs-'+id)?.value)||0,
+    });
+  }
   try{
-    for(const id of dispIds){
-      const d=dispatches.find(x=>x.id===id);if(!d)continue;
-      const done=parseInt(document.getElementById('rd-'+id).value)||0;
-      const def=parseInt(document.getElementById('rf-'+id).value)||0;
-      const sho=parseInt(document.getElementById('rs-'+id).value)||0;
+    for(const {d,done,def,sho} of reports){
       const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
         workerNote,status:done+def+sho>0?'回報中':'待完成',
         lastReportAt:new Date().toISOString()};
-      await db.collection('dispatches').doc(String(id)).set(updated);
-      // 更新訂單 done
+      await db.collection('dispatches').doc(String(d.id)).set(updated);
+      // 更新訂單 done：用本次收集的 reports 加上其他員工的 dispatches
       const o=orders.find(x=>x.id===d.orderId);
       if(o){
-        const allDisp=[...dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId),updated];
+        // 同訂單其他員工的 dispatch（不在本次 reports 裡的）
+        const reportIds=new Set(reports.map(r=>r.d.id));
+        const otherDisp=dispatches.filter(x=>!reportIds.has(x.id)&&x.orderId===d.orderId);
+        const newDone=Math.min(o.qty,otherDisp.reduce((a,x)=>a+(x.doneQty||0),0)+done);
+        const newDefect=otherDisp.reduce((a,x)=>a+(x.defectQty||0),0)+def;
+        const newShortage=otherDisp.reduce((a,x)=>a+(x.shortageQty||0),0)+sho;
         await db.collection('orders').doc(o.id).update({
-          done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
-          defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
-          shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
+          done:newDone,defect:newDefect,shortage:newShortage
         });
       }
     }
