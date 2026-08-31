@@ -105,6 +105,11 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
       <button class="btn btn-sm" onclick="logoutWorker()" style="font-size:11px;padding:3px 8px;color:#888">登出</button>
     </div>
   </div>
+  <!-- 未打卡紅色橫幅 -->
+  <div id="punch-reminder" style="display:none;background:#C62828;color:#fff;padding:16px;text-align:center;font-size:16px;font-weight:600;letter-spacing:0.03em;position:sticky;top:48px;z-index:99;box-shadow:0 2px 8px rgba(198,40,40,0.4)">
+    ⚠️ 你今天還沒打卡！請記得打卡<br>
+    <span style="font-size:13px;font-weight:400;opacity:0.9">Bạn chưa chấm công hôm nay! Vui lòng chấm công</span>
+  </div>
   <div class="page">
     <div class="grid3" id="wm-stats"></div>
 
@@ -368,7 +373,14 @@ function renderCheckinStatus(){
   }else{
     box.className='checkin-status out';box.style.background='';box.style.borderColor='';
     box.innerHTML=`<div style="font-size:13px;color:#888">今日尚未上班 / Chưa chấm công hôm nay</div>`;
+    // 顯示紅色橫幅
+    const banner=document.getElementById('punch-reminder');
+    if(banner)banner.style.display='block';
+    return;
   }
+  // 已打卡：隱藏紅色橫幅
+  const banner=document.getElementById('punch-reminder');
+  if(banner)banner.style.display='none';
 }
 window.doLeave=async function(){
   if(!currentWorker)return;
