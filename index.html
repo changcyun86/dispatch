@@ -677,9 +677,58 @@ function renderOrders(){
       <td class="col-num" style="color:#C62828">${o.defect||0}</td><td class="col-num" style="color:#E65100">${o.shortage||0}</td>
       <td><span class="badge ${sc[st]}">${st}</span></td>
       <td style="min-width:70px">${pct}%<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div></td>
-      <td><button class="btn btn-sm btn-danger" onclick="delOrder('${o.id}')">🗑</button></td></tr>`;
+      <td style="display:flex;gap:4px">
+        <button class="btn btn-sm" onclick="openOrderDetail('${o.id}')" title="訂單詳情">📋</button>
+        <button class="btn btn-sm btn-danger" onclick="delOrder('${o.id}')">🗑</button>
+      </td></tr>`;
   }).join('');
   updateOrderSelUI();
+}
+window.openOrderDetail=function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  const relatedDisp=window.DB.dispatches.filter(d=>d.orderId===orderId)
+    .sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+  const pct=o.qty>0?Math.min(100,Math.round(reported/o.qty*100)):0;
+  document.getElementById('modal-title-txt').textContent=`訂單詳情`;
+  document.getElementById('modal-content').innerHTML=`
+    <div style="font-size:13px;display:grid;gap:6px;margin-bottom:14px">
+      <div style="font-size:15px;font-weight:700">${o.name}${o.spec?' <span style="font-weight:400;color:#888">(${o.spec})</span>':''}</div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;color:#666">
+        <span>訂單號：<strong>${o.orderno||'-'}</strong></span>
+        <span>收單日期：<strong>${o.date||'-'}</strong></span>
+        <span>訂單數量：<strong>${o.qty}</strong></span>
+        <span>單價：<strong>$${o.price||0}</strong></span>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap;color:#666">
+        <span>已完工：<strong style="color:#2E7D32">${o.done||0}</strong></span>
+        <span>不良品：<strong style="color:#C62828">${o.defect||0}</strong></span>
+        <span>來料不足：<strong style="color:#E65100">${o.shortage||0}</strong></span>
+        <span>進度：<strong style="color:#185FA5">${pct}%</strong></span>
+      </div>
+    </div>
+    <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:8px;border-bottom:1px solid #f0f0f0;padding-bottom:6px">
+      加工回報明細（共 ${relatedDisp.length} 筆）
+    </div>
+    ${relatedDisp.length?relatedDisp.map(d=>`
+      <div style="padding:8px;background:#fafafa;border-radius:6px;margin-bottom:6px;font-size:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <span style="font-weight:600;font-size:13px">${d.worker}</span>
+          <span class="badge ${d.status==='已完成'?'bd':d.status==='回報中'?'ba':'bp'}" style="font-size:10px">${d.status}</span>
+        </div>
+        <div style="color:#666;display:flex;gap:12px;flex-wrap:wrap">
+          <span>完工：<strong style="color:#2E7D32">${d.doneQty||0}</strong></span>
+          <span>不良：<strong style="color:#C62828">${d.defectQty||0}</strong></span>
+          <span>來料不足：<strong style="color:#E65100">${d.shortageQty||0}</strong></span>
+          <span>指派：${d.assignQty}</span>
+        </div>
+        ${d.lastReportAt?`<div style="color:#aaa;margin-top:3px">回報時間：${(d.lastReportAt||'').slice(0,16).replace('T',' ')}</div>`:''}
+        ${d.workerNote?`<div style="color:#1565C0;margin-top:4px;padding:4px 8px;background:#E3F2FD;border-radius:4px">💬 ${d.workerNote}</div>`:''}
+        ${d.note?`<div style="color:#888;margin-top:3px">派工備註：${d.note}</div>`:''}
+      </div>`).join('')
+    :'<div style="color:#aaa;text-align:center;padding:1rem">尚無派工記錄</div>'}
+  `;
+  document.getElementById('dispatch-modal').style.display='flex';
 }
 window.editOrderNo=async function(orderId, currentNo){
   const newNo=prompt('修改訂單號：', currentNo);
@@ -985,6 +1034,7 @@ function renderDispatchLog(){
           <div>
             <span style="font-weight:600;font-size:13px">${d.worker}</span>
             <span style="color:#888;font-size:11px;margin-left:8px">完 ${d.doneQty||0} ／ 不良 ${d.defectQty||0} ／ 來料不足 ${d.shortageQty||0}</span>
+            ${d.workerNote?`<div style="font-size:11px;color:#1565C0;margin-top:2px">💬 ${d.workerNote}</div>`:''}
           </div>
           <div style="display:flex;gap:4px;align-items:center">
             <button class="btn btn-sm btn-warn" onclick="openAdjust('${d.id}')" style="font-size:11px;padding:3px 8px">調整</button>
@@ -1058,7 +1108,8 @@ window.openDispatchDetail=function(id){
       <div><span style="color:#888">訂單號：</span>${d.orderNo||'-'}</div>
       <div><span style="color:#888">指派數量：</span>${d.assignQty}</div>
       <div><span style="color:#888">完工：</span><span style="color:#2E7D32;font-weight:600">${d.doneQty||0}</span> ／ 不良品：<span style="color:#C62828">${d.defectQty||0}</span> ／ 來料不足：<span style="color:#E65100">${d.shortageQty||0}</span></div>
-      ${d.note?`<div><span style="color:#888">備註：</span>${d.note}</div>`:''}
+      ${d.note?`<div><span style="color:#888">派工備註：</span>${d.note}</div>`:''}
+      ${d.workerNote?`<div><span style="color:#888">員工備註：</span><strong style="color:#1565C0">${d.workerNote}</strong></div>`:''}
       <div><span style="color:#888">派工時間：</span>${(d.createdAt||'').slice(0,16).replace('T',' ')}</div>
       ${d.lastReportAt?`<div><span style="color:#888">最後回報：</span>${(d.lastReportAt||'').slice(0,16).replace('T',' ')}</div>`:''}
     </div>
