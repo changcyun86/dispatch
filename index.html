@@ -234,6 +234,8 @@ textarea{resize:vertical;min-height:70px}
   <div class="section-hdr">
     <strong style="font-size:15px">打卡記錄</strong>
   </div>
+  <!-- 待審核請假申請 -->
+  <div id="leave-approval-section" style="margin-bottom:1rem"></div>
   <!-- 模式切換 -->
   <div style="display:flex;gap:0;background:#fff;border:1px solid #e8e8e8;border-radius:10px;overflow:hidden;margin-bottom:1rem;max-width:320px">
     <button class="tab-btn active" id="ci-tab-date" onclick="setCIMode('date')" style="flex:1;padding:9px;border:none;background:#185FA5;color:#fff;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">依日期查看</button>
@@ -448,7 +450,7 @@ db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB
 db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});
 db.collection('orders').onSnapshot(snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
 db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();});
-db.collection('checkins').onSnapshot(snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();});
+db.collection('checkins').onSnapshot(snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();renderLeaveApproval();});
 
 async function saveOrder(o){setSS('syncing');try{await db.collection('orders').doc(o.id).set(o);setSS('ok');}catch(e){setSS('err');toast('儲存失敗');}}
 async function saveDispatch(d){setSS('syncing');try{await db.collection('dispatches').doc(String(d.id)).set(d);setSS('ok');}catch(e){setSS('err');}}
@@ -1207,6 +1209,54 @@ window.submitAdjust=async function(id){
 window.closeModal=function(){document.querySelectorAll('.modal-overlay').forEach(m=>m.style.display='none');}
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',function(e){if(e.target===this)closeModal();}));
 
+// ── 請假審核 ──
+function renderLeaveApproval(){
+  const el=document.getElementById('leave-approval-section');if(!el)return;
+  const pending=window.DB.checkins.filter(c=>c.leave&&(!c.status||c.status==='待審核'))
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  if(!pending.length){el.innerHTML='';return;}
+  el.innerHTML=`
+    <div class="card" style="border-left:4px solid #E65100">
+      <div style="font-size:14px;font-weight:600;color:#E65100;margin-bottom:10px">⏳ 待審核請假申請（${pending.length} 筆）</div>
+      ${pending.map(c=>`
+        <div style="background:#fafafa;border-radius:8px;padding:10px;margin-bottom:8px;font-size:13px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <div>
+              <span style="font-weight:600">${c.worker}</span>
+              <span style="color:#888;margin-left:8px">${c.date}</span>
+              <span style="background:#FFF3E0;color:#E65100;padding:2px 8px;border-radius:12px;font-size:11px;margin-left:6px">${c.leaveType||'請假'}</span>
+            </div>
+          </div>
+          ${c.leaveNote?`<div style="color:#666;font-size:12px;margin-bottom:6px">備註：${c.leaveNote}</div>`:''}
+          <div style="display:flex;gap:8px;align-items:flex-end">
+            <div style="flex:1">
+              <label style="font-size:11px;color:#888">管理員備註（必填）</label>
+              <input type="text" id="admin-note-${c.date}-${c.worker}" placeholder="核准或拒絕原因..." style="margin-top:2px">
+            </div>
+            <button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32" onclick="reviewLeave('${c.date}','${c.worker}','核准')">✓ 核准</button>
+            <button class="btn btn-sm btn-danger" onclick="reviewLeave('${c.date}','${c.worker}','拒絕')">✗ 拒絕</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+window.reviewLeave=async function(date,worker,decision){
+  const noteEl=document.getElementById(`admin-note-${date}-${worker}`);
+  const adminNote=noteEl?noteEl.value.trim():'';
+  if(!adminNote)return alert('請填寫管理員備註');
+  const id=`CI-${worker}-${date}`;
+  const ci=window.DB.checkins.find(c=>c.worker===worker&&c.date===date);
+  if(!ci)return;
+  setSS('syncing');
+  try{
+    await db.collection('checkins').doc(id).update({
+      status:decision,
+      adminNote,
+      reviewedAt:new Date().toISOString()
+    });
+    setSS('ok');
+    toast(`已${decision}：${worker} ${date} 請假申請`);
+  }catch(e){setSS('err');toast('操作失敗，請重試');}
+}
 // ── 打卡記錄 ──
 let ciMode='date';
 let ciWorkerFrom='',ciWorkerTo='';
@@ -1665,7 +1715,7 @@ window.sw=function(p){
   ['orders','dispatch','checkin','salary','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
   if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();}
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
-  if(p==='checkin'){renderCIWorkers();setCIDateRange('today');}
+  if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
   if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();}
 }
 </script>

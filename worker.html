@@ -130,10 +130,37 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
         </button>
       </div>
       <div style="margin-top:8px">
-        <button class="btn" style="width:100%;background:#F3E5F5;border-color:#CE93D8;color:#6A1B9A;padding:10px" onclick="doLeave()">
+        <button class="btn" style="width:100%;background:#F3E5F5;border-color:#CE93D8;color:#6A1B9A;padding:10px" onclick="openLeavePanel()">
           📋 請假申請 / Xin nghỉ phép
         </button>
       </div>
+      <!-- 請假申請面板 -->
+      <div id="leave-panel" style="display:none;margin-top:10px;background:#FAF5FF;border:1px solid #CE93D8;border-radius:10px;padding:12px">
+        <div style="font-size:13px;font-weight:600;color:#6A1B9A;margin-bottom:10px">📋 請假申請 / Xin nghỉ phép</div>
+        <div style="margin-bottom:8px">
+          <div style="font-size:12px;color:#888;margin-bottom:4px">請假日期 / Ngày nghỉ</div>
+          <input type="date" id="leave-date" style="width:100%;box-sizing:border-box">
+        </div>
+        <div style="margin-bottom:8px">
+          <div style="font-size:12px;color:#888;margin-bottom:4px">假別 / Loại nghỉ</div>
+          <select id="leave-type" style="width:100%;box-sizing:border-box;padding:8px;border:1px solid #e0e0e0;border-radius:8px;font-size:13px">
+            <option value="病假">病假 / Nghỉ ốm</option>
+            <option value="事假">事假 / Nghỉ việc riêng</option>
+            <option value="其他">其他 / Khác</option>
+          </select>
+        </div>
+        <div style="margin-bottom:10px">
+          <div style="font-size:12px;color:#888;margin-bottom:4px">備註 / Ghi chú</div>
+          <input type="text" id="leave-note" placeholder="填寫原因（可不填）/ Lý do (có thể bỏ trống)" style="width:100%;box-sizing:border-box">
+        </div>
+        <div id="leave-err" style="color:#C62828;font-size:12px;margin-bottom:6px;display:none"></div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" style="flex:1" onclick="submitLeave()">送出申請 / Gửi</button>
+          <button class="btn" onclick="document.getElementById('leave-panel').style.display='none'">取消</button>
+        </div>
+      </div>
+      <!-- 請假記錄 -->
+      <div id="leave-records" style="margin-top:8px"></div>
       <div id="checkin-msg" style="font-size:12px;color:#888;margin-top:8px;text-align:center"></div>
     </div>
 
@@ -210,7 +237,7 @@ db.collection('dispatches').onSnapshot(snap=>{
   if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}
 });
 db.collection('orders').onSnapshot(snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
-db.collection('checkins').onSnapshot(snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker)renderCheckinStatus();});
+db.collection('checkins').onSnapshot(snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker){renderCheckinStatus();renderLeaveRecords();}});
 
 function init(){
   if(currentWorker){
@@ -360,7 +387,12 @@ function renderCheckinStatus(){
   if(ci&&ci.leave){
     box.className='checkin-status';
     box.style.background='#F3E5F5';box.style.borderColor='#CE93D8';
-    box.innerHTML=`<div style="font-size:13px;color:#6A1B9A;font-weight:600">📋 今日請假 / Nghỉ phép hôm nay</div><div style="font-size:12px;color:#666;margin-top:4px">假別：${ci.leaveType||'請假'}${ci.leaveNote?' — '+ci.leaveNote:''}</div>`;
+    const leaveStatus=ci.status||'待審核';
+    const statusColor={'待審核':'#E65100','核准':'#2E7D32','拒絕':'#C62828'};
+    box.innerHTML=`<div style="font-size:13px;color:#6A1B9A;font-weight:600">📋 今日請假申請</div>
+      <div style="font-size:12px;color:#666;margin-top:4px">假別：${ci.leaveType||'請假'}${ci.leaveNote?' — '+ci.leaveNote:''}</div>
+      <div style="font-size:12px;font-weight:600;color:${statusColor[leaveStatus]};margin-top:4px">狀態：${leaveStatus}</div>
+      ${ci.adminNote?`<div style="font-size:12px;color:#185FA5;margin-top:3px">管理員備註：${ci.adminNote}</div>`:''}`;
     msg.textContent='';
   }else if(ci&&ci.outTime){
     box.className='checkin-status in';box.style.background='';box.style.borderColor='';
@@ -382,22 +414,76 @@ function renderCheckinStatus(){
   const banner=document.getElementById('punch-reminder');
   if(banner)banner.style.display='none';
 }
-window.doLeave=async function(){
+window.openLeavePanel=function(){
   if(!currentWorker)return;
-  const ci=getTodayCheckin();
-  if(ci&&(ci.inTime||ci.leave))return toast('今日已有打卡或請假記錄 / Hôm nay đã có ghi chép');
-  const leaveTypes=['病假 / Nghỉ ốm','事假 / Nghỉ việc riêng','其他 / Khác'];
-  const typeChoice=prompt(`請選擇假別（輸入數字）/ Chọn loại nghỉ phép:\n1. 病假 / Nghỉ ốm\n2. 事假 / Nghỉ việc riêng\n3. 其他 / Khác`);
-  if(!typeChoice)return;
-  const leaveType=leaveTypes[(parseInt(typeChoice)||1)-1]||leaveTypes[2];
-  const leaveNote=prompt('備註說明（可不填）/ Ghi chú (có thể bỏ trống):')||'';
+  const panel=document.getElementById('leave-panel');
+  panel.style.display=panel.style.display==='none'?'block':'none';
+  // 預設今天
   const today=new Date().toISOString().slice(0,10);
+  document.getElementById('leave-date').value=today;
+  document.getElementById('leave-note').value='';
+  document.getElementById('leave-err').style.display='none';
+  renderLeaveRecords();
+}
+window.submitLeave=async function(){
+  if(!currentWorker)return;
+  const date=document.getElementById('leave-date').value;
+  const leaveType=document.getElementById('leave-type').value;
+  const leaveNote=document.getElementById('leave-note').value.trim();
+  const errEl=document.getElementById('leave-err');
+  if(!date){errEl.style.display='block';errEl.textContent='請選擇請假日期';return;}
+  // 若選的是今天，檢查是否已打卡
+  const today=new Date().toISOString().slice(0,10);
+  if(date===today){
+    const ci=getTodayCheckin();
+    if(ci&&ci.inTime){errEl.style.display='block';errEl.textContent='今日已打卡，無法申請當日請假';return;}
+  }
+  // 檢查該日是否已有請假申請
+  const existing=checkins.find(c=>c.worker===currentWorker&&c.date===date&&c.leave);
+  if(existing){errEl.style.display='block';errEl.textContent='該日已有請假申請';return;}
+  errEl.style.display='none';
   setSS('syncing');
   try{
-    const id=`CI-${currentWorker}-${today}`;
-    await db.collection('checkins').doc(id).set({worker:currentWorker,date:today,leave:true,leaveType,leaveNote,inTime:null,outTime:null,inLat:null,inLng:null,outLat:null,outLng:null});
-    setSS('ok');toast('請假申請已送出 / Đã gửi yêu cầu nghỉ phép ✓');
+    const id=`CI-${currentWorker}-${date}`;
+    await db.collection('checkins').doc(id).set({
+      worker:currentWorker,date,leave:true,leaveType,leaveNote,
+      status:'待審核',
+      inTime:null,outTime:null,inLat:null,inLng:null,outLat:null,outLng:null,
+      createdAt:new Date().toISOString()
+    });
+    setSS('ok');toast('請假申請已送出，等待管理員審核 / Đã gửi, chờ duyệt ✓');
+    document.getElementById('leave-panel').style.display='none';
+    renderLeaveRecords();
   }catch(e){setSS('err');toast('送出失敗，請重試');}
+}
+function renderLeaveRecords(){
+  const el=document.getElementById('leave-records');if(!el)return;
+  const myLeaves=checkins.filter(c=>c.worker===currentWorker&&c.leave)
+    .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  if(!myLeaves.length){el.innerHTML='';return;}
+  const statusColor={'待審核':'#E65100','核准':'#2E7D32','拒絕':'#C62828'};
+  const statusBg={'待審核':'#FFF3E0','核准':'#E8F5E9','拒絕':'#FFEBEE'};
+  el.innerHTML=`<div style="font-size:12px;font-weight:600;color:#888;margin-bottom:6px">請假記錄 / Lịch sử xin nghỉ</div>`+
+    myLeaves.map(c=>`
+    <div style="background:${statusBg[c.status||'待審核']||'#fafafa'};border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="font-weight:600">${c.date} ${c.leaveType||'請假'}</span>
+        <span style="color:${statusColor[c.status||'待審核']};font-weight:600">${c.status||'待審核'}</span>
+      </div>
+      ${c.leaveNote?`<div style="color:#666">${c.leaveNote}</div>`:''}
+      ${c.adminNote?`<div style="color:#185FA5;margin-top:3px">管理員備註：${c.adminNote}</div>`:''}
+      ${(!c.status||c.status==='待審核')?`<button class="btn btn-sm btn-danger" style="margin-top:6px;font-size:11px" onclick="cancelLeave('${c.date}')">取消申請</button>`:''}
+    </div>`).join('');
+}
+window.cancelLeave=async function(date){
+  if(!confirm('確定取消此請假申請？'))return;
+  const id=`CI-${currentWorker}-${date}`;
+  setSS('syncing');
+  try{
+    await db.collection('checkins').doc(id).delete();
+    setSS('ok');toast('已取消請假申請');
+    renderLeaveRecords();
+  }catch(e){setSS('err');toast('取消失敗，請重試');}
 }
 window.doCheckin=async function(type){
   if(!currentWorker)return;
