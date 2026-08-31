@@ -735,6 +735,7 @@ window.openOrderDetail=function(orderId){
         ${d.lastReportAt?`<div style="color:#aaa;margin-top:3px">回報時間：${toTW(d.lastReportAt)}</div>`:''}
         ${d.workerNote?`<div style="color:#1565C0;margin-top:4px;padding:4px 8px;background:#E3F2FD;border-radius:4px">💬 ${d.workerNote}</div>`:''}
         ${d.note?`<div style="color:#888;margin-top:3px">派工備註：${d.note}</div>`:''}
+        <div style="margin-top:6px"><button class="btn btn-sm btn-warn" onclick="closeModal();openAdjust('${d.id}')" style="font-size:11px;padding:3px 8px">調整</button></div>
       </div>`).join('')
     :'<div style="color:#aaa;text-align:center;padding:1rem">尚無派工記錄</div>'}
   `;
