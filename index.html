@@ -1612,8 +1612,7 @@ window.doFullBackup=async function(){
         c.leave?(c.status||'待審核'):(c.outTime?'已下班':c.inTime?'未下班':'未打卡')
       ].join('	');
     });
-    downloadFile(`打卡記錄-${ciMonth}.tsv`,[ciHeader,...ciRows].join('
-'),'text/tab-separated-values;charset=utf-8');
+    downloadFile(`打卡記錄-${ciMonth}.tsv`,[ciHeader,...ciRows].join('\n'),'text/tab-separated-values;charset=utf-8');
 
     // ── 3. 薪資計算 Excel（TSV）──
     const salMonth=ciMonth;
@@ -1627,8 +1626,7 @@ window.doFullBackup=async function(){
       toTW(d.createdAt,false),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
       d.itemPrice||0,d.doneQty||0,((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)
     ].join('	'));
-    downloadFile(`薪資計算-${salMonth}.tsv`,[salHeader,...salRows].join('
-'),'text/tab-separated-values;charset=utf-8');
+    downloadFile(`薪資計算-${salMonth}.tsv`,[salHeader,...salRows].join('\n'),'text/tab-separated-values;charset=utf-8');
 
     // 記錄備份日期
     localStorage.setItem('lastBackupDate',today);
