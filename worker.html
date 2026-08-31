@@ -588,6 +588,12 @@ window.saveEdit=async function(id){
 }
 
 // ── 工單主畫面 ──
+// 計算單張訂單剩餘可回報量（全域，供多處使用）
+function getOrderRemain(o, excludeDispatchId){
+  const rep=dispatches.filter(x=>x.id!==excludeDispatchId&&x.orderId===o.id)
+    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+  return Math.max(0,o.qty-rep);
+}
 function renderWorkerMain(){
   if(!currentWorker)return;
   const myAll=dispatches.filter(d=>d.worker===currentWorker);
@@ -669,12 +675,6 @@ function renderWorkerMain(){
   const tasks=document.getElementById('wm-tasks');
   if(!myPending.length){tasks.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單<br>Không có công việc chờ xử lý</div>';return;}
   // ── 待辦工單顯示 ──
-  // 計算單張訂單剩餘可回報量（排除自己的 dispatch）
-  function getOrderRemain(o, excludeDispatchId){
-    const rep=dispatches.filter(x=>x.id!==excludeDispatchId&&x.orderId===o.id)
-      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-    return Math.max(0,o.qty-rep);
-  }
 
   // 同 batchId + 同品名 + 同員工的 dispatch 群組化
   function groupPendingByBatch(pendingList){
