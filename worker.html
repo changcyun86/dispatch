@@ -186,6 +186,16 @@ db.collection('system').doc('workerPins').onSnapshot(snap=>{
 });
 
 
+// 台灣時間顯示（UTC+8）
+function toTW(isoStr,showTime=true){
+  if(!isoStr)return'-';
+  const d=new Date(isoStr);
+  if(isNaN(d))return isoStr;
+  const tw=new Date(d.getTime()+8*60*60*1000);
+  const date=tw.toISOString().slice(0,10);
+  const time=tw.toISOString().slice(11,16);
+  return showTime?`${date} ${time}`:date;
+}
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
 
@@ -475,7 +485,7 @@ function renderHistory(){
   if(!currentWorker)return;
   const{from,to}=getPayPeriod(historyOffset);
   document.getElementById('history-period-label').textContent=`${from} ～ ${to}`;
-  const myAll=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{const dt=(d.createdAt||'').slice(0,10);return dt>=from&&dt<=to;}).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  const myAll=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{const dt=toTW(d.createdAt,false);return dt>=from&&dt<=to;}).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
   const el=document.getElementById('history-list');
   if(!myAll.length){el.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">此週期無加工記錄<br>Không có ghi chép trong kỳ này</div>';return;}
   const totalEarn=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
@@ -529,7 +539,7 @@ function renderHistory(){
         </div>
       </div>
       <div style="font-size:12px;color:#888;line-height:1.8">
-        <span style="color:#888">${(d.createdAt||'').slice(0,10)}</span> ·
+        <span style="color:#888">${toTW(d.createdAt,false)}</span> ·
         完工 <span style="color:#2E7D32;font-weight:600">${d.doneQty||0}</span> ／
         不良 <span style="color:#C62828">${d.defectQty||0}</span> ／
         來料不足 <span style="color:#E65100">${d.shortageQty||0}</span>

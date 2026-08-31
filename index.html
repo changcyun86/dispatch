@@ -430,6 +430,16 @@ let orderFilter='all';
 
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
+// 台灣時間顯示（UTC+8）
+function toTW(isoStr,showTime=true){
+  if(!isoStr)return'-';
+  const d=new Date(isoStr);
+  if(isNaN(d))return isoStr;
+  const tw=new Date(d.getTime()+8*60*60*1000);
+  const date=tw.toISOString().slice(0,10);
+  const time=tw.toISOString().slice(11,16);
+  return showTime?`${date} ${time}`:date;
+}
 let _genIdCounter=0;
 function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCounter++)%1000).toString(36).toUpperCase();}
 
@@ -722,7 +732,7 @@ window.openOrderDetail=function(orderId){
           <span>來料不足：<strong style="color:#E65100">${d.shortageQty||0}</strong></span>
           <span>指派：${d.assignQty}</span>
         </div>
-        ${d.lastReportAt?`<div style="color:#aaa;margin-top:3px">回報時間：${(d.lastReportAt||'').slice(0,16).replace('T',' ')}</div>`:''}
+        ${d.lastReportAt?`<div style="color:#aaa;margin-top:3px">回報時間：${toTW(d.lastReportAt)}</div>`:''}
         ${d.workerNote?`<div style="color:#1565C0;margin-top:4px;padding:4px 8px;background:#E3F2FD;border-radius:4px">💬 ${d.workerNote}</div>`:''}
         ${d.note?`<div style="color:#888;margin-top:3px">派工備註：${d.note}</div>`:''}
       </div>`).join('')
@@ -1110,8 +1120,8 @@ window.openDispatchDetail=function(id){
       <div><span style="color:#888">完工：</span><span style="color:#2E7D32;font-weight:600">${d.doneQty||0}</span> ／ 不良品：<span style="color:#C62828">${d.defectQty||0}</span> ／ 來料不足：<span style="color:#E65100">${d.shortageQty||0}</span></div>
       ${d.note?`<div><span style="color:#888">派工備註：</span>${d.note}</div>`:''}
       ${d.workerNote?`<div><span style="color:#888">員工備註：</span><strong style="color:#1565C0">${d.workerNote}</strong></div>`:''}
-      <div><span style="color:#888">派工時間：</span>${(d.createdAt||'').slice(0,16).replace('T',' ')}</div>
-      ${d.lastReportAt?`<div><span style="color:#888">最後回報：</span>${(d.lastReportAt||'').slice(0,16).replace('T',' ')}</div>`:''}
+      <div><span style="color:#888">派工時間：</span>${toTW(d.createdAt)}</div>
+      ${d.lastReportAt?`<div><span style="color:#888">最後回報：</span>${toTW(d.lastReportAt)}</div>`:''}
     </div>
   `;
   document.getElementById('dispatch-modal').style.display='flex';
@@ -1363,7 +1373,7 @@ window.calcSalary=function(){
   // 產生可複製的 TSV 格式（貼到 Excel）
   const tsvHeader='日期\t加工者\t訂單號\t品名\t規格\t加工單價\t完成數量\t金額';
   const tsvRows=detailRows.map(d=>[
-    (d.createdAt||'').slice(0,10),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
+    toTW(d.createdAt,false),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
     d.itemPrice||0,d.doneQty||0,((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)
   ].join('\t'));
   const tsvTotal=`合計\t\t\t\t\t\t${rows.reduce((a,d)=>a+(d.doneQty||0),0)}\t${grand.toFixed(0)}`;
@@ -1408,7 +1418,7 @@ window.calcSalary=function(){
   <div id="sal-detail-tbl" class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="tbl">
     <thead><tr><th>日期</th><th>加工者</th><th>訂單號</th><th>品名</th><th>規格</th><th class="col-num">加工單價</th><th class="col-num">完成數量</th><th class="col-num" style="color:#2E7D32">金額</th></tr></thead>
     <tbody>${detailRows.map(d=>`<tr>
-      <td style="white-space:nowrap">${(d.createdAt||'').slice(0,10)}</td>
+      <td style="white-space:nowrap">${toTW(d.createdAt,false)}</td>
       <td style="font-weight:600">${d.worker}</td>
       <td style="color:#888">${d.orderNo||'-'}</td>
       <td>${d.orderName}</td>
