@@ -717,8 +717,9 @@ window.openOrderDetail=function(orderId){
         <span>進度：<strong style="color:#185FA5">${pct}%</strong></span>
       </div>
     </div>
-    <div style="font-size:12px;font-weight:600;color:#555;margin-bottom:8px;border-bottom:1px solid #f0f0f0;padding-bottom:6px">
-      加工回報明細（共 ${relatedDisp.length} 筆）
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;border-bottom:1px solid #f0f0f0;padding-bottom:6px">
+      <span style="font-size:12px;font-weight:600;color:#555">加工回報明細（共 ${relatedDisp.length} 筆）</span>
+      ${reported<o.qty?`<button class="btn btn-sm btn-danger" onclick="forceCompleteOrder('${o.id}')" style="font-size:11px">強制完成</button>`:''}
     </div>
     ${relatedDisp.length?relatedDisp.map(d=>`
       <div style="padding:8px;background:#fafafa;border-radius:6px;margin-bottom:6px;font-size:12px">
@@ -740,6 +741,13 @@ window.openOrderDetail=function(orderId){
     :'<div style="color:#aaa;text-align:center;padding:1rem">尚無派工記錄</div>'}
   `;
   document.getElementById('dispatch-modal').style.display='flex';
+}
+window.forceCompleteOrder=async function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  if(!confirm(`確定強制完成「${o.name}」？\n將把已加工數量設為訂單總量 ${o.qty}。`))return;
+  await saveOrder({...o,done:o.qty});
+  closeModal();
+  toast(`已強制完成：${o.name}`);
 }
 window.editOrderNo=async function(orderId, currentNo){
   const newNo=prompt('修改訂單號：', currentNo);
