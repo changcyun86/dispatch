@@ -102,6 +102,14 @@ textarea{resize:vertical;min-height:70px}
   <button class="btn btn-sm" onclick="adminLogout()" style="margin-left:8px;font-size:11px;flex-shrink:0">登出</button>
 </div>
 
+<!-- 備份提醒橫幅 -->
+<div id="backup-reminder" style="display:none;background:#E65100;color:#fff;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;top:48px;z-index:99;box-shadow:0 2px 8px rgba(230,81,0,0.3)">
+  <span style="font-size:14px;font-weight:600">💾 今天還沒備份資料，請記得備份！</span>
+  <div style="display:flex;gap:8px;flex-shrink:0">
+    <button class="btn btn-sm" style="background:#fff;color:#E65100;font-weight:600" onclick="doFullBackup()">立即備份</button>
+    <button class="btn btn-sm" style="background:transparent;color:#fff;border-color:rgba(255,255,255,0.5)" onclick="dismissBackupReminder()">稍後</button>
+  </div>
+</div>
 <!-- 訂單管理 -->
 <div id="pg-orders" class="page active">
   <div class="section-hdr">
@@ -396,6 +404,7 @@ const ADMIN_PWD='0423';
 function showAdminApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('main-app').style.display='block';
+  setTimeout(checkBackupReminder,1000);
   const md=document.getElementById('m-date');if(md)md.value=new Date().toISOString().slice(0,10);
 }
 function checkPwd(){
@@ -1542,6 +1551,100 @@ window.editSalaryPrice=async function(dispatchId, orderId, newVal, inputEl){
   // 重新渲染薪資表（更新合計）
   renderSalaryWorkers();
   toast(`單價已更新為 $${price}，同步 ${related.length} 筆派工記錄`);
+}
+// ── 備份系統 ──
+function checkBackupReminder(){
+  const today=new Date().toISOString().slice(0,10);
+  const lastBackup=localStorage.getItem('lastBackupDate');
+  const hour=new Date().getHours();
+  const banner=document.getElementById('backup-reminder');
+  if(banner){
+    // 超過中午12點且今天未備份
+    if(hour>=12&&lastBackup!==today){
+      banner.style.display='flex';
+    }else{
+      banner.style.display='none';
+    }
+  }
+}
+window.dismissBackupReminder=function(){
+  document.getElementById('backup-reminder').style.display='none';
+}
+function downloadFile(filename,content,mimeType){
+  const blob=new Blob([content],{type:mimeType});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url;a.download=filename;
+  document.body.appendChild(a);a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+window.doFullBackup=async function(){
+  const today=new Date().toISOString().slice(0,10);
+  const twNow=toTW(new Date().toISOString(),false);
+  setSS('syncing');
+  try{
+    // ── 1. JSON 完整備份 ──
+    const backupData={
+      exportedAt:new Date().toISOString(),
+      orders:window.DB.orders,
+      dispatches:window.DB.dispatches,
+      checkins:window.DB.checkins,
+    };
+    downloadFile(`backup-${today}.json`,JSON.stringify(backupData,null,2),'application/json');
+
+    // ── 2. 打卡記錄 Excel（TSV）──
+    const ciMonth=today.slice(0,7);
+    const ciList=window.DB.checkins
+      .filter(c=>c.date&&c.date.startsWith(ciMonth))
+      .sort((a,b)=>a.date.localeCompare(b.date));
+    const ciHeader='日期	員工	上班時間	下班時間	工時(h)	假別	備註	狀態';
+    const ciRows=ciList.map(c=>{
+      let hours='';
+      if(c.inTime&&c.outTime){
+        const diff=(new Date('2000-01-01T'+c.outTime)-new Date('2000-01-01T'+c.inTime))/3600000;
+        hours=diff.toFixed(1);
+      }
+      return[
+        c.date,c.worker,c.inTime||'',c.outTime||'',hours,
+        c.leave?(c.leaveType||'請假'):'',
+        c.leaveNote||'',
+        c.leave?(c.status||'待審核'):(c.outTime?'已下班':c.inTime?'未下班':'未打卡')
+      ].join('	');
+    });
+    downloadFile(`打卡記錄-${ciMonth}.tsv`,[ciHeader,...ciRows].join('
+'),'text/tab-separated-values;charset=utf-8');
+
+    // ── 3. 薪資計算 Excel（TSV）──
+    const salMonth=ciMonth;
+    const [salFrom,salTo]=getSalDateRange(salMonth);
+    const salDisps=window.DB.dispatches.filter(d=>{
+      const dt=(d.createdAt||'').slice(0,10);
+      return dt>=salFrom&&dt<=salTo&&(d.doneQty||0)>0;
+    });
+    const salHeader='日期	加工者	訂單號	品名	規格	加工單價	完成數量	金額';
+    const salRows=salDisps.map(d=>[
+      toTW(d.createdAt,false),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
+      d.itemPrice||0,d.doneQty||0,((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)
+    ].join('	'));
+    downloadFile(`薪資計算-${salMonth}.tsv`,[salHeader,...salRows].join('
+'),'text/tab-separated-values;charset=utf-8');
+
+    // 記錄備份日期
+    localStorage.setItem('lastBackupDate',today);
+    document.getElementById('backup-reminder').style.display='none';
+    setSS('ok');
+    toast(`備份完成 ✓ 共下載 3 個檔案：JSON、打卡記錄、薪資計算`);
+  }catch(e){setSS('err');toast('備份失敗，請重試');}
+}
+function getSalDateRange(yearMonth){
+  // 薪資計算範圍（上個月的完整月份）
+  const [y,m]=yearMonth.split('-').map(Number);
+  const prev=new Date(y,m-2,1);
+  const from=prev.toISOString().slice(0,10);
+  const last=new Date(y,m-1,0);
+  const to=last.toISOString().slice(0,10);
+  return[from,to];
 }
 window.copySalaryTSV=function(){
   if(!window._salaryTSV)return;
