@@ -429,6 +429,7 @@ if(sessionStorage.getItem('admin_auth')==='1')showAdminApp();
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 
 
@@ -1570,8 +1571,17 @@ function checkBackupReminder(){
 window.dismissBackupReminder=function(){
   document.getElementById('backup-reminder').style.display='none';
 }
-function downloadFile(filename,content,mimeType){
-  const blob=new Blob([content],{type:mimeType});
+function downloadXlsx(filename,sheets){
+  // sheets = [{name:'工作表名', data:[[row1],[row2],...]}]
+  const wb=XLSX.utils.book_new();
+  for(const s of sheets){
+    const ws=XLSX.utils.aoa_to_sheet(s.data);
+    XLSX.utils.book_append_sheet(wb,ws,s.name);
+  }
+  XLSX.writeFile(wb,filename);
+}
+function downloadJson(filename,obj){
+  const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');
   a.href=url;a.download=filename;
@@ -1581,59 +1591,56 @@ function downloadFile(filename,content,mimeType){
 }
 window.doFullBackup=async function(){
   const today=new Date().toISOString().slice(0,10);
-  const twNow=toTW(new Date().toISOString(),false);
   setSS('syncing');
   try{
     // ── 1. JSON 完整備份 ──
-    const backupData={
+    downloadJson(`backup-${today}.json`,{
       exportedAt:new Date().toISOString(),
       orders:window.DB.orders,
       dispatches:window.DB.dispatches,
       checkins:window.DB.checkins,
-    };
-    downloadFile(`backup-${today}.json`,JSON.stringify(backupData,null,2),'application/json');
+    });
 
-    // ── 2. 打卡記錄 Excel（TSV）──
+    // ── 2. 打卡記錄 xlsx ──
     const ciMonth=today.slice(0,7);
     const ciList=window.DB.checkins
       .filter(c=>c.date&&c.date.startsWith(ciMonth))
       .sort((a,b)=>a.date.localeCompare(b.date));
-    const ciHeader='日期	員工	上班時間	下班時間	工時(h)	假別	備註	狀態';
-    const ciRows=ciList.map(c=>{
+    const ciHeader=['日期','員工','上班時間','下班時間','工時(h)','假別','備註','狀態'];
+    const ciData=ciList.map(c=>{
       let hours='';
       if(c.inTime&&c.outTime){
         const diff=(new Date('2000-01-01T'+c.outTime)-new Date('2000-01-01T'+c.inTime))/3600000;
-        hours=diff.toFixed(1);
+        hours=parseFloat(diff.toFixed(1));
       }
       return[
         c.date,c.worker,c.inTime||'',c.outTime||'',hours,
         c.leave?(c.leaveType||'請假'):'',
         c.leaveNote||'',
         c.leave?(c.status||'待審核'):(c.outTime?'已下班':c.inTime?'未下班':'未打卡')
-      ].join('	');
+      ];
     });
-    downloadFile(`打卡記錄-${ciMonth}.tsv`,[ciHeader,...ciRows].join('\n'),'text/tab-separated-values;charset=utf-8');
+    downloadXlsx(`打卡記錄-${ciMonth}.xlsx`,[{name:'打卡記錄',data:[ciHeader,...ciData]}]);
 
-    // ── 3. 薪資計算 Excel（TSV）──
+    // ── 3. 薪資計算 xlsx ──
     const salMonth=ciMonth;
     const [salFrom,salTo]=getSalDateRange(salMonth);
-    const salDisps=window.DB.dispatches.filter(d=>{
-      const dt=(d.createdAt||'').slice(0,10);
-      return dt>=salFrom&&dt<=salTo&&(d.doneQty||0)>0;
-    });
-    const salHeader='日期	加工者	訂單號	品名	規格	加工單價	完成數量	金額';
-    const salRows=salDisps.map(d=>[
+    const salDisps=window.DB.dispatches
+      .filter(d=>{const dt=(d.createdAt||'').slice(0,10);return dt>=salFrom&&dt<=salTo&&(d.doneQty||0)>0;})
+      .sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+    const salHeader=['日期','加工者','訂單號','品名','規格','加工單價','完成數量','金額'];
+    const salData=salDisps.map(d=>[
       toTW(d.createdAt,false),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
-      d.itemPrice||0,d.doneQty||0,((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)
-    ].join('	'));
-    downloadFile(`薪資計算-${salMonth}.tsv`,[salHeader,...salRows].join('\n'),'text/tab-separated-values;charset=utf-8');
+      d.itemPrice||0,d.doneQty||0,(d.doneQty||0)*(d.itemPrice||0)
+    ]);
+    downloadXlsx(`薪資計算-${salMonth}.xlsx`,[{name:'薪資明細',data:[salHeader,...salData]}]);
 
     // 記錄備份日期
     localStorage.setItem('lastBackupDate',today);
     document.getElementById('backup-reminder').style.display='none';
     setSS('ok');
-    toast(`備份完成 ✓ 共下載 3 個檔案：JSON、打卡記錄、薪資計算`);
-  }catch(e){setSS('err');toast('備份失敗，請重試');}
+    toast('備份完成 ✓ 共下載 3 個檔案：JSON、打卡記錄、薪資計算');
+  }catch(e){console.error(e);setSS('err');toast('備份失敗，請重試：'+e.message);}
 }
 function getSalDateRange(yearMonth){
   // 薪資計算範圍（上個月的完整月份）
