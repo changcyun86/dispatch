@@ -94,6 +94,7 @@ textarea{resize:vertical;min-height:70px}
   <div class="nav-tabs">
     <button class="nav-tab active" onclick="sw('orders')">訂單管理</button>
     <button class="nav-tab" onclick="sw('dispatch')">派工</button>
+    <button class="nav-tab" onclick="sw('daily')">每日記錄</button>
     <button class="nav-tab" onclick="sw('checkin')">打卡記錄</button>
     <button class="nav-tab" onclick="sw('salary')">薪資計算</button>
     <button class="nav-tab" onclick="sw('settings')">設定</button>
@@ -200,6 +201,64 @@ textarea{resize:vertical;min-height:70px}
           <th>狀態</th><th>進度</th><th></th>
         </tr></thead>
         <tbody id="order-tbody"><tr><td colspan="15" style="text-align:center;padding:2rem;color:#aaa">載入中...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- 每日記錄 -->
+<div id="pg-daily" class="page">
+  <div class="section-hdr">
+    <strong style="font-size:15px">每日記錄</strong>
+    <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7" onclick="exportDailyXlsx()"><i class="ti ti-download" style="margin-right:4px"></i>匯出 Excel</button>
+  </div>
+  <!-- 篩選列 -->
+  <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:13px;color:#888">日期</span>
+        <input type="date" id="daily-date" style="font-size:13px" onchange="renderDailyReport()">
+      </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:13px;color:#888">員工</span>
+        <select id="daily-worker" style="font-size:13px" onchange="renderDailyReport()">
+          <option value="">全部</option>
+        </select>
+      </div>
+    </div>
+  </div>
+  <!-- 派工記錄 -->
+  <div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem">
+    <div style="padding:0.75rem 1.25rem;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:600;color:#555;display:flex;align-items:center;gap:8px">
+      📋 派工記錄
+      <span id="daily-dispatch-count" style="font-size:11px;font-weight:400;color:#aaa"></span>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th>員工</th><th>訂單號</th><th>品名</th><th>規格</th>
+          <th class="col-num">派工量</th><th class="col-num">完工</th>
+          <th class="col-num">不良</th><th class="col-num">來料不足</th>
+          <th>狀態</th><th></th>
+        </tr></thead>
+        <tbody id="daily-dispatch-tbody"><tr><td colspan="10" style="text-align:center;padding:2rem;color:#aaa">請選擇日期</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+  <!-- 員工回報摘要 -->
+  <div class="card" style="padding:0;overflow:hidden">
+    <div style="padding:0.75rem 1.25rem;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:600;color:#555;display:flex;align-items:center;gap:8px">
+      👤 員工回報摘要
+      <span id="daily-summary-count" style="font-size:11px;font-weight:400;color:#aaa"></span>
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr>
+          <th>員工</th><th>品名</th><th class="col-num">單價</th>
+          <th class="col-num">完工</th><th class="col-num">不良</th><th class="col-num">來料不足</th>
+          <th class="col-num">薪資小計</th><th>備註</th><th>狀態</th>
+        </tr></thead>
+        <tbody id="daily-summary-tbody"><tr><td colspan="9" style="text-align:center;padding:2rem;color:#aaa">請選擇日期</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -1816,15 +1875,142 @@ window.clearCompleted=async function(){
 window.clearAll=async function(){if(!confirm('確定清除所有訂單與派工記錄？'))return;const oSnap=await db.collection('orders').get();for(const d of oSnap.docs)await d.ref.delete();const dSnap=await db.collection('dispatches').get();for(const d of dSnap.docs)await d.ref.delete();toast('已清除');}
 
 // ── 頁面切換 ──
+// ── 每日記錄 ──
+function initDailyReport(){
+  // 預設今天
+  const today=new Date().toISOString().slice(0,10);
+  const dateEl=document.getElementById('daily-date');
+  if(dateEl&&!dateEl.value)dateEl.value=today;
+  // 填入員工清單
+  const workerSel=document.getElementById('daily-worker');
+  if(workerSel){
+    const workers=[...new Set(window.DB.dispatches.map(d=>d.worker))].sort();
+    workerSel.innerHTML='<option value="">全部</option>'+workers.map(w=>`<option value="${w}">${w}</option>`).join('');
+  }
+  renderDailyReport();
+}
+window.renderDailyReport=function(){
+  const date=document.getElementById('daily-date').value;
+  const worker=document.getElementById('daily-worker').value;
+  if(!date)return;
+
+  // 取得當天派工記錄（依 createdAt 日期台灣時間）
+  let dispatches=window.DB.dispatches.filter(d=>{
+    const tw=toTW(d.createdAt,false);
+    return tw===date;
+  });
+  if(worker)dispatches=dispatches.filter(d=>d.worker===worker);
+  dispatches=dispatches.sort((a,b)=>(a.worker||'').localeCompare(b.worker||'')||(a.orderName||'').localeCompare(b.orderName||''));
+
+  // ── 派工記錄 ──
+  const countEl=document.getElementById('daily-dispatch-count');
+  if(countEl)countEl.textContent=`共 ${dispatches.length} 筆`;
+  const tb=document.getElementById('daily-dispatch-tbody');
+  if(!tb)return;
+  if(!dispatches.length){
+    tb.innerHTML='<tr><td colspan="10" style="text-align:center;padding:2rem;color:#aaa">該日無派工記錄</td></tr>';
+  }else{
+    const scMap={'待完成':'bp','回報中':'ba','已完成':'bd'};
+    tb.innerHTML=dispatches.map(d=>{
+      const reported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+      const isUnreported=reported===0;
+      const bg=isUnreported?'background:#FFF5F5':'';
+      const st=reported===0?'未回報':d.status||'回報中';
+      const sc=reported===0?'br':scMap[d.status]||'ba';
+      return`<tr style="${bg}">
+        <td style="font-weight:600">${d.worker}</td>
+        <td style="color:#888">${d.orderNo||'-'}</td>
+        <td style="font-weight:600">${d.orderName}</td>
+        <td style="color:#888">${d.orderSpec||'-'}</td>
+        <td class="col-num">${d.assignQty||0}</td>
+        <td class="col-num" style="color:#2E7D32;font-weight:600">${d.doneQty||0}</td>
+        <td class="col-num" style="color:#C62828">${d.defectQty||0}</td>
+        <td class="col-num" style="color:#E65100">${d.shortageQty||0}</td>
+        <td><span class="badge ${sc}">${st}</span></td>
+        <td><button class="btn btn-sm btn-warn" onclick="openAdjust('${d.id}')" style="font-size:11px;padding:3px 8px">調整</button></td>
+      </tr>`;
+    }).join('');
+  }
+
+  // ── 員工回報摘要 ──
+  const summaryCount=document.getElementById('daily-summary-count');
+  const tb2=document.getElementById('daily-summary-tbody');
+  if(!tb2)return;
+  // 取得當天有派工的所有員工（不管是否有回報）
+  const rows=dispatches.map(d=>{
+    const reported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+    const isUnreported=reported===0;
+    const salary=(d.doneQty||0)*(d.itemPrice||0);
+    const st=isUnreported?'未回報':d.status||'回報中';
+    const sc=isUnreported?'br':st==='已完成'?'bd':'ba';
+    const bg=isUnreported?'background:#FFF5F5':'';
+    return`<tr style="${bg}">
+      <td style="font-weight:600">${d.worker}</td>
+      <td>${d.orderName}${d.orderSpec?` <span style="color:#aaa;font-size:11px">(${d.orderSpec})</span>`:''}</td>
+      <td class="col-num">$${d.itemPrice||0}</td>
+      <td class="col-num" style="color:#2E7D32;font-weight:600">${d.doneQty||0}</td>
+      <td class="col-num" style="color:#C62828">${d.defectQty||0}</td>
+      <td class="col-num" style="color:#E65100">${d.shortageQty||0}</td>
+      <td class="col-num" style="font-weight:600;color:#1565C0">${isUnreported?'—':'$'+salary.toFixed(0)}</td>
+      <td style="font-size:12px;color:#1565C0">${d.workerNote||'—'}</td>
+      <td><span class="badge ${sc}">${st}</span></td>
+    </tr>`;
+  });
+  // 合計列
+  const totalDone=dispatches.reduce((a,d)=>a+(d.doneQty||0),0);
+  const totalDef=dispatches.reduce((a,d)=>a+(d.defectQty||0),0);
+  const totalSho=dispatches.reduce((a,d)=>a+(d.shortageQty||0),0);
+  const totalSal=dispatches.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+  const totalRow=`<tr style="background:#f5f5f5;font-weight:600">
+    <td colspan="3" style="color:#888">合計</td>
+    <td class="col-num">${totalDone}</td>
+    <td class="col-num">${totalDef}</td>
+    <td class="col-num">${totalSho}</td>
+    <td class="col-num" style="color:#1565C0">$${totalSal.toFixed(0)}</td>
+    <td colspan="2"></td>
+  </tr>`;
+  if(summaryCount)summaryCount.textContent=`共 ${dispatches.length} 筆`;
+  tb2.innerHTML=rows.join('')+totalRow;
+}
+window.exportDailyXlsx=function(){
+  const date=document.getElementById('daily-date').value;
+  if(!date)return alert('請先選擇日期');
+  let dispatches=window.DB.dispatches.filter(d=>toTW(d.createdAt,false)===date)
+    .sort((a,b)=>(a.worker||'').localeCompare(b.worker||''));
+  // 派工記錄工作表
+  const h1=['員工','訂單號','品名','規格','派工量','完工','不良','來料不足','狀態'];
+  const d1=dispatches.map(d=>[
+    d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
+    d.assignQty||0,d.doneQty||0,d.defectQty||0,d.shortageQty||0,
+    (d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)===0?'未回報':d.status||'回報中'
+  ]);
+  // 員工回報摘要工作表
+  const h2=['員工','品名','規格','單價','完工','不良','來料不足','薪資小計','備註','狀態'];
+  const d2=dispatches.map(d=>{
+    const rep=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+    return[
+      d.worker,d.orderName,d.orderSpec||'',d.itemPrice||0,
+      d.doneQty||0,d.defectQty||0,d.shortageQty||0,
+      (d.doneQty||0)*(d.itemPrice||0),
+      d.workerNote||'',rep===0?'未回報':d.status||'回報中'
+    ];
+  });
+  downloadXlsx(`每日記錄-${date}.xlsx`,[
+    {name:'派工記錄',data:[h1,...d1]},
+    {name:'員工回報摘要',data:[h2,...d2]}
+  ]);
+  toast(`已匯出 每日記錄-${date}.xlsx`);
+}
 window.sw=function(p){
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(x=>x.classList.remove('active'));
   document.getElementById('pg-'+p).classList.add('active');
-  ['orders','dispatch','checkin','salary','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
+  ['orders','dispatch','daily','checkin','salary','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
   if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();}
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
   if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();}
+  if(p==='daily'){initDailyReport();}
 }
 </script>
 </body>
