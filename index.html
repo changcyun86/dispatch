@@ -118,7 +118,8 @@ textarea{resize:vertical;min-height:70px}
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <strong style="font-size:15px">訂單列表</strong>
       <div class="filter-bar" style="margin:0">
-        <button class="filter-btn active" onclick="setOrderFilter('all',this)">全部</button>
+        <button class="filter-btn" onclick="setOrderFilter('all',this)">全部</button>
+        <button class="filter-btn active" onclick="setOrderFilter('未完成',this)">未完成</button>
         <button class="filter-btn" onclick="setOrderFilter('待派工',this)">待派工</button>
         <button class="filter-btn" onclick="setOrderFilter('加工中',this)">加工中</button>
         <button class="filter-btn" onclick="setOrderFilter('需補派',this)" style="color:#C62828;border-color:#C62828">需補派</button>
@@ -521,7 +522,7 @@ const app=firebase.initializeApp(firebaseConfig);
 const db=firebase.firestore();
 
 window.DB={employees:[],products:[],orders:[],dispatches:[],checkins:[],shipments:[]};
-let orderFilter='all';
+let orderFilter='未完成';
 
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
@@ -573,7 +574,7 @@ window.closePanel=function(id){document.getElementById(id).style.display='none';
 // ── 訂單 ──
 window.setOrderFilter=function(f,btn){
   orderFilter=f;
-  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('#pg-orders .filter-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   renderOrders();
 }
@@ -736,9 +737,8 @@ function renderOrders(){
     if(dateTo)list=list.filter(o=>(o.date||'')<=dateTo);
     if(orderFilter!=='all'){
       list=list.filter(o=>{
-        const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-        const hasDispatch=window.DB.dispatches.some(d=>d.orderId===o.id);
         const st=getOrderStatus(o);
+        if(orderFilter==='未完成')return st==='待派工'||st==='加工中'||st==='需補派';
         return st===orderFilter;
       });
     }
