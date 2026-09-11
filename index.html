@@ -95,6 +95,7 @@ textarea{resize:vertical;min-height:70px}
     <button class="nav-tab active" onclick="sw('orders')">訂單管理</button>
     <button class="nav-tab" onclick="sw('dispatch')">派工</button>
     <button class="nav-tab" onclick="sw('daily')">每日記錄</button>
+    <button class="nav-tab" onclick="sw('shipping')">出貨管理</button>
     <button class="nav-tab" onclick="sw('checkin')">打卡記錄</button>
     <button class="nav-tab" onclick="sw('salary')">薪資計算</button>
     <button class="nav-tab" onclick="sw('settings')">設定</button>
@@ -294,6 +295,25 @@ textarea{resize:vertical;min-height:70px}
       <div id="dispatch-log" style="font-size:12px"></div>
     </div>
   </div>
+</div>
+
+<!-- 出貨管理 -->
+<div id="pg-shipping" class="page">
+  <div class="section-hdr">
+    <strong style="font-size:15px">出貨管理</strong>
+    <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7" onclick="exportShippingXlsx()">↓ 匯出 Excel</button>
+  </div>
+  <!-- 篩選列 -->
+  <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
+    <div class="filter-bar" style="margin:0">
+      <button class="filter-btn active" onclick="setShipFilter('all',this)">全部</button>
+      <button class="filter-btn" onclick="setShipFilter('待出貨',this)">待出貨</button>
+      <button class="filter-btn" onclick="setShipFilter('部分出貨',this)">部分出貨</button>
+      <button class="filter-btn" onclick="setShipFilter('全數出貨',this)">全數出貨</button>
+    </div>
+  </div>
+  <!-- 品項列表 -->
+  <div id="shipping-list"></div>
 </div>
 
 <!-- 打卡記錄 -->
@@ -500,7 +520,7 @@ const firebaseConfig={apiKey:"AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",authDomai
 const app=firebase.initializeApp(firebaseConfig);
 const db=firebase.firestore();
 
-window.DB={employees:[],products:[],orders:[],dispatches:[],checkins:[]};
+window.DB={employees:[],products:[],orders:[],dispatches:[],checkins:[],shipments:[]};
 let orderFilter='all';
 
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
@@ -523,6 +543,7 @@ db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=sna
 db.collection('orders').onSnapshot(snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
 db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();});
 db.collection('checkins').onSnapshot(snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();renderLeaveApproval();});
+db.collection('shipments').onSnapshot(snap=>{window.DB.shipments=snap.docs.map(d=>({id:d.id,...d.data()}));renderShipping();});
 
 async function saveOrder(o){setSS('syncing');try{await db.collection('orders').doc(o.id).set(o);setSS('ok');}catch(e){setSS('err');toast('儲存失敗');}}
 async function saveDispatch(d){setSS('syncing');try{await db.collection('dispatches').doc(String(d.id)).set(d);setSS('ok');}catch(e){setSS('err');}}
@@ -1893,6 +1914,202 @@ window.clearCompleted=async function(){
 window.clearAll=async function(){if(!confirm('確定清除所有訂單與派工記錄？'))return;const oSnap=await db.collection('orders').get();for(const d of oSnap.docs)await d.ref.delete();const dSnap=await db.collection('dispatches').get();for(const d of dSnap.docs)await d.ref.delete();toast('已清除');}
 
 // ── 頁面切換 ──
+// ── 出貨管理 ──
+let _shipFilter='all';
+window.setShipFilter=function(f,btn){
+  _shipFilter=f;
+  document.querySelectorAll('#pg-shipping .filter-btn').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  renderShipping();
+}
+function getShipGroups(){
+  // 以品名+規格分組訂單
+  const groups={};
+  for(const o of window.DB.orders){
+    const key=`${o.name}||${o.spec||''}`;
+    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',orders:[],shipments:[]};
+    groups[key].orders.push(o);
+  }
+  // 加入出貨記錄
+  for(const s of window.DB.shipments){
+    const key=`${s.orderName}||${s.orderSpec||''}`;
+    if(groups[key])groups[key].shipments.push(s);
+  }
+  return Object.values(groups);
+}
+function getShipStatus(g){
+  const canShip=g.orders.reduce((a,o)=>a+(o.done||0),0);
+  const shipped=g.shipments.reduce((a,s)=>a+(s.qty||0),0);
+  if(shipped===0)return'待出貨';
+  if(shipped>=canShip)return'全數出貨';
+  return'部分出貨';
+}
+const _shipExpanded=new Set();
+function renderShipping(){
+  const el=document.getElementById('shipping-list');if(!el)return;
+  let groups=getShipGroups().filter(g=>g.orders.some(o=>(o.done||0)>0));
+  if(_shipFilter!=='all')groups=groups.filter(g=>getShipStatus(g)===_shipFilter);
+  groups.sort((a,b)=>a.name.localeCompare(b.name));
+  if(!groups.length){el.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">目前無可出貨品項</div>';return;}
+  el.innerHTML=groups.map(g=>{
+    const totalQty=g.orders.reduce((a,o)=>a+o.qty,0);
+    const canShip=g.orders.reduce((a,o)=>a+(o.done||0),0);
+    const shipped=g.shipments.reduce((a,s)=>a+(s.qty||0),0);
+    const pending=canShip-shipped;
+    const st=getShipStatus(g);
+    const sc={'待出貨':'br','部分出貨':'ba','全數出貨':'bd'};
+    const key=`${g.name}||${g.spec}`;
+    const isExpanded=_shipExpanded.has(key);
+    const opacity=st==='全數出貨'?'opacity:0.75;':'';
+    const borderColor=st==='全數出貨'?'#e0e0e0':st==='部分出貨'?'#185FA5':'#e0e0e0';
+    const bgColor=st==='部分出貨'?'#E3F2FD':'#fafafa';
+    // 出貨記錄明細
+    const shipRows=g.shipments.sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(s=>`
+      <tr style="border-top:1px solid #f0f0f0">
+        <td style="padding:6px 8px">${s.date||'-'}</td>
+        <td style="padding:6px 8px;text-align:right;font-weight:500">${s.qty||0}</td>
+        <td style="padding:6px 8px;color:#888;font-size:12px">${(s.allocations||[]).map(a=>a.orderNo||a.orderId).join('、')||'-'}</td>
+        <td style="padding:6px 8px;color:#888;font-size:12px">${s.note||'—'}</td>
+        <td style="padding:6px 8px"><button class="btn btn-sm btn-danger" onclick="deleteShipment('${s.id}')" style="font-size:11px;padding:2px 6px">刪除</button></td>
+      </tr>`).join('');
+    return`<div class="card" style="padding:0;overflow:hidden;margin-bottom:10px;${opacity}border-color:${borderColor}">
+      <div style="background:${bgColor};padding:12px 16px;display:flex;align-items:center;gap:12px;cursor:pointer" onclick="toggleShipGroup('${key}')">
+        <span style="font-size:12px;color:#888">${isExpanded?'▼':'▶'}</span>
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600">${g.name}${g.spec?` <span style="font-size:12px;font-weight:400;color:#888">${g.spec}</span>`:''}</div>
+          <div style="font-size:12px;color:#666;margin-top:3px">
+            總訂單 <strong>${totalQty.toLocaleString()}</strong>　
+            可出貨 <strong style="color:#2E7D32">${canShip.toLocaleString()}</strong>　
+            已出貨 <strong style="color:#185FA5">${shipped.toLocaleString()}</strong>　
+            待出貨 <strong style="color:${pending>0?'#C62828':'#888'}">${pending.toLocaleString()}</strong>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="badge ${sc[st]}">${st}</span>
+          ${st!=='全數出貨'?`<button class="btn btn-sm btn-primary" onclick="event.stopPropagation();openShipModal('${key}')" style="font-size:12px">出貨</button>`:''}
+        </div>
+      </div>
+      ${isExpanded?`<div style="background:#fff;padding:12px 16px;border-top:1px solid #f0f0f0">
+        ${g.shipments.length?`<div style="font-size:12px;font-weight:600;color:#555;margin-bottom:8px">出貨記錄</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="color:#888">
+            <th style="text-align:left;padding:4px 8px;font-weight:500">出貨日期</th>
+            <th style="text-align:right;padding:4px 8px;font-weight:500">數量</th>
+            <th style="text-align:left;padding:4px 8px;font-weight:500">對應訂單</th>
+            <th style="text-align:left;padding:4px 8px;font-weight:500">備註</th>
+            <th></th>
+          </tr></thead>
+          <tbody>${shipRows}</tbody>
+        </table>`:'<div style="color:#aaa;font-size:12px;text-align:center;padding:8px">尚無出貨記錄</div>'}
+      </div>`:''}
+    </div>`;
+  }).join('');
+}
+window.toggleShipGroup=function(key){
+  if(_shipExpanded.has(key))_shipExpanded.delete(key);
+  else _shipExpanded.add(key);
+  renderShipping();
+}
+window.openShipModal=function(key){
+  const groups=getShipGroups();
+  const g=groups.find(x=>`${x.name}||${x.spec}`===key);if(!g)return;
+  const canShip=g.orders.reduce((a,o)=>a+(o.done||0),0);
+  const shipped=g.shipments.reduce((a,s)=>a+(s.qty||0),0);
+  const pending=canShip-shipped;
+  // 先進先出對應訂單（依收單日期）
+  const sortedOrders=g.orders.filter(o=>(o.done||0)>0).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const allocPreview=sortedOrders.map(o=>`${o.orderno||o.id}（剩 ${Math.max(0,(o.done||0)-window.DB.shipments.filter(s=>s.allocations&&s.allocations.some(a=>a.orderId===o.id)).reduce((a,s)=>{const al=s.allocations.find(x=>x.orderId===o.id);return a+(al?al.qty:0);},0))}）`).join('、');
+  const today=new Date().toISOString().slice(0,10);
+  document.getElementById('modal-title-txt').textContent=`出貨 — ${g.name}${g.spec?' ('+g.spec+')':''}`;
+  document.getElementById('modal-content').innerHTML=`
+    <div style="font-size:12px;color:#666;margin-bottom:12px;display:flex;gap:16px;flex-wrap:wrap">
+      <span>可出貨：<strong style="color:#2E7D32">${canShip.toLocaleString()}</strong></span>
+      <span>已出貨：<strong>${shipped.toLocaleString()}</strong></span>
+      <span>待出貨：<strong style="color:#C62828">${pending.toLocaleString()}</strong></span>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div><label>出貨日期</label><input type="date" id="ship-date" value="${today}"></div>
+      <div><label>出貨數量</label><input type="number" id="ship-qty" min="1" placeholder="輸入數量"></div>
+    </div>
+    <div style="margin-bottom:10px"><label>備註（可不填）</label><input type="text" id="ship-note" placeholder="如：第一批、客戶自取..."></div>
+    <div style="font-size:11px;color:#888;background:#f5f5f5;padding:8px;border-radius:6px;margin-bottom:12px">
+      系統將依先進先出對應：${allocPreview||'-'}
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" style="flex:1" onclick="submitShipment('${key}')">確認出貨</button>
+      <button class="btn" onclick="closeModal()">取消</button>
+    </div>`;
+  document.getElementById('dispatch-modal').style.display='flex';
+}
+window.submitShipment=async function(key){
+  const date=document.getElementById('ship-date').value;
+  const qty=parseInt(document.getElementById('ship-qty').value)||0;
+  const note=document.getElementById('ship-note').value.trim();
+  if(!date)return alert('請選擇出貨日期');
+  if(!qty||qty<=0)return alert('請輸入出貨數量');
+  const groups=getShipGroups();
+  const g=groups.find(x=>`${x.name}||${x.spec}`===key);if(!g)return;
+  // 先進先出分配到各訂單
+  const sortedOrders=g.orders.filter(o=>(o.done||0)>0).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  let remain=qty;
+  const allocations=[];
+  for(const o of sortedOrders){
+    const alreadyShipped=window.DB.shipments.filter(s=>s.allocations&&s.allocations.some(a=>a.orderId===o.id))
+      .reduce((a,s)=>{const al=s.allocations.find(x=>x.orderId===o.id);return a+(al?al.qty:0);},0);
+    const canTake=Math.max(0,(o.done||0)-alreadyShipped);
+    const take=Math.min(remain,canTake);
+    if(take>0){allocations.push({orderId:o.id,orderNo:o.orderno||'',qty:take});}
+    remain-=take;
+    if(remain<=0)break;
+  }
+  // 若仍有剩餘（超出可出貨量），記錄在最後一筆
+  if(remain>0&&sortedOrders.length>0){
+    const last=sortedOrders[sortedOrders.length-1];
+    const existing=allocations.find(a=>a.orderId===last.id);
+    if(existing)existing.qty+=remain;
+    else allocations.push({orderId:last.id,orderNo:last.orderno||'',qty:remain});
+  }
+  setSS('syncing');
+  try{
+    await db.collection('shipments').add({
+      orderName:g.name,orderSpec:g.spec,
+      qty,date,note,allocations,
+      createdAt:new Date().toISOString()
+    });
+    setSS('ok');closeModal();
+    toast(`出貨成功：${g.name} × ${qty}`);
+  }catch(e){setSS('err');toast('出貨失敗，請重試');}
+}
+window.deleteShipment=async function(id){
+  if(!confirm('確定刪除此出貨記錄？'))return;
+  setSS('syncing');
+  try{
+    await db.collection('shipments').doc(id).delete();
+    setSS('ok');toast('已刪除出貨記錄');
+  }catch(e){setSS('err');toast('刪除失敗');}
+}
+window.exportShippingXlsx=function(){
+  const groups=getShipGroups().filter(g=>g.orders.some(o=>(o.done||0)>0));
+  const h1=['品名','規格','總訂單量','可出貨','已出貨','待出貨','狀態'];
+  const d1=groups.map(g=>{
+    const totalQty=g.orders.reduce((a,o)=>a+o.qty,0);
+    const canShip=g.orders.reduce((a,o)=>a+(o.done||0),0);
+    const shipped=g.shipments.reduce((a,s)=>a+(s.qty||0),0);
+    return[g.name,g.spec,totalQty,canShip,shipped,canShip-shipped,getShipStatus(g)];
+  });
+  const h2=['品名','規格','出貨日期','出貨數量','對應訂單','備註'];
+  const d2=[];
+  for(const g of groups){
+    for(const s of g.shipments.sort((a,b)=>(a.date||'').localeCompare(b.date||''))){
+      d2.push([g.name,g.spec,s.date,s.qty,(s.allocations||[]).map(a=>a.orderNo||a.orderId).join('、'),s.note||'']);
+    }
+  }
+  downloadXlsx(`出貨管理-${new Date().toISOString().slice(0,10)}.xlsx`,[
+    {name:'出貨彙總',data:[h1,...d1]},
+    {name:'出貨記錄',data:[h2,...d2]}
+  ]);
+  toast('已匯出出貨管理.xlsx');
+}
 // ── 每日記錄 ──
 function initDailyReport(){
   // 預設今天
@@ -2023,12 +2240,13 @@ window.sw=function(p){
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(x=>x.classList.remove('active'));
   document.getElementById('pg-'+p).classList.add('active');
-  ['orders','dispatch','daily','checkin','salary','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
+  ['orders','dispatch','daily','shipping','checkin','salary','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
   if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();}
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
   if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();}
   if(p==='daily'){initDailyReport();}
+  if(p==='shipping'){renderShipping();}
 }
 </script>
 </body>
