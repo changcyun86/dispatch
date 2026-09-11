@@ -352,7 +352,10 @@ textarea{resize:vertical;min-height:70px}
 
 <!-- 薪資 -->
 <div id="pg-salary" class="page">
-  <div class="section-hdr"><strong style="font-size:15px">薪資計算</strong></div>
+  <div class="section-hdr">
+    <strong style="font-size:15px">薪資計算</strong>
+    <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7" onclick="exportSalaryXlsx()"><i class="ti ti-download" style="margin-right:4px"></i>匯出 Excel</button>
+  </div>
   <div class="info-box" style="margin-bottom:1rem">ℹ️ 薪資僅計算<strong>加工完成數量 × 單價</strong>，不良品與來料不足不納入。發薪日為每月10號，統計範圍為<strong>前一個月整月</strong>（例：6/10發薪 → 統計5/1～5/31）。</div>
   <div class="card" style="padding:0.875rem 1.25rem;margin-bottom:1rem">
     <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
@@ -1584,6 +1587,7 @@ window.calcSalary=function(){
 
   // 儲存 TSV 供複製（不含標題列）
   window._salaryTSV=tsvForCopy;
+  window._salaryRows=detailRows;
 }
 window.editSalaryPrice=async function(dispatchId, orderId, newVal, inputEl){
   const price=parseFloat(newVal);
@@ -1709,6 +1713,20 @@ function getSalDateRange(yearMonth){
   const last=new Date(y,m-1,0);
   const to=last.toISOString().slice(0,10);
   return[from,to];
+}
+window.exportSalaryXlsx=function(){
+  if(!window._salaryRows||!window._salaryRows.length)return alert('請先選擇員工及日期範圍');
+  const header=['日期','加工者','訂單號','品名','規格','加工單價','完成數量','金額'];
+  const rows=window._salaryRows.map(d=>[
+    toTW(d.createdAt,false),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
+    d.itemPrice||0,d.doneQty||0,(d.doneQty||0)*(d.itemPrice||0)
+  ]);
+  const worker=document.getElementById('sal-worker')?.value||'全部';
+  const from=document.getElementById('sal-from')?.value||'';
+  const to=document.getElementById('sal-to')?.value||'';
+  const filename=`薪資計算-${worker}-${from}~${to}.xlsx`;
+  downloadXlsx(filename,[{name:'薪資明細',data:[header,...rows]}]);
+  toast(`已匯出 ${filename}`);
 }
 window.copySalaryTSV=function(){
   if(!window._salaryTSV)return;
