@@ -2037,7 +2037,7 @@ window.openShipModal=function(orderId){
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
       <div><label>出貨日期</label><input type="date" id="ship-date" value="${today}"></div>
-      <div><label>出貨數量</label><input type="number" id="ship-qty" min="1" placeholder="輸入數量"></div>
+      <div><label>出貨數量</label><input type="number" id="ship-qty" min="1" value="${info.pending}"></div>
     </div>
     <div style="margin-bottom:14px"><label>備註（可不填）</label><input type="text" id="ship-note" placeholder="如：第一批、客戶自取..."></div>
     <div style="display:flex;gap:8px">
