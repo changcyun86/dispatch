@@ -238,7 +238,7 @@ db.collection('dispatches').onSnapshot(snap=>{
   if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}
 });
 db.collection('orders').onSnapshot(snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
-db.collection('checkins').onSnapshot(snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker){renderCheckinStatus();renderLeaveRecords();}});
+db.collection('checkins').onSnapshot(snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker){renderCheckinStatus();renderLeaveRecords();renderWorkerMain();}});
 
 function init(){
   if(currentWorker){
