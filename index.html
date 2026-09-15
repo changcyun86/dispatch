@@ -1842,8 +1842,45 @@ function renderProducts(){
     <td style="font-weight:600">${hl(p.name)}</td>
     <td style="color:#888">${p.spec||'—'}</td>
     <td class="col-num">$${p.price}</td>
-    <td><button class="btn btn-sm btn-danger" onclick="removeProd(${i})">🗑</button></td>
+    <td style="display:flex;gap:4px">
+      <button class="btn btn-sm btn-warn" onclick="openEditProd(${i})">編輯</button>
+      <button class="btn btn-sm btn-danger" onclick="removeProd(${i})">🗑</button>
+    </td>
   </tr>`).join('');
+}
+window.openEditProd=function(i){
+  const p=window.DB.products[i];if(!p)return;
+  document.getElementById('modal-title-txt').textContent='編輯品名單價';
+  document.getElementById('modal-content').innerHTML=`
+    <div style="margin-bottom:10px">
+      <label>品名</label>
+      <input type="text" id="edit-prod-name" value="${p.name}" style="background:#f5f5f5" readonly>
+    </div>
+    <div style="margin-bottom:10px">
+      <label>規格</label>
+      <input type="text" id="edit-prod-spec" value="${p.spec||''}" style="background:#f5f5f5" readonly>
+    </div>
+    <div style="margin-bottom:14px">
+      <label>加工單價</label>
+      <input type="number" id="edit-prod-price" value="${p.price||0}" min="0" step="0.01">
+    </div>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary" style="flex:1" onclick="saveEditProd(${i})">儲存</button>
+      <button class="btn" onclick="closeModal()">取消</button>
+    </div>`;
+  document.getElementById('dispatch-modal').style.display='flex';
+}
+window.saveEditProd=async function(i){
+  const price=parseFloat(document.getElementById('edit-prod-price').value)||0;
+  if(price<0)return alert('單價不能為負數');
+  const prods=[...window.DB.products];
+  prods[i]={...prods[i],price};
+  setSS('syncing');
+  try{
+    await db.collection('system').doc('products').set({list:prods});
+    setSS('ok');closeModal();
+    toast(`已更新單價：${prods[i].name} → $${price}`);
+  }catch(e){setSS('err');toast('更新失敗，請重試');}
 }
 function updateSysInfo(){['orders','emps','disps','prods'].forEach((k,i)=>{const el=document.getElementById('si-'+k);if(el)el.textContent=[window.DB.orders,window.DB.employees,window.DB.dispatches,window.DB.products][i].length;});}
 window.addEmp=async function(){const n=document.getElementById('new-emp').value.trim();if(!n)return;if(window.DB.employees.includes(n))return alert('員工已存在');window.DB.employees.push(n);document.getElementById('new-emp').value='';await saveEmployees();toast(`已新增員工：${n}`);}
