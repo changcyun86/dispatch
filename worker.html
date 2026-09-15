@@ -105,10 +105,11 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
       <button class="btn btn-sm" onclick="logoutWorker()" style="font-size:11px;padding:3px 8px;color:#888">登出</button>
     </div>
   </div>
-  <!-- 未打卡紅色橫幅 -->
-  <div id="punch-reminder" style="display:none;background:#C62828;color:#fff;padding:16px;text-align:center;font-size:16px;font-weight:600;letter-spacing:0.03em;position:sticky;top:48px;z-index:99;box-shadow:0 2px 8px rgba(198,40,40,0.4)">
-    ⚠️ 你今天還沒打卡！請記得打卡<br>
-    <span style="font-size:13px;font-weight:400;opacity:0.9">Bạn chưa chấm công hôm nay! Vui lòng chấm công</span>
+
+  <!-- 前一天未打下班卡提示 -->
+  <div id="miss-out-banner" style="display:none;background:#E65100;color:#fff;padding:12px 16px;text-align:center;font-size:14px;font-weight:600;position:sticky;top:48px;z-index:99">
+    ⚠️ 昨天沒有下班打卡記錄，請告知管理員<br>
+    <span style="font-size:12px;font-weight:400;opacity:0.9">Hôm qua chưa chấm công ra, vui lòng báo quản lý</span>
   </div>
   <div class="page">
     <div class="grid3" id="wm-stats"></div>
@@ -405,14 +406,8 @@ function renderCheckinStatus(){
   }else{
     box.className='checkin-status out';box.style.background='';box.style.borderColor='';
     box.innerHTML=`<div style="font-size:13px;color:#888">今日尚未上班 / Chưa chấm công hôm nay</div>`;
-    // 顯示紅色橫幅
-    const banner=document.getElementById('punch-reminder');
-    if(banner)banner.style.display='block';
     return;
   }
-  // 已打卡：隱藏紅色橫幅
-  const banner=document.getElementById('punch-reminder');
-  if(banner)banner.style.display='none';
 }
 window.openLeavePanel=function(){
   if(!currentWorker)return;
@@ -581,6 +576,11 @@ window.setHistoryPeriod=function(offset,btn){
 
 function renderHistory(){
   if(!currentWorker)return;
+  if(!hasTodayAccess()){
+    const hist=document.getElementById('wm-history');
+    if(hist)hist.innerHTML=NO_ACCESS_MSG;
+    return;
+  }
   const{from,to}=getPayPeriod(historyOffset);
   document.getElementById('history-period-label').textContent=`${from} ～ ${to}`;
   const myAll=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{const dt=toTW(d.createdAt,false);return dt>=from&&dt<=to;}).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
@@ -695,6 +695,29 @@ window.saveEdit=async function(id){
   }catch(e){setSS('err');toast('儲存失敗，請重試');}
 }
 
+// ── 打卡狀態判斷 ──
+function hasTodayAccess(){
+  // 當天有上班打卡 或 當天請假已核准 → 可看工單
+  const twToday=toTW(new Date().toISOString(),false);
+  const todayCI=checkins.find(c=>c.worker===currentWorker&&c.date===twToday);
+  if(!todayCI)return false;
+  if(todayCI.leave&&todayCI.status==='核准')return true;
+  if(todayCI.inTime)return true;
+  return false;
+}
+function getYesterdayMissingOut(){
+  // 前一天有上班卡但沒有下班卡
+  const twToday=toTW(new Date().toISOString(),false);
+  const d=new Date(new Date().getTime()-24*60*60*1000);
+  const twYesterday=toTW(d.toISOString(),false);
+  const yi=checkins.find(c=>c.worker===currentWorker&&c.date===twYesterday);
+  return yi&&yi.inTime&&!yi.outTime&&!yi.leave;
+}
+const NO_ACCESS_MSG=`<div class="card" style="text-align:center;padding:2.5rem;border:2px solid #C62828">
+  <div style="font-size:3rem;margin-bottom:12px">🔒</div>
+  <div style="font-size:16px;font-weight:600;color:#C62828;margin-bottom:6px">請先打上班卡才能查看工單</div>
+  <div style="font-size:13px;color:#888">Vui lòng chấm công vào trước khi xem công việc</div>
+</div>`;
 // ── 工單主畫面 ──
 // 計算單張訂單剩餘可回報量（全域，供多處使用）
 function getOrderRemain(o, excludeDispatchId){
@@ -704,6 +727,17 @@ function getOrderRemain(o, excludeDispatchId){
 }
 function renderWorkerMain(){
   if(!currentWorker)return;
+  // 下班未打卡提示
+  const missOut=getYesterdayMissingOut();
+  const missOutBanner=document.getElementById('miss-out-banner');
+  if(missOutBanner)missOutBanner.style.display=missOut?'block':'none';
+  // 未打卡：顯示提示，不顯示工單
+  if(!hasTodayAccess()){
+    document.getElementById('wm-stats').innerHTML='';
+    const tasks=document.getElementById('wm-tasks');
+    if(tasks)tasks.innerHTML=NO_ACCESS_MSG;
+    return;
+  }
   const myAll=dispatches.filter(d=>d.worker===currentWorker);
 
   // 待辦邏輯：
