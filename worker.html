@@ -996,6 +996,22 @@ window.autoAllocateGroup=function(groupId, dispIds){
 
 // ── 同品名合併群組批次回報 ──
 const _submittingGroup=new Set();
+async function autoClockOut(){
+  // 回報完工後自動更新下班打卡時間
+  if(!currentWorker)return;
+  const twToday=toTW(new Date().toISOString(),false);
+  const now=new Date();
+  // 台灣時間 HH:MM
+  const twTime=new Date(now.getTime()+8*60*60*1000).toISOString().slice(11,16);
+  const id=`CI-${currentWorker}-${twToday}`;
+  try{
+    const ci=checkins.find(c=>c.worker===currentWorker&&c.date===twToday);
+    if(ci&&ci.inTime){
+      // 有上班卡才自動更新下班時間
+      await db.collection('checkins').doc(id).update({outTime:twTime});
+    }
+  }catch(e){console.warn('autoClockOut failed',e);}
+}
 window.submitGroupRpt=async function(dispIds,groupId){
   const key=dispIds.join(',');
   if(_submittingGroup.has(key))return;
@@ -1038,6 +1054,7 @@ window.submitGroupRpt=async function(dispIds,groupId){
       }
     }
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
+    autoClockOut();
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
   finally{_submittingGroup.delete(key);}
 }
@@ -1090,6 +1107,7 @@ window.submitRpt=async function(id){
       });
     }
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
+    autoClockOut();
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
   finally{_submitting.delete(id);}
 }
