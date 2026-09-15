@@ -953,19 +953,23 @@ function matchOrder(o,kw){
          (o.spec||'').toLowerCase().includes(kw);
 }
 function isOrderAllReportedButIncomplete(o){
-  // 每張訂單各自一筆 dispatch，用 orderId 直接找
   const relatedDisp=window.DB.dispatches.filter(d=>d.orderId===o.id);
   if(!relatedDisp.length)return false;
   // 找最新一批 batchId
   const maxTime=relatedDisp.reduce((m,x)=>((x.createdAt||'')>m?(x.createdAt||''):m),'');
   const latestBatchIds=new Set(relatedDisp.filter(x=>(x.createdAt||'')===maxTime).map(x=>x.batchId||x.id));
   const latestBatch=relatedDisp.filter(d=>latestBatchIds.has(d.batchId||d.id));
-  // 最新一批所有員工都已回報
-  const allReported=latestBatch.every(d=>(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0);
-  if(!allReported)return false;
   // 訂單整體尚未完成
   const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-  return reported<o.qty;
+  if(reported>=o.qty)return false;
+  // 最新批次派工日期（台灣時間）
+  const latestDispatchDate=toTW(maxTime,false);
+  const twToday=toTW(new Date().toISOString(),false);
+  // 昨天或更早的派工，不管是否回報 → 回到待派工（需補派）
+  if(latestDispatchDate<twToday)return true;
+  // 今天的派工：所有員工都已回報且未完成 → 回到待派工
+  const allReported=latestBatch.every(d=>(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0);
+  return allReported;
 }
 function renderDispatchOrders(){
   const el=document.getElementById('d-order-list');if(!el)return;
