@@ -792,7 +792,13 @@ function renderOrders(){
       <td><span style="color:#888;cursor:pointer;text-decoration:underline dotted" title="點擊編輯訂單號" onclick="editOrderNo('${o.id}','${(o.orderno||'').replace(/'/g,"\'")}')">
         ${hl(o.orderno)||'<span style="color:#ccc">點擊輸入</span>'}</span></td>
       <td style="font-weight:600">${hl(o.name)}</td><td style="color:#888">${o.spec||'-'}</td>
-      <td class="col-num">${(o.qty||0).toLocaleString()}</td>
+      <td class="col-num" style="padding:2px 4px">
+        <input type="number" min="1" value="${o.qty||0}"
+          style="width:72px;padding:3px 4px;font-size:13px;text-align:right;border:1px solid #e0e0e0;border-radius:4px;background:#fafafa"
+          onchange="editOrderQty('${o.id}',this.value,this)"
+          onfocus="this.style.borderColor='#185FA5';this.style.background='#fff'"
+          onblur="this.style.borderColor='#e0e0e0';this.style.background='#fafafa'">
+      </td>
       <td class="col-num" style="padding:2px 4px">
         <div style="display:flex;align-items:center;gap:2px">
           <span style="color:#888;font-size:12px">$</span>
@@ -891,6 +897,25 @@ window.editOrderNo=async function(orderId, currentNo){
   }else{
     toast('訂單號已更新');
   }
+}
+window.editOrderQty=async function(orderId,newVal,inputEl){
+  const qty=parseInt(newVal);
+  if(isNaN(qty)||qty<1){inputEl.value=1;return;}
+  const o=window.DB.orders.find(x=>x.id===orderId);
+  if(!o)return;
+  if(qty===(o.qty||0))return;
+  setSS('syncing');
+  try{
+    // 更新訂單數量
+    await saveOrder({...o,qty});
+    // 同步更新所有相關 dispatch 的 assignQty
+    const related=findRelatedDispatches(orderId);
+    for(const d of related){
+      await saveDispatch({...d,assignQty:qty});
+    }
+    toast(`訂單數量已更新為 ${qty}${related.length?'，同步 '+related.length+' 筆派工記錄':''}`);
+  }catch(e){setSS('err');toast('更新失敗，請重試');}
+  setSS('ok');
 }
 window.editOrderPrice=async function(orderId, newVal, inputEl){
   const price=parseFloat(newVal);
@@ -1332,12 +1357,8 @@ window.submitAdjust=async function(id){
     .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
   const remain=o?Math.max(0,o.qty-othersRep):d.assignQty;
   const errEl=document.getElementById('adj-err');
-  if(myTotal>remain){
-    errEl.style.display='block';
-    errEl.textContent=`總回報數量(${myTotal})超過可回報量(${remain})`;
-    return;
-  }
-  errEl.style.display='none';
+  if(errEl)errEl.style.display='none';
+  // 管理員調整不限制上限
   const newEffectiveDate=document.getElementById('adj-effective-date')?.value||d.effectiveDate;
   const newSeqVal=document.getElementById('adj-sequence')?.value;
   const newSequence=newSeqVal?parseInt(newSeqVal):null;
