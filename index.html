@@ -284,6 +284,16 @@ textarea{resize:vertical;min-height:70px}
       <div id="d-order-info" style="font-size:12px;color:#888;margin-top:8px;line-height:1.8;background:#E3F2FD;border:1px solid #90CAF9;border-radius:8px;padding:8px 10px;display:none"></div>
       <label style="margin-top:12px">指派員工（可多選）</label>
       <div id="d-worker-checks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-top:4px;max-height:150px;overflow-y:auto;padding:4px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px">
+        <div>
+          <label>生效日期 <span style="color:#aaa;font-weight:400">（預設今天）</span></label>
+          <input type="date" id="d-effective-date" style="margin-top:4px">
+        </div>
+        <div>
+          <label>工單順序 <span style="color:#aaa;font-weight:400">（選填，不填同時顯示）</span></label>
+          <input type="number" id="d-sequence" min="1" placeholder="如：1、2、3" style="margin-top:4px">
+        </div>
+      </div>
       <label>備註 <span style="color:#aaa;font-weight:400">（選填）</span></label>
       <textarea id="d-note" placeholder="填寫備註說明...（可不填）" style="min-height:60px"></textarea>
       <div style="margin-top:14px"><button class="btn btn-primary btn-sm" onclick="createDispatch()">確認派工</button></div>
@@ -932,6 +942,12 @@ function getOrderStatus(o){
   if(latestDate<today)return'需補派';
   return'加工中';
 }
+// 初始化派工表單預設值
+function initDispatchForm(){
+  const today=new Date().toISOString().slice(0,10);
+  const el=document.getElementById('d-effective-date');
+  if(el&&!el.value)el.value=today;
+}
 window._selectedOrderIds=new Set(); // 複選訂單
 let _dispatchSearchTimer=null;
 window.onDispatchSearch=function(){
@@ -1058,6 +1074,9 @@ window.createDispatch=async function(){
   if(!ids.length)return alert('請勾選至少一筆訂單');
   if(!selectedWorkers.length)return alert('請選擇至少一名員工');
   const note=document.getElementById('d-note').value;
+  const effectiveDate=document.getElementById('d-effective-date').value||new Date().toISOString().slice(0,10);
+  const sequenceVal=document.getElementById('d-sequence').value;
+  const sequence=sequenceVal?parseInt(sequenceVal):null;
   const batchId=genId('B');
   const now=new Date().toISOString();
   // 依品名+規格+單價分組
@@ -1090,12 +1109,15 @@ window.createDispatch=async function(){
           batchId,
           groupName:isSameNameGroup?g.name:'', // 群組品名，供 worker.html grouped 顯示用
           doneQty:0,defectQty:0,shortageQty:0,
-          note,status:'待完成',createdAt:now
+          note,effectiveDate,sequence,status:'待完成',createdAt:now
         });
       }
     }
   }
   document.getElementById('d-note').value='';
+  document.getElementById('d-sequence').value='';
+  const today=new Date().toISOString().slice(0,10);
+  document.getElementById('d-effective-date').value=today;
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
   window._selectedOrderIds=new Set();
   renderDispatchOrders();
@@ -1273,6 +1295,16 @@ window.openAdjust=function(id){
       <strong>${d.worker}</strong> — ${d.orderName}${d.orderSpec?' ('+d.orderSpec+')':''}
       ${o?`<div style="font-size:11px;color:#888;margin-top:4px">訂單總量：${o.qty} ／ 其他員工已回報：${othersRep} ／ <strong style="color:#185FA5">可回報：${remain}</strong></div>`:''}
     </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <div>
+        <label>生效日期</label>
+        <input type="date" id="adj-effective-date" value="${d.effectiveDate||d.createdAt.slice(0,10)}">
+      </div>
+      <div>
+        <label>工單順序 <span style="color:#aaa;font-weight:400">（選填）</span></label>
+        <input type="number" id="adj-sequence" min="1" value="${d.sequence||''}" placeholder="不填同時顯示">
+      </div>
+    </div>
     <label>加工完成數量</label>
     <input type="number" id="adj-done" value="${d.doneQty||0}" min="0" max="${remain}">
     <label>不良品數量</label>
@@ -1304,7 +1336,12 @@ window.submitAdjust=async function(id){
     return;
   }
   errEl.style.display='none';
+  const newEffectiveDate=document.getElementById('adj-effective-date')?.value||d.effectiveDate;
+  const newSeqVal=document.getElementById('adj-sequence')?.value;
+  const newSequence=newSeqVal?parseInt(newSeqVal):null;
   d.doneQty=done;d.defectQty=def;d.shortageQty=sho;
+  d.effectiveDate=newEffectiveDate;
+  d.sequence=newSequence;
   d.status=myTotal>0?'回報中':'待完成';
   await saveDispatch(d);
   if(o){
@@ -2268,7 +2305,7 @@ window.sw=function(p){
   document.querySelectorAll('.nav-tab').forEach(x=>x.classList.remove('active'));
   document.getElementById('pg-'+p).classList.add('active');
   ['orders','dispatch','daily','shipping','checkin','salary','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
-  if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();}
+  if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();initDispatchForm();}
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
   if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();}
