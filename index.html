@@ -214,6 +214,8 @@ textarea{resize:vertical;min-height:70px}
     <strong style="font-size:15px">每日記錄</strong>
     <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7" onclick="exportDailyXlsx()"><i class="ti ti-download" style="margin-right:4px"></i>匯出 Excel</button>
   </div>
+  <!-- 待確認備註提示區 -->
+  <div id="note-alert-section" style="margin-bottom:0.75rem"></div>
   <!-- 篩選列 -->
   <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -566,7 +568,7 @@ function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCou
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB.employees=snap.exists?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},()=>setSS('err'));
 db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});
 db.collection('orders').onSnapshot(snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
-db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();});
+db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();renderNoteAlerts();});
 db.collection('checkins').onSnapshot(snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();renderLeaveApproval();});
 db.collection('shipments').onSnapshot(snap=>{window.DB.shipments=snap.docs.map(d=>({id:d.id,...d.data()}));renderShipping();});
 
@@ -2174,6 +2176,49 @@ window.exportShippingXlsx=function(){
   ]);
   toast('已匯出出貨管理.xlsx');
 }
+// ── 員工備註提示區 ──
+function renderNoteAlerts(){
+  const el=document.getElementById('note-alert-section');if(!el)return;
+  // 找所有有備註且未確認的 dispatch
+  const unconfirmed=window.DB.dispatches.filter(d=>
+    d.workerNote&&d.workerNote.trim()&&!d.noteConfirmed&&
+    ((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0))>0
+  ).sort((a,b)=>(b.lastReportAt||b.createdAt||'').localeCompare(a.lastReportAt||a.createdAt||''));
+  if(!unconfirmed.length){el.innerHTML='';return;}
+  el.innerHTML=`<div class="card" style="border-left:4px solid #E65100;padding:0;overflow:hidden">
+    <div style="padding:10px 16px;background:#FFF3E0;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:14px;font-weight:600;color:#E65100">💬 員工備註待確認（${unconfirmed.length} 筆）</span>
+    </div>
+    ${unconfirmed.map(d=>`
+    <div style="padding:10px 16px;border-top:1px solid #f0f0f0;display:flex;align-items:flex-start;gap:12px">
+      <div style="flex:1">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;flex-wrap:wrap">
+          <span style="font-weight:600;font-size:13px">${d.worker}</span>
+          <span style="color:#888;font-size:12px">${d.orderName}${d.orderSpec?' ('+d.orderSpec+')':''}</span>
+          <span style="color:#aaa;font-size:11px">${toTW(d.lastReportAt||d.createdAt)}</span>
+        </div>
+        <div style="background:#FFF3E0;border-radius:6px;padding:6px 10px;font-size:13px;color:#E65100;font-weight:500">
+          💬 ${d.workerNote}
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:4px">
+          完工 ${d.doneQty||0} ／ 不良 ${d.defectQty||0} ／ 來料不足 ${d.shortageQty||0}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn btn-sm" onclick="openAdjust('${d.id}')" style="font-size:11px">調整</button>
+        <button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32;font-size:11px" onclick="confirmNote('${d.id}')">確認</button>
+      </div>
+    </div>`).join('')}
+  </div>`;
+}
+window.confirmNote=async function(id){
+  const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
+  setSS('syncing');
+  try{
+    await db.collection('dispatches').doc(String(id)).update({noteConfirmed:true});
+    setSS('ok');toast('已確認備註');
+  }catch(e){setSS('err');toast('確認失敗，請重試');}
+}
 // ── 每日記錄 ──
 function initDailyReport(){
   // 預設今天
@@ -2309,7 +2354,7 @@ window.sw=function(p){
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
   if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();}
-  if(p==='daily'){initDailyReport();}
+  if(p==='daily'){initDailyReport();renderNoteAlerts();}
   if(p==='shipping'){renderShipping();}
 }
 </script>
