@@ -585,6 +585,8 @@ function toTW(isoStr,showTime=true){
   const time=tw.toISOString().slice(11,16);
   return showTime?`${date} ${time}`:date;
 }
+// 派工記錄的「歸屬日期」：優先用生效日（預約派工的實際回報日），沒有才退回建立時間換算台灣時間
+function dispWorkDate(d){return d.effectiveDate||toTW(d.createdAt,false);}
 let _genIdCounter=0;
 function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCounter++)%1000).toString(36).toUpperCase();}
 
@@ -1713,7 +1715,7 @@ window.calcSalary=function(){
   if(!from||!to)return alert('請選擇日期範圍');
   const rows=[];
   window.DB.dispatches.forEach(d=>{
-    const dt=d.createdAt?d.createdAt.slice(0,10):'';if(dt<from||dt>to)return;
+    const dt=dispWorkDate(d);if(dt<from||dt>to)return;
     if(filterWorker&&d.worker!==filterWorker)return;
     if(!(d.doneQty>0))return;
     rows.push(d);
@@ -1731,12 +1733,12 @@ window.calcSalary=function(){
   const ws=Object.keys(map),grand=ws.reduce((a,w)=>a+map[w].salary,0);
 
   // 明細：日期 加工者 訂單號 品名 規格 加工單價 完成數量 金額
-  const detailRows=rows.sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+  const detailRows=rows.sort((a,b)=>dispWorkDate(a).localeCompare(dispWorkDate(b))||(a.createdAt||'').localeCompare(b.createdAt||''));
 
   // 產生可複製的 TSV 格式（貼到 Excel）
   const tsvHeader='日期\t加工者\t訂單號\t品名\t規格\t加工單價\t完成數量\t金額';
   const tsvRows=detailRows.map(d=>[
-    toTW(d.createdAt,false),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
+    dispWorkDate(d),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
     d.itemPrice||0,d.doneQty||0,((d.doneQty||0)*(d.itemPrice||0)).toFixed(0)
   ].join('\t'));
   const tsvTotal=`合計\t\t\t\t\t\t${rows.reduce((a,d)=>a+(d.doneQty||0),0)}\t${grand.toFixed(0)}`;
@@ -1781,7 +1783,7 @@ window.calcSalary=function(){
   <div id="sal-detail-tbl" class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="tbl">
     <thead><tr><th>日期</th><th>加工者</th><th>訂單號</th><th>品名</th><th>規格</th><th class="col-num">加工單價</th><th class="col-num">完成數量</th><th class="col-num" style="color:#2E7D32">金額</th></tr></thead>
     <tbody>${detailRows.map(d=>`<tr>
-      <td style="white-space:nowrap">${toTW(d.createdAt,false)}</td>
+      <td style="white-space:nowrap">${dispWorkDate(d)}</td>
       <td style="font-weight:600">${d.worker}</td>
       <td style="color:#888">${d.orderNo||'-'}</td>
       <td>${d.orderName}</td>
@@ -1907,11 +1909,11 @@ window.doFullBackup=async function(){
     const salMonth=ciMonth;
     const [salFrom,salTo]=getSalDateRange(salMonth);
     const salDisps=window.DB.dispatches
-      .filter(d=>{const dt=(d.createdAt||'').slice(0,10);return dt>=salFrom&&dt<=salTo&&(d.doneQty||0)>0;})
-      .sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+      .filter(d=>{const dt=dispWorkDate(d);return dt>=salFrom&&dt<=salTo&&(d.doneQty||0)>0;})
+      .sort((a,b)=>dispWorkDate(a).localeCompare(dispWorkDate(b)));
     const salHeader=['日期','加工者','訂單號','品名','規格','加工單價','完成數量','金額'];
     const salData=salDisps.map(d=>[
-      toTW(d.createdAt,false),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
+      dispWorkDate(d),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
       d.itemPrice||0,d.doneQty||0,(d.doneQty||0)*(d.itemPrice||0)
     ]);
     downloadXlsx(`薪資計算-${salMonth}.xlsx`,[{name:'薪資明細',data:[salHeader,...salData]}]);
@@ -1936,7 +1938,7 @@ window.exportSalaryXlsx=function(){
   if(!window._salaryRows||!window._salaryRows.length)return alert('請先選擇員工及日期範圍');
   const header=['日期','加工者','訂單號','品名','規格','加工單價','完成數量','金額'];
   const rows=window._salaryRows.map(d=>[
-    toTW(d.createdAt,false),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
+    dispWorkDate(d),d.worker,d.orderNo||'',d.orderName,d.orderSpec||'',
     d.itemPrice||0,d.doneQty||0,(d.doneQty||0)*(d.itemPrice||0)
   ]);
   const worker=document.getElementById('sal-worker')?.value||'全部';
@@ -2502,7 +2504,7 @@ window.renderDailyReport=function(){
 
   // 取得當天派工記錄（有 effectiveDate 用 effectiveDate，否則用 createdAt 台灣時間）
   let dispatches=window.DB.dispatches.filter(d=>{
-    const dispDate=d.effectiveDate||toTW(d.createdAt,false);
+    const dispDate=dispWorkDate(d);
     return dispDate===date;
   });
   if(worker)dispatches=dispatches.filter(d=>d.worker===worker);
@@ -2581,7 +2583,7 @@ window.renderDailyReport=function(){
 window.exportDailyXlsx=function(){
   const date=document.getElementById('daily-date').value;
   if(!date)return alert('請先選擇日期');
-  let dispatches=window.DB.dispatches.filter(d=>(d.effectiveDate||toTW(d.createdAt,false))===date)
+  let dispatches=window.DB.dispatches.filter(d=>dispWorkDate(d)===date)
     .sort((a,b)=>(a.worker||'').localeCompare(b.worker||''));
   // 派工記錄工作表
   const h1=['員工','訂單號','品名','規格','派工量','完工','不良','來料不足','狀態'];
