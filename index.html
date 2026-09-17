@@ -216,6 +216,8 @@ textarea{resize:vertical;min-height:70px}
   </div>
   <!-- 待確認備註提示區 -->
   <div id="note-alert-section" style="margin-bottom:0.75rem"></div>
+  <!-- 待確認回報區塊 -->
+  <div id="confirm-report-section" style="margin-bottom:0.75rem"></div>
   <!-- 篩選列 -->
   <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -577,7 +579,7 @@ function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCou
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB.employees=snap.exists?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},()=>setSS('err'));
 db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});
 db.collection('orders').onSnapshot(snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
-db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();renderNoteAlerts();});
+db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();renderNoteAlerts();renderConfirmReports();});
 db.collection('checkins').onSnapshot(snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();renderLeaveApproval();});
 db.collection('shipments').onSnapshot(snap=>{window.DB.shipments=snap.docs.map(d=>({id:d.id,...d.data()}));renderShipping();});
 
@@ -2253,6 +2255,128 @@ window.exportShippingXlsx=function(){
   ]);
   toast('已匯出出貨管理.xlsx');
 }
+// ── 待確認回報 ──
+function renderConfirmReports(){
+  const el=document.getElementById('confirm-report-section');if(!el)return;
+  // 有回報但 adminConfirmed 不是 true 的記錄，或有調整待確認的記錄
+  const pending=window.DB.dispatches.filter(d=>
+    ((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0))>0&&
+    (!d.adminConfirmed||d.adjustStatus==='待確認')
+  ).sort((a,b)=>(b.lastReportAt||b.createdAt||'').localeCompare(a.lastReportAt||a.createdAt||''));
+  if(!pending.length){el.innerHTML='';return;}
+  const isAdjust=d=>d.adjustStatus==='待確認';
+  el.innerHTML=`<div class="card" style="border-left:4px solid #185FA5;padding:0;overflow:hidden">
+    <div style="padding:10px 16px;background:#E3F2FD;display:flex;align-items:center;justify-content:space-between">
+      <span style="font-size:14px;font-weight:600;color:#185FA5">⏳ 待確認回報（${pending.length} 筆）</span>
+      <button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32;font-size:12px" onclick="confirmAllReports()">✓ 全部確認</button>
+    </div>
+    <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:500px">
+      <thead><tr style="background:#f5f5f5;border-bottom:0.5px solid #e0e0e0">
+        <th style="text-align:left;padding:8px 12px;font-weight:500;color:#888">員工</th>
+        <th style="text-align:left;padding:8px 12px;font-weight:500;color:#888">品名</th>
+        <th style="text-align:right;padding:8px 12px;font-weight:500;color:#2E7D32">完工</th>
+        <th style="text-align:right;padding:8px 12px;font-weight:500;color:#888">薪資</th>
+        <th style="text-align:left;padding:8px 12px;font-weight:500;color:#888">類型</th>
+        <th style="padding:8px 12px"></th>
+      </tr></thead>
+      <tbody>
+        ${pending.map(d=>{
+          const adj=isAdjust(d);
+          const doneQty=adj?(d.pendingDoneQty??d.doneQty):d.doneQty;
+          const earn=(doneQty||0)*(d.itemPrice||0);
+          return`<tr style="border-bottom:0.5px solid #f0f0f0;background:${adj?'#F3E5F5':''}">
+            <td style="padding:8px 12px;font-weight:600">${d.worker}</td>
+            <td style="padding:8px 12px">${d.orderName}${d.orderSpec?' ('+d.orderSpec+')':''}</td>
+            <td style="padding:8px 12px;text-align:right;font-weight:600;color:#2E7D32">${doneQty||0}</td>
+            <td style="padding:8px 12px;text-align:right;font-weight:600">$${earn.toFixed(0)}</td>
+            <td style="padding:8px 12px"><span style="padding:2px 8px;border-radius:20px;font-size:11px;background:${adj?'#F3E5F5':'#E3F2FD'};color:${adj?'#6A1B9A':'#185FA5'}">${adj?'調整申請':'首次回報'}</span></td>
+            <td style="padding:8px 12px;display:flex;gap:4px">
+              <button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32;font-size:11px" onclick="confirmReport('${d.id}')">確認</button>
+              <button class="btn btn-sm btn-danger" style="font-size:11px" onclick="rejectReport('${d.id}')">拒絕</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+    </div>
+  </div>`;
+}
+window.confirmReport=async function(id){
+  const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
+  setSS('syncing');
+  try{
+    const isAdj=d.adjustStatus==='待確認';
+    const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null};
+    if(isAdj){
+      // 調整申請確認：把 pending 數量寫入正式欄位
+      updateData.doneQty=d.pendingDoneQty??d.doneQty;
+      updateData.defectQty=d.pendingDefectQty??d.defectQty;
+      updateData.shortageQty=d.pendingShortageQty??d.shortageQty;
+      updateData.pendingDoneQty=null;
+      updateData.pendingDefectQty=null;
+      updateData.pendingShortageQty=null;
+      // 更新訂單 done
+      const o=window.DB.orders.find(x=>x.id===d.orderId);
+      if(o){
+        const allDisp=[...window.DB.dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId),{...d,...updateData}];
+        await db.collection('orders').doc(o.id).update({
+          done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
+          defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
+          shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
+        });
+      }
+    }
+    await db.collection('dispatches').doc(String(id)).update(updateData);
+    setSS('ok');toast(`已確認：${d.worker} ${d.orderName}`);
+  }catch(e){setSS('err');toast('確認失敗，請重試');}
+}
+window.rejectReport=async function(id){
+  const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
+  const reason=prompt(`拒絕原因（員工將看到此訊息）：
+${d.worker} — ${d.orderName}`);
+  if(reason===null)return;
+  setSS('syncing');
+  try{
+    await db.collection('dispatches').doc(String(id)).update({
+      adminConfirmed:false,
+      adjustStatus:'已拒絕',
+      adjustRejectReason:reason||'管理員拒絕，請重新填寫'
+    });
+    setSS('ok');toast('已拒絕');
+  }catch(e){setSS('err');toast('操作失敗');}
+}
+window.confirmAllReports=async function(){
+  if(!confirm('確定全部確認？'))return;
+  const pending=window.DB.dispatches.filter(d=>
+    ((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0))>0&&
+    (!d.adminConfirmed||d.adjustStatus==='待確認')
+  );
+  setSS('syncing');
+  try{
+    for(const d of pending){
+      const isAdj=d.adjustStatus==='待確認';
+      const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null};
+      if(isAdj){
+        updateData.doneQty=d.pendingDoneQty??d.doneQty;
+        updateData.defectQty=d.pendingDefectQty??d.defectQty;
+        updateData.shortageQty=d.pendingShortageQty??d.shortageQty;
+        updateData.pendingDoneQty=null;updateData.pendingDefectQty=null;updateData.pendingShortageQty=null;
+        const o=window.DB.orders.find(x=>x.id===d.orderId);
+        if(o){
+          const allDisp=[...window.DB.dispatches.filter(x=>x.id!==d.id&&x.orderId===d.orderId),{...d,...updateData}];
+          await db.collection('orders').doc(o.id).update({
+            done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
+            defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
+            shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
+          });
+        }
+      }
+      await db.collection('dispatches').doc(String(d.id)).update(updateData);
+    }
+    setSS('ok');toast(`已全部確認（${pending.length} 筆）`);
+  }catch(e){setSS('err');toast('操作失敗，請重試');}
+}
 // ── 員工備註提示區 ──
 function renderNoteAlerts(){
   const el=document.getElementById('note-alert-section');if(!el)return;
@@ -2431,7 +2555,7 @@ window.sw=function(p){
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
   if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();}
-  if(p==='daily'){initDailyReport();renderNoteAlerts();}
+  if(p==='daily'){initDailyReport();renderNoteAlerts();renderConfirmReports();}
   if(p==='shipping'){renderShipping();}
 }
 </script>

@@ -583,43 +583,60 @@ function renderHistory(){
   }
   const{from,to}=getPayPeriod(historyOffset);
   document.getElementById('history-period-label').textContent=`${from} ～ ${to}`;
-  const myAll=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{const dt=toTW(d.createdAt,false);return dt>=from&&dt<=to;}).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+  const myAll=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{
+    const dt=d.effectiveDate||toTW(d.createdAt,false);
+    return dt>=from&&dt<=to;
+  }).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
   const el=document.getElementById('history-list');
   if(!myAll.length){el.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">此週期無加工記錄<br>Không có ghi chép trong kỳ này</div>';return;}
-  const totalEarn=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+
+  // 薪資合計（已確認 + 預估）
+  const confirmedEarn=myAll.filter(d=>d.adminConfirmed).reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+  const pendingEarn=myAll.filter(d=>!d.adminConfirmed&&(d.doneQty||0)>0).reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
   const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
-  el.innerHTML=myAll.map(d=>{
-    const earn=(d.doneQty||0)*(d.itemPrice||0);
-    const isEditing=editingId===d.id;
-    if(isEditing){
+
+  // 狀態判斷
+  function getDispStatus(d){
+    if(d.adjustStatus==='待確認')return'調整待確認';
+    if(d.adjustStatus==='已拒絕')return'已拒絕';
+    if(d.adminConfirmed)return'已確認';
+    if((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0)return'待確認';
+    return'未回報';
+  }
+  const statusStyle={
+    '待確認':{bg:'#FFFDE7',badge:'background:#FFF3E0;color:#E65100',border:''},
+    '已確認':{bg:'',badge:'background:#E8F5E9;color:#2E7D32',border:'border:0.5px solid #A5D6A7'},
+    '已拒絕':{bg:'#FFEBEE',badge:'background:#FFEBEE;color:#C62828;border:0.5px solid #EF9A9A',border:'border:0.5px solid #EF9A9A'},
+    '調整待確認':{bg:'#F3E5F5',badge:'background:#F3E5F5;color:#6A1B9A',border:'border:0.5px solid #CE93D8'},
+    '未回報':{bg:'',badge:'background:#f5f5f5;color:#aaa',border:''},
+  };
+
+  // 編輯模式（待確認才可直接調整）
+  if(editingId){
+    const d=myAll.find(x=>x.id===editingId);
+    if(d&&getDispStatus(d)==='待確認'){
       const o=orders.find(x=>x.id===d.orderId);
       const othersRep=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==d.id)
         .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
       const remain=Math.max(0,(o?o.qty:d.assignQty)-othersRep);
-      return`<div class="card" style="padding:0.875rem;border:1.5px solid #185FA5">
+      el.innerHTML=`<div class="card" style="border:1.5px solid #185FA5;padding:0.875rem;margin-bottom:10px">
         <div style="font-weight:600;margin-bottom:4px">${d.orderName}${d.orderSpec?' '+d.orderSpec:''}</div>
         <div style="font-size:11px;color:#888;margin-bottom:10px">
-          訂單總量 ${o?o.qty:'-'} ／ 其他員工已回報 ${othersRep} ／ <strong style="color:#185FA5">可回報 ${remain}</strong>
+          訂單總量 ${o?o.qty:'-'} ／ 其他已回報 ${othersRep} ／ <strong style="color:#185FA5">可回報 ${remain}</strong>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
           <div>
-            <div style="font-size:11px;color:#2E7D32;font-weight:600;margin-bottom:3px">✓ 加工完成 / Hoàn thành</div>
+            <div style="font-size:11px;color:#2E7D32;font-weight:600;margin-bottom:3px">✓ 完成 / Hoàn thành</div>
             <input type="number" id="eh-done-${d.id}" min="0" max="${remain}" value="${d.doneQty||0}" oninput="validateEdit('${d.id}')" inputmode="numeric">
-            <div style="font-size:11px;color:#2E7D32;margin-top:2px">計入薪資</div>
           </div>
           <div>
-            <div style="font-size:11px;color:#C62828;font-weight:600;margin-bottom:3px">✗ 不良品 / Hàng lỗi</div>
+            <div style="font-size:11px;color:#C62828;font-weight:600;margin-bottom:3px">✗ 不良 / Lỗi</div>
             <input type="number" id="eh-def-${d.id}" min="0" max="${remain}" value="${d.defectQty||0}" oninput="validateEdit('${d.id}')" inputmode="numeric">
-            <div style="font-size:11px;color:#C62828;margin-top:2px">不計薪資</div>
           </div>
           <div>
-            <div style="font-size:11px;color:#E65100;font-weight:600;margin-bottom:3px">✗ 來料不足 / Thiếu NVL</div>
+            <div style="font-size:11px;color:#E65100;font-weight:600;margin-bottom:3px">✗ 來料不足</div>
             <input type="number" id="eh-sho-${d.id}" min="0" max="${remain}" value="${d.shortageQty||0}" oninput="validateEdit('${d.id}')" inputmode="numeric">
-            <div style="font-size:11px;color:#E65100;margin-top:2px">不計薪資</div>
           </div>
-        </div>
-        <div style="font-size:12px;color:#888;text-align:right;margin-bottom:6px">
-          已回報總數：<span id="etotal-${d.id}" style="font-weight:600;color:#185FA5">${(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)}</span>
         </div>
         <div id="ee-${d.id}" class="err-box"></div>
         <div style="display:flex;gap:8px;margin-top:8px">
@@ -627,24 +644,70 @@ function renderHistory(){
           <button class="btn btn-sm" onclick="cancelEdit()" style="padding:10px">取消</button>
         </div>
       </div>`;
+      return;
     }
-    return`<div class="card" style="padding:0.875rem">
-      <div style="display:flex;justify-content:space-between;margin-bottom:4px;align-items:center">
-        <span style="font-weight:600">${d.orderName}${d.orderSpec?' '+d.orderSpec:''}</span>
-        <div style="display:flex;gap:6px;align-items:center">
-          <span style="font-weight:600;color:#2E7D32">$${earn.toFixed(0)}</span>
-          <button class="btn btn-sm" onclick="startEdit('${d.id}')" style="font-size:11px;padding:3px 8px">調整 / Sửa</button>
-        </div>
-      </div>
-      <div style="font-size:12px;color:#888;line-height:1.8">
-        <span style="color:#888">${toTW(d.createdAt,false)}</span> ·
-        完工 <span style="color:#2E7D32;font-weight:600">${d.doneQty||0}</span> ／
-        不良 <span style="color:#C62828">${d.defectQty||0}</span> ／
-        來料不足 <span style="color:#E65100">${d.shortageQty||0}</span>
-      </div>
-      <div style="font-size:11px;color:#aaa">指派 ${d.assignQty} 件 × $${d.itemPrice}</div>
-    </div>`;
-  }).join('')+`<div style="text-align:right;font-size:13px;color:#888;padding:4px 4px 8px">合計完工 <strong>${totalDone}</strong> 件 ／ 薪資 <strong style="color:#2E7D32;font-size:15px">$${totalEarn.toFixed(0)}</strong></div>`;
+  }
+
+  // 表格顯示
+  const rows=myAll.map(d=>{
+    const st=getDispStatus(d);
+    const ss=statusStyle[st]||statusStyle['未回報'];
+    const earn=(d.adminConfirmed?d.doneQty||0:0)*(d.itemPrice||0);
+    const estEarn=(d.doneQty||0)*(d.itemPrice||0);
+    const date=d.effectiveDate||toTW(d.createdAt,false);
+    let salaryCell='—';
+    if(st==='已確認') salaryCell=`<span style="color:#2E7D32;font-weight:600">$${earn.toFixed(0)} ✓</span>`;
+    else if(st==='待確認') salaryCell=`<span style="color:#E65100;font-size:12px">$${estEarn.toFixed(0)}<br><span style="font-size:10px">預估</span></span>`;
+    else if(st==='調整待確認') salaryCell=`<span style="color:#2E7D32;font-size:12px">$${earn.toFixed(0)} ✓</span>`;
+    let actionBtn='';
+    if(st==='待確認') actionBtn=`<button class="btn btn-sm" onclick="startEdit('${d.id}')" style="font-size:11px;padding:2px 8px">調整 / Sửa</button>`;
+    else if(st==='已確認') actionBtn=`<button class="btn btn-sm" onclick="requestAdjust('${d.id}')" style="font-size:11px;padding:2px 8px">申請調整</button>`;
+    else if(st==='已拒絕') actionBtn=`<button class="btn btn-sm" style="font-size:11px;padding:2px 8px;background:#185FA5;color:#fff;border:none" onclick="startEdit('${d.id}')">重新填寫 / Nhập lại</button>`;
+    let subText='';
+    if(st==='已拒絕'&&d.adjustRejectReason) subText=`<div style="font-size:10px;color:#C62828;grid-column:1/-1">${d.adjustRejectReason}</div>`;
+    if(st==='調整待確認') subText=`<div style="font-size:10px;color:#6A1B9A;grid-column:1/-1">申請調整：${d.pendingDoneQty??d.doneQty}</div>`;
+    return`<tr style="border-bottom:0.5px solid #f0f0f0;background:${ss.bg}">
+      <td style="padding:8px 10px;font-size:12px;color:#888;white-space:nowrap">${date.slice(5)}</td>
+      <td style="padding:8px 10px">
+        <div style="font-weight:500;font-size:13px">${d.orderName}</div>
+        ${d.orderSpec?`<div style="font-size:11px;color:#aaa">${d.orderSpec}</div>`:''}
+        ${subText}
+      </td>
+      <td style="padding:8px 10px;text-align:right;color:#2E7D32;font-weight:600">${d.doneQty||0}</td>
+      <td style="padding:8px 10px;text-align:right;color:#888;font-size:12px">$${d.itemPrice||0}</td>
+      <td style="padding:8px 10px;text-align:right">${salaryCell}</td>
+      <td style="padding:8px 10px"><span style="padding:2px 6px;border-radius:20px;font-size:11px;${ss.badge}">${st}</span></td>
+      <td style="padding:8px 10px;white-space:nowrap">${actionBtn}</td>
+    </tr>`;
+  }).join('');
+
+  const totalRow=`<tr style="background:#f5f5f5">
+    <td colspan="2" style="padding:8px 10px;font-weight:600;font-size:12px;color:#888">合計</td>
+    <td style="padding:8px 10px;text-align:right;font-weight:600">${totalDone}</td>
+    <td></td>
+    <td style="padding:8px 10px;text-align:right">
+      <div style="font-weight:600;color:#2E7D32;font-size:14px">$${confirmedEarn.toFixed(0)} ✓</div>
+      ${pendingEarn>0?`<div style="font-size:11px;color:#E65100">＋預估 $${pendingEarn.toFixed(0)}</div>`:''}
+    </td>
+    <td colspan="2"></td>
+  </tr>`;
+
+  el.innerHTML=`<div style="background:#fff;border:0.5px solid #e0e0e0;border-radius:12px;overflow:hidden;overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;min-width:380px">
+      <thead>
+        <tr style="background:#f5f5f5;border-bottom:0.5px solid #e0e0e0">
+          <th style="text-align:left;padding:8px 10px;font-weight:500;font-size:12px;color:#888">日期</th>
+          <th style="text-align:left;padding:8px 10px;font-weight:500;font-size:12px;color:#888">品名</th>
+          <th style="text-align:right;padding:8px 10px;font-weight:500;font-size:12px;color:#2E7D32">完工</th>
+          <th style="text-align:right;padding:8px 10px;font-weight:500;font-size:12px;color:#888">單價</th>
+          <th style="text-align:right;padding:8px 10px;font-weight:500;font-size:12px;color:#888">薪資</th>
+          <th style="text-align:left;padding:8px 10px;font-weight:500;font-size:12px;color:#888">狀態</th>
+          <th style="padding:8px 10px"></th>
+        </tr>
+      </thead>
+      <tbody>${rows}${totalRow}</tbody>
+    </table>
+  </div>`;
 }
 
 let editingId=null;
@@ -677,7 +740,19 @@ window.saveEdit=async function(id){
   const sho=parseInt(document.getElementById('eh-sho-'+id).value)||0;
   setSS('syncing');
   try{
+    // 已確認後申請調整 → 存入 pending，等管理員確認
+    if(d.adminConfirmed){
+      await db.collection('dispatches').doc(String(id)).update({
+        pendingDoneQty:done,pendingDefectQty:def,pendingShortageQty:sho,
+        adjustStatus:'待確認',adjustRejectReason:null,
+        lastReportAt:new Date().toISOString()
+      });
+      editingId=null;setSS('ok');toast('調整申請已送出，等待管理員確認 / Đã gửi yêu cầu ✓');
+      return;
+    }
+    // 待確認或已拒絕 → 直接更新
     const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
+      adminConfirmed:false,adjustStatus:null,adjustRejectReason:null,
       status:done+def+sho>0?'回報中':'待完成',
       lastReportAt:new Date().toISOString()};
     await db.collection('dispatches').doc(String(id)).set(updated);
@@ -690,9 +765,12 @@ window.saveEdit=async function(id){
         shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
       });
     }
-    editingId=null;
-    setSS('ok');toast('已儲存 / Đã lưu ✓');
+    editingId=null;setSS('ok');toast('已儲存 / Đã lưu ✓');
   }catch(e){setSS('err');toast('儲存失敗，請重試');}
+}
+window.requestAdjust=function(id){
+  // 已確認後點申請調整 → 進入編輯模式，saveEdit 會走 pending 流程
+  startEdit(id);
 }
 
 // ── 打卡狀態判斷 ──
