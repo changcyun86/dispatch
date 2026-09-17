@@ -71,6 +71,11 @@ textarea{resize:vertical;min-height:70px}
 .filter-bar{display:flex;gap:8px;margin-bottom:1rem;flex-wrap:wrap;align-items:center}
 .filter-btn{padding:5px 12px;border-radius:20px;border:1px solid #d0d0d0;background:#fff;cursor:pointer;font-size:12px;font-family:inherit;transition:all 0.15s}
 .filter-btn.active{background:#185FA5;color:#fff;border-color:#185FA5}
+.mismatch-toggle-btn{padding:5px 12px;border-radius:20px;border:1px solid #E65100;background:#fff;color:#E65100;cursor:pointer;font-size:12px;font-family:inherit;transition:all 0.15s}
+.mismatch-toggle-btn.active{background:#E65100;color:#fff}
+.price-mismatch-hint{font-size:10px;color:#E65100;margin-top:2px;cursor:pointer;white-space:nowrap;line-height:1.4}
+.price-mismatch-hint u{text-decoration:underline}
+.price-mismatch-hint:hover{opacity:0.75}
 .checkin-row{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #f0f0f0}
 .checkin-row:last-child{border-bottom:none}
 .status-in{color:#2E7D32;font-weight:600;font-size:12px}
@@ -125,6 +130,7 @@ textarea{resize:vertical;min-height:70px}
         <button class="filter-btn" onclick="setOrderFilter('需補派',this)" style="color:#C62828;border-color:#C62828">需補派</button>
         <button class="filter-btn" onclick="setOrderFilter('已完成',this)">已完成</button>
       </div>
+      <button class="mismatch-toggle-btn" id="btn-price-mismatch" onclick="togglePriceMismatchFilter(this)" title="只顯示訂單單價與品名單價資料庫不一致的訂單">⚠ 單價不符</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span id="order-sel-info" style="font-size:12px;color:#888;display:none"></span>
@@ -560,6 +566,12 @@ const db=firebase.firestore();
 
 window.DB={employees:[],products:[],orders:[],dispatches:[],checkins:[],shipments:[]};
 let orderFilter='未完成';
+let showPriceMismatchOnly=false;
+window.togglePriceMismatchFilter=function(btn){
+  showPriceMismatchOnly=!showPriceMismatchOnly;
+  btn.classList.toggle('active',showPriceMismatchOnly);
+  renderOrders();
+}
 
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
@@ -590,6 +602,15 @@ async function saveProducts(){setSS('syncing');try{await db.collection('system')
 
 // ── 品名自動帶入 ──
 function lookupProduct(name){const n=(name||'').trim().toLowerCase();return window.DB.products.find(p=>p.name.toLowerCase()===n)||null;}
+// 品名+規格精確比對（用於單價不符偵測，避免同品名多規格時誤判）
+function lookupProductBySpec(name,spec){
+  const n=(name||'').trim().toLowerCase(),s=(spec||'').trim().toLowerCase();
+  const exact=window.DB.products.find(p=>p.name.toLowerCase()===n&&(p.spec||'').trim().toLowerCase()===s);
+  if(exact)return exact;
+  // 資料庫查無此規格：若該品名在資料庫中只有唯一規格，仍視為可信比對；有多筆規格則不比對，避免誤判
+  const sameName=window.DB.products.filter(p=>p.name.toLowerCase()===n);
+  return sameName.length===1?sameName[0]:null;
+}
 window.onNameInput=function(){
   const val=document.getElementById('m-name').value.trim();
   const sl=document.getElementById('m-suggest'),hint=document.getElementById('m-price-hint');
@@ -780,6 +801,14 @@ function renderOrders(){
       });
     }
   }
+  // 單價不符偵測：與品名單價資料庫比對（依品名+規格）
+  const mismatchIds=new Set(list.filter(o=>{
+    const dbP=lookupProductBySpec(o.name,o.spec);
+    return dbP&&((o.price||0)!==dbP.price);
+  }).map(o=>o.id));
+  const mismatchBtn=document.getElementById('btn-price-mismatch');
+  if(mismatchBtn)mismatchBtn.textContent=mismatchIds.size?`⚠ 單價不符 (${mismatchIds.size})`:'⚠ 單價不符';
+  if(showPriceMismatchOnly)list=list.filter(o=>mismatchIds.has(o.id));
   const hlRe=kw?new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'):null;
   const hl=(str)=>{
     if(!hlRe||!str)return str||'';
@@ -797,6 +826,8 @@ function renderOrders(){
     const st=getOrderStatus(o);
     const sc={'待派工':'bp','加工中':'ba','已完成':'bd','需補派':'br'};
     const isSel=window._selectedOrderForDel.has(o.id);
+    const dbP=lookupProductBySpec(o.name,o.spec);
+    const priceMismatchHint=(dbP&&((o.price||0)!==dbP.price))?`<div class="price-mismatch-hint" title="品名單價資料庫目前為 $${dbP.price}，此訂單為 $${o.price||0}" onclick="applyDbPrice('${o.id}')">⚠ 資料庫 $${dbP.price} <u>套用</u></div>`:'';
     return`<tr style="background:${isSel?'#FFF8E1':''}">
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
       <td style="white-space:nowrap">${o.date||'-'}</td>
@@ -819,6 +850,7 @@ function renderOrders(){
             onfocus="this.style.borderColor='#185FA5';this.style.background='#fff'"
             onblur="this.style.borderColor='#e0e0e0';this.style.background='#fafafa'">
         </div>
+        ${priceMismatchHint}
       </td>
       <td class="col-num" style="font-weight:600;color:#1565C0" id="amt-${o.id}">${amt>0?'$'+amt.toLocaleString():'—'}</td>
       <td class="col-num" style="color:#2E7D32;font-weight:600">${o.done||0}</td><td class="col-num" style="color:#1565C0;font-weight:600">${undone}</td>
@@ -956,6 +988,35 @@ function findRelatedDispatches(orderId){
   return window.DB.dispatches.filter(d=>
     d.orderId===orderId||(d.mergedOrderIds&&d.mergedOrderIds.includes(orderId))
   );
+}
+// 套用品名單價資料庫的目前單價到此訂單（來自「⚠ 單價不符」提示的一鍵套用）
+window.applyDbPrice=async function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  const dbP=lookupProductBySpec(o.name,o.spec);
+  if(!dbP){toast('品名單價資料庫查無對應品項');return;}
+  const price=dbP.price;
+  if(price===(o.price||0))return;
+  const related=findRelatedDispatches(orderId);
+  const reported=related.filter(d=>(d.doneQty||0)>0);
+  const confirmed=related.filter(d=>d.adminConfirmed);
+  if(reported.length||confirmed.length){
+    const msg=`此品項共有 ${related.length} 筆派工記錄，其中 ${reported.length} 筆已有回報數量`+
+      (confirmed.length?`（${confirmed.length} 筆已確認薪資）`:'')+
+      `。\n套用新單價 $${price} 將一併更新這些記錄的加工金額／薪資，確定要套用嗎？`;
+    if(!confirm(msg))return;
+  }
+  o.price=price;
+  await saveOrder(o);
+  if(related.length){
+    for(const d of related){
+      d.itemPrice=price;
+      await saveDispatch(d);
+    }
+    toast(`單價已套用為 $${price}，同步 ${related.length} 筆派工記錄`);
+  }else{
+    toast(`單價已套用為 $${price}`);
+  }
+  renderOrders();
 }
 window.delOrder=async function(id){
   if(!confirm('確定刪除此訂單？'))return;
