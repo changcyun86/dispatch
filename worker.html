@@ -723,7 +723,14 @@ const NO_ACCESS_MSG=`<div class="card" style="text-align:center;padding:2.5rem;b
 function getOrderRemain(o, excludeDispatchId){
   const rep=dispatches.filter(x=>x.id!==excludeDispatchId&&x.orderId===o.id)
     .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-  return Math.max(0,o.qty-rep);
+  const orderRemain=Math.max(0,o.qty-rep);
+  // 若有指定派工數量（且小於訂單數量），取兩者較小值
+  const d=dispatches.find(x=>x.id===excludeDispatchId);
+  if(d&&d.assignQty&&d.assignQty<o.qty){
+    const selfReported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+    return Math.min(orderRemain,Math.max(0,d.assignQty-selfReported));
+  }
+  return orderRemain;
 }
 function renderWorkerMain(){
   if(!currentWorker)return;
