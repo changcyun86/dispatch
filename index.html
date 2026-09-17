@@ -304,6 +304,11 @@ textarea{resize:vertical;min-height:70px}
       <div class="card-title">加工中訂單</div>
       <div id="pending-dispatch-list" style="font-size:12px;max-height:280px;overflow-y:auto"></div>
       <div style="border-top:1px solid #eee;margin:12px -1.25rem 12px;padding:0"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div class="card-title" style="margin:0">📅 預約派工</div>
+      </div>
+      <div id="scheduled-dispatch-list" style="font-size:12px;margin-bottom:8px"></div>
+      <div style="border-top:1px solid #eee;margin:12px -1.25rem 12px;padding:0"></div>
       <div class="card-title" style="margin-top:0">最近派工記錄</div>
       <div id="dispatch-log" style="font-size:12px"></div>
     </div>
@@ -1152,6 +1157,49 @@ window.createDispatch=async function(){
   toast(`已派工給 ${selectedWorkers.join('、')}：${totalOrders} 筆訂單`);
 }
 // 需求2：右欄改為「加工中訂單」，也套用搜尋關鍵字
+function renderScheduledDispatches(){
+  const el=document.getElementById('scheduled-dispatch-list');if(!el)return;
+  const twToday=toTW(new Date().toISOString(),false);
+  // effectiveDate 大於今天的派工記錄
+  const scheduled=window.DB.dispatches
+    .filter(d=>d.effectiveDate&&d.effectiveDate>twToday)
+    .sort((a,b)=>(a.effectiveDate||'').localeCompare(b.effectiveDate||'')||(a.worker||'').localeCompare(b.worker||''));
+  if(!scheduled.length){
+    el.innerHTML='<div style="color:#aaa;text-align:center;padding:8px">目前無預約派工</div>';
+    return;
+  }
+  // 依生效日期分組顯示
+  const byDate={};
+  for(const d of scheduled){
+    const date=d.effectiveDate;
+    if(!byDate[date])byDate[date]=[];
+    byDate[date].push(d);
+  }
+  el.innerHTML=Object.entries(byDate).map(([date,disps])=>`
+    <div style="margin-bottom:10px">
+      <div style="font-size:12px;font-weight:600;color:#185FA5;margin-bottom:4px;padding:4px 8px;background:#E3F2FD;border-radius:6px">
+        📅 ${date}（${disps.length} 筆）
+      </div>
+      ${disps.map(d=>`
+      <div style="padding:8px 10px;background:#fafafa;border-radius:6px;margin-bottom:4px;display:flex;align-items:center;gap:8px">
+        <div style="flex:1">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:3px">
+            <span style="font-weight:600">${d.worker}</span>
+            <span style="color:#888">${d.orderName}${d.orderSpec?' ('+d.orderSpec+')':''}</span>
+            ${d.sequence?`<span style="background:#FFF3E0;color:#E65100;padding:1px 6px;border-radius:10px;font-size:11px">第 ${d.sequence} 張</span>`:''}
+          </div>
+          <div style="color:#aaa;font-size:11px">
+            ${d.orderNo?`${d.orderNo} ／ `:''}指派 ${d.assignQty} 件
+            ${d.note?` ／ 備註：${d.note}`:''}
+          </div>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-sm btn-warn" onclick="openAdjust('${d.id}')" style="font-size:11px;padding:3px 8px">調整</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteDispatch('${d.id}')" style="font-size:11px;padding:3px 8px">刪除</button>
+        </div>
+      </div>`).join('')}
+    </div>`).join('');
+}
 function renderPendingDispatch(){
   const el=document.getElementById('pending-dispatch-list');if(!el)return;
   const kw=getDispatchKeyword();
@@ -1187,6 +1235,7 @@ function renderPendingDispatch(){
 // 需求3：派工記錄可新增/刪除加工人員，並套用搜尋關鍵字
 function renderDispatchLog(){
   renderPendingDispatch();
+  renderScheduledDispatches();
   const el=document.getElementById('dispatch-log');if(!el)return;
   const kw=getDispatchKeyword();
   const highlight=(str)=>{
