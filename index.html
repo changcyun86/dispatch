@@ -2308,10 +2308,10 @@ window.renderDailyReport=function(){
   const worker=document.getElementById('daily-worker').value;
   if(!date)return;
 
-  // 取得當天派工記錄（依 createdAt 日期台灣時間）
+  // 取得當天派工記錄（有 effectiveDate 用 effectiveDate，否則用 createdAt 台灣時間）
   let dispatches=window.DB.dispatches.filter(d=>{
-    const tw=toTW(d.createdAt,false);
-    return tw===date;
+    const dispDate=d.effectiveDate||toTW(d.createdAt,false);
+    return dispDate===date;
   });
   if(worker)dispatches=dispatches.filter(d=>d.worker===worker);
   dispatches=dispatches.sort((a,b)=>(a.worker||'').localeCompare(b.worker||'')||(a.orderName||'').localeCompare(b.orderName||''));
@@ -2389,7 +2389,7 @@ window.renderDailyReport=function(){
 window.exportDailyXlsx=function(){
   const date=document.getElementById('daily-date').value;
   if(!date)return alert('請先選擇日期');
-  let dispatches=window.DB.dispatches.filter(d=>toTW(d.createdAt,false)===date)
+  let dispatches=window.DB.dispatches.filter(d=>(d.effectiveDate||toTW(d.createdAt,false))===date)
     .sort((a,b)=>(a.worker||'').localeCompare(b.worker||''));
   // 派工記錄工作表
   const h1=['員工','訂單號','品名','規格','派工量','完工','不良','來料不足','狀態'];
