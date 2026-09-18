@@ -1608,7 +1608,7 @@ window.setCIWorkerMonth=function(offset,btn){
 }
 
 function renderCheckins(){
-  const today=new Date().toISOString().slice(0,10);
+  const today=toTW(new Date().toISOString(),false);
   let list=window.DB.checkins;
   let workerFilter='';
 

@@ -378,7 +378,7 @@ async function getPosition(){
 
 // ── 打卡 ──
 function getTodayCheckin(){
-  const today=new Date().toISOString().slice(0,10);
+  const today=toTW(new Date().toISOString(),false);
   return checkins.find(c=>c.worker===currentWorker&&c.date===today)||null;
 }
 function renderCheckinStatus(){
@@ -414,7 +414,7 @@ window.openLeavePanel=function(){
   const panel=document.getElementById('leave-panel');
   panel.style.display=panel.style.display==='none'?'block':'none';
   // 預設今天
-  const today=new Date().toISOString().slice(0,10);
+  const today=toTW(new Date().toISOString(),false);
   document.getElementById('leave-date').value=today;
   document.getElementById('leave-note').value='';
   document.getElementById('leave-err').style.display='none';
@@ -428,7 +428,7 @@ window.submitLeave=async function(){
   const errEl=document.getElementById('leave-err');
   if(!date){errEl.style.display='block';errEl.textContent='請選擇請假日期';return;}
   // 若選的是今天，檢查是否已打卡
-  const today=new Date().toISOString().slice(0,10);
+  const today=toTW(new Date().toISOString(),false);
   if(date===today){
     const ci=getTodayCheckin();
     if(ci&&ci.inTime){errEl.style.display='block';errEl.textContent='今日已打卡，無法申請當日請假';return;}
@@ -483,7 +483,7 @@ window.cancelLeave=async function(date){
 window.doCheckin=async function(type){
   if(!currentWorker)return;
   const now=new Date();
-  const today=now.toISOString().slice(0,10);
+  const today=toTW(now.toISOString(),false);
   const timeStr=now.toTimeString().slice(0,5);
   const ci=getTodayCheckin();
 
@@ -555,7 +555,7 @@ window.switchTab=function(tab){
 // offset=-2：上上個月整月
 function getPayPeriod(offset){
   const now=new Date();
-  const today=now.toISOString().slice(0,10);
+  const today=toTW(now.toISOString(),false);
   const pad=n=>String(n).padStart(2,'0');
   if(offset===0){
     const y=now.getFullYear(),m=now.getMonth();
@@ -874,7 +874,6 @@ function renderWorkerMain(){
     }
     return total;
   }
-  const today=new Date().toISOString().slice(0,10);
   // 台灣時間今天日期
   const twToday=toTW(new Date().toISOString(),false);
   const myPending=myAll.filter(d=>{
