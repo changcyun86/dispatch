@@ -829,10 +829,11 @@ function renderWorkerMain(){
   // 1. 尚未回報
   // 2. 屬於此訂單/合併群組最新一批的 batchId
   function isLatestBatch(d){
-    // 找出與此派工記錄「同一訂單」相關的所有 dispatch
+    // 找出與此派工記錄「同一訂單」且「同一員工」相關的所有 dispatch
+    // （只比較該員工自己的派工批次，避免其他員工的新派工動作影響到此員工原本有效的工單）
     const refOrderId=d.orderId;
     const allForOrder=dispatches.filter(x=>
-      x.orderId===refOrderId||(x.mergedOrderIds&&x.mergedOrderIds.includes(refOrderId))
+      x.worker===d.worker&&(x.orderId===refOrderId||(x.mergedOrderIds&&x.mergedOrderIds.includes(refOrderId)))
     );
     // 用 createdAt 找最新的 batchId（取最晚時間的那筆的 batchId）
     let latestBatchId=null;
