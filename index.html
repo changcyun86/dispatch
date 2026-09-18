@@ -1035,12 +1035,13 @@ function getOrderStatus(o){
   if(reported>=o.qty&&o.qty>0)return'已完成';
   const dispatches=window.DB.dispatches.filter(d=>d.orderId===o.id);
   if(!dispatches.length)return'待派工';
-  // 找最新一批的派工日期
-  const latestCreatedAt=dispatches.reduce((m,d)=>((d.createdAt||'')>m?(d.createdAt||''):m),'');
-  const latestDate=latestCreatedAt.slice(0,10);
-  const today=new Date().toISOString().slice(0,10);
+  // 找最新一批的歸屬日期（生效日優先，沒有才退回建立時間換算台灣時間）
+  const latestDate=dispatches.reduce((m,d)=>{
+    const dt=dispWorkDate(d);return dt>m?dt:m;
+  },'');
+  const twToday=toTW(new Date().toISOString(),false);
   // 昨天或更早的派工，進度未達100% → 需補派
-  if(latestDate<today)return'需補派';
+  if(latestDate<twToday)return'需補派';
   return'加工中';
 }
 // 初始化派工表單預設值
@@ -1275,11 +1276,9 @@ function renderScheduledDispatches(){
 function renderPendingDispatch(){
   const el=document.getElementById('pending-dispatch-list');if(!el)return;
   const kw=getDispatchKeyword();
-  // 加工中：已有派工記錄且尚未完成
+  // 加工中：狀態判斷跟訂單管理頁共用同一套邏輯（getOrderStatus），需補派/已完成/待派工都不算
   const inProgress=window.DB.orders.filter(o=>{
-    const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
-    if(reported>=o.qty&&o.qty>0)return false;
-    if(!window.DB.dispatches.some(d=>d.orderId===o.id))return false;
+    if(getOrderStatus(o)!=='加工中')return false;
     return matchOrder(o,kw);
   }).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   if(!inProgress.length){
