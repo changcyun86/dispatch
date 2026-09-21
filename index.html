@@ -237,6 +237,10 @@ textarea{resize:vertical;min-height:70px}
           <option value="">全部</option>
         </select>
       </div>
+      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:180px">
+        <span style="font-size:13px;color:#888;white-space:nowrap">🔍 品名</span>
+        <input type="text" id="daily-keyword" placeholder="搜尋品名..." style="flex:1;max-width:260px;font-size:13px" oninput="onDailySearch()">
+      </div>
     </div>
   </div>
   <!-- 派工記錄 -->
@@ -335,11 +339,17 @@ textarea{resize:vertical;min-height:70px}
   </div>
   <!-- 篩選列 -->
   <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
-    <div class="filter-bar" style="margin:0">
-      <button class="filter-btn active" onclick="setShipFilter('未完成',this)">待出貨</button>
-      <button class="filter-btn" onclick="setShipFilter('部分出貨',this)">部分出貨</button>
-      <button class="filter-btn" onclick="setShipFilter('全數出貨',this)">全數出貨</button>
-      <button class="filter-btn" onclick="setShipFilter('all',this)">全部</button>
+    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+      <div class="filter-bar" style="margin:0">
+        <button class="filter-btn active" onclick="setShipFilter('未完成',this)">待出貨</button>
+        <button class="filter-btn" onclick="setShipFilter('部分出貨',this)">部分出貨</button>
+        <button class="filter-btn" onclick="setShipFilter('全數出貨',this)">全數出貨</button>
+        <button class="filter-btn" onclick="setShipFilter('all',this)">全部</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:180px">
+        <span style="font-size:13px;color:#888;white-space:nowrap">🔍 品名</span>
+        <input type="text" id="shipping-keyword" placeholder="搜尋品名/訂單號/規格..." style="flex:1;max-width:260px;font-size:13px" oninput="onShippingSearch()">
+      </div>
     </div>
   </div>
   <!-- 訂單列表 -->
@@ -2168,8 +2178,18 @@ function getOrderShipStatus(o){
   if(shipped>=canShip)return{st:'全數出貨',canShip,shipped,pending:0};
   return{st:'部分出貨',canShip,shipped,pending:canShip-shipped};
 }
+let _shipSearchTimer;
+window.onShippingSearch=function(){
+  clearTimeout(_shipSearchTimer);
+  _shipSearchTimer=setTimeout(renderShipping,300);
+}
+function getShippingKeyword(){
+  const el=document.getElementById('shipping-keyword');
+  return el?el.value.trim().toLowerCase():'';
+}
 function renderShipping(){
   const tb=document.getElementById('shipping-tbody');if(!tb)return;
+  const kw=getShippingKeyword();
   let orders=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   // 過濾
   const rows=[];
@@ -2179,10 +2199,11 @@ function renderShipping(){
     if(_shipFilter==='未完成'&&info.st==='全數出貨')continue;
     if(_shipFilter==='部分出貨'&&info.st!=='部分出貨')continue;
     if(_shipFilter==='全數出貨'&&info.st!=='全數出貨')continue;
+    if(!matchOrder(o,kw))continue;
     rows.push({o,info});
   }
   if(!rows.length){
-    tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:#aaa">目前無符合的訂單</td></tr>';
+    tb.innerHTML=`<tr><td colspan="8" style="text-align:center;padding:2rem;color:#aaa">${kw?`無符合「${kw}」的訂單`:'目前無符合的訂單'}</td></tr>`;
     return;
   }
   const sc={'待出貨':'br','部分出貨':'ba','全數出貨':'bd'};
@@ -2496,9 +2517,21 @@ function initDailyReport(){
   }
   renderDailyReport();
 }
+let _dailySearchTimer;
+window.onDailySearch=function(){
+  clearTimeout(_dailySearchTimer);
+  _dailySearchTimer=setTimeout(renderDailyReport,300);
+}
+function matchDispatch(d,kw){
+  if(!kw)return true;
+  return (d.orderName||'').toLowerCase().includes(kw)||
+         (d.orderNo||'').toLowerCase().includes(kw)||
+         (d.orderSpec||'').toLowerCase().includes(kw);
+}
 window.renderDailyReport=function(){
   const date=document.getElementById('daily-date').value;
   const worker=document.getElementById('daily-worker').value;
+  const kw=document.getElementById('daily-keyword')?.value.trim().toLowerCase()||'';
   if(!date)return;
 
   // 取得當天派工記錄（有 effectiveDate 用 effectiveDate，否則用 createdAt 台灣時間）
@@ -2507,6 +2540,7 @@ window.renderDailyReport=function(){
     return dispDate===date;
   });
   if(worker)dispatches=dispatches.filter(d=>d.worker===worker);
+  if(kw)dispatches=dispatches.filter(d=>matchDispatch(d,kw));
   dispatches=dispatches.sort((a,b)=>(a.worker||'').localeCompare(b.worker||'')||(a.orderName||'').localeCompare(b.orderName||''));
 
   // ── 派工記錄 ──
@@ -2515,7 +2549,7 @@ window.renderDailyReport=function(){
   const tb=document.getElementById('daily-dispatch-tbody');
   if(!tb)return;
   if(!dispatches.length){
-    tb.innerHTML='<tr><td colspan="10" style="text-align:center;padding:2rem;color:#aaa">該日無派工記錄</td></tr>';
+    tb.innerHTML=`<tr><td colspan="10" style="text-align:center;padding:2rem;color:#aaa">${kw?`無符合「${kw}」的派工記錄`:'該日無派工記錄'}</td></tr>`;
   }else{
     const scMap={'待完成':'bp','回報中':'ba','已完成':'bd'};
     tb.innerHTML=dispatches.map(d=>{
