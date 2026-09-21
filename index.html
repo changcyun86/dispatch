@@ -436,6 +436,7 @@ textarea{resize:vertical;min-height:70px}
       <div style="flex:1;min-width:130px"><label>起始日期</label><input type="date" id="sal-from"></div>
       <div style="flex:1;min-width:130px"><label>結束日期</label><input type="date" id="sal-to"></div>
       <div style="flex:1;min-width:130px"><label>員工（可選）</label><select id="sal-worker"><option value="">全部員工</option></select></div>
+      <div style="flex:1;min-width:130px"><label>品名（可選）</label><input type="text" id="sal-keyword" placeholder="搜尋品名..."></div>
       <button class="btn btn-primary btn-sm" onclick="calcSalary()">計算薪資</button>
     </div>
     <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
@@ -1721,16 +1722,18 @@ window.setPayPeriod=setPayPeriod;
 window.calcSalary=function(){
   const from=document.getElementById('sal-from').value,to=document.getElementById('sal-to').value;
   const filterWorker=document.getElementById('sal-worker').value;
+  const kw=document.getElementById('sal-keyword')?.value.trim().toLowerCase()||'';
   if(!from||!to)return alert('請選擇日期範圍');
   const rows=[];
   window.DB.dispatches.forEach(d=>{
     const dt=dispWorkDate(d);if(dt<from||dt>to)return;
     if(filterWorker&&d.worker!==filterWorker)return;
+    if(kw&&!matchDispatch(d,kw))return;
     if(!(d.doneQty>0))return;
     rows.push(d);
   });
   const el=document.getElementById('sal-result');
-  if(!rows.length){el.innerHTML='<div class="card" style="text-align:center;color:#aaa">此期間無薪資記錄</div>';return;}
+  if(!rows.length){el.innerHTML=`<div class="card" style="text-align:center;color:#aaa">${kw?`此期間查無「${kw}」相關的薪資記錄`:'此期間無薪資記錄'}</div>`;return;}
 
   // 摘要
   const map={};
