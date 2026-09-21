@@ -73,6 +73,8 @@ textarea{resize:vertical;min-height:70px}
 .filter-btn.active{background:#185FA5;color:#fff;border-color:#185FA5}
 .mismatch-toggle-btn{padding:5px 12px;border-radius:20px;border:1px solid #E65100;background:#fff;color:#E65100;cursor:pointer;font-size:12px;font-family:inherit;transition:all 0.15s}
 .mismatch-toggle-btn.active{background:#E65100;color:#fff}
+.group-toggle-btn{padding:5px 12px;border-radius:20px;border:1px solid #185FA5;background:#fff;color:#185FA5;cursor:pointer;font-size:12px;font-family:inherit;transition:all 0.15s}
+.group-toggle-btn.active{background:#185FA5;color:#fff}
 .price-mismatch-hint{font-size:10px;color:#E65100;margin-top:2px;cursor:pointer;white-space:nowrap;line-height:1.4}
 .price-mismatch-hint u{text-decoration:underline}
 .price-mismatch-hint:hover{opacity:0.75}
@@ -131,6 +133,7 @@ textarea{resize:vertical;min-height:70px}
         <button class="filter-btn" onclick="setOrderFilter('已完成',this)">已完成</button>
       </div>
       <button class="mismatch-toggle-btn" id="btn-price-mismatch" onclick="togglePriceMismatchFilter(this)" title="只顯示訂單單價與品名單價資料庫不一致的訂單">⚠ 單價不符</button>
+      <button class="group-toggle-btn" id="btn-group-product" onclick="toggleGroupByProduct(this)" title="依品名＋規格合併顯示，點開看個別訂單明細">🗂 分組顯示</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span id="order-sel-info" style="font-size:12px;color:#888;display:none"></span>
@@ -590,6 +593,18 @@ window.togglePriceMismatchFilter=function(btn){
   btn.classList.toggle('active',showPriceMismatchOnly);
   renderOrders();
 }
+let groupByProduct=false;
+const _orderGroupExpanded=new Set();
+window.toggleGroupByProduct=function(btn){
+  groupByProduct=!groupByProduct;
+  btn.classList.toggle('active',groupByProduct);
+  renderOrders();
+}
+window.toggleOrderGroup=function(key){
+  if(_orderGroupExpanded.has(key))_orderGroupExpanded.delete(key);
+  else _orderGroupExpanded.add(key);
+  renderOrders();
+}
 
 function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
@@ -838,7 +853,7 @@ function renderOrders(){
     tb.innerHTML=`<tr><td colspan="15" style="text-align:center;padding:2rem;color:#aaa">${kw?`無符合「${kw}」的訂單`:'查無符合條件的訂單'}</td></tr>`;
     updateOrderSelUI();return;
   }
-  tb.innerHTML=list.map(o=>{
+  function orderRowHtml(o,indent){
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const undone=Math.max(0,o.qty-reported);
     const pct=o.qty>0?Math.min(100,Math.round(reported/o.qty*100)):0;
@@ -848,12 +863,13 @@ function renderOrders(){
     const isSel=window._selectedOrderForDel.has(o.id);
     const dbP=lookupProductBySpec(o.name,o.spec);
     const priceMismatchHint=(dbP&&((o.price||0)!==dbP.price))?`<div class="price-mismatch-hint" title="品名單價資料庫目前為 $${dbP.price}，此訂單為 $${o.price||0}" onclick="applyDbPrice('${o.id}')">⚠ 資料庫 $${dbP.price} <u>套用</u></div>`:'';
+    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}</td>`:`<td style="font-weight:600">${hl(o.name)}</td>`;
     return`<tr style="background:${isSel?'#FFF8E1':''}">
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
       <td style="white-space:nowrap">${o.date||'-'}</td>
       <td><span style="color:#888;cursor:pointer;text-decoration:underline dotted" title="點擊編輯訂單號" onclick="editOrderNo('${o.id}','${(o.orderno||'').replace(/'/g,"\'")}')">
         ${hl(o.orderno)||'<span style="color:#ccc">點擊輸入</span>'}</span></td>
-      <td style="font-weight:600">${hl(o.name)}</td><td style="color:#888">${o.spec||'-'}</td>
+      ${nameCell}<td style="color:#888">${o.spec||'-'}</td>
       <td class="col-num" style="padding:2px 4px">
         <input type="number" min="1" value="${o.qty||0}"
           style="width:72px;padding:3px 4px;font-size:13px;text-align:right;border:1px solid #e0e0e0;border-radius:4px;background:#fafafa"
@@ -881,7 +897,46 @@ function renderOrders(){
         <button class="btn btn-sm" onclick="openOrderDetail('${o.id}')" title="訂單詳情">📋</button>
         <button class="btn btn-sm btn-danger" onclick="delOrder('${o.id}')">🗑</button>
       </td></tr>`;
-  }).join('');
+  }
+  if(!groupByProduct){
+    tb.innerHTML=list.map(o=>orderRowHtml(o,0)).join('');
+    updateOrderSelUI();return;
+  }
+  // 分組顯示：依品名＋規格合併
+  const groups=new Map();
+  for(const o of list){
+    const key=`${(o.name||'').trim()}||${(o.spec||'').trim()}`;
+    if(!groups.has(key))groups.set(key,{name:o.name,spec:o.spec,orders:[]});
+    groups.get(key).orders.push(o);
+  }
+  const html=[];
+  for(const [key,g] of groups){
+    const totalQty=g.orders.reduce((a,o)=>a+(o.qty||0),0);
+    const totalDone=g.orders.reduce((a,o)=>a+(o.done||0),0);
+    const totalDefect=g.orders.reduce((a,o)=>a+(o.defect||0),0);
+    const totalShortage=g.orders.reduce((a,o)=>a+(o.shortage||0),0);
+    const totalReported=totalDone+totalDefect+totalShortage;
+    const totalUndone=Math.max(0,totalQty-totalReported);
+    const totalAmt=g.orders.reduce((a,o)=>a+(o.qty||0)*(o.price||0),0);
+    const pct=totalQty>0?Math.min(100,Math.round(totalReported/totalQty*100)):0;
+    const isOpen=_orderGroupExpanded.has(key);
+    html.push(`<tr style="background:#F5F7FA;cursor:pointer" onclick="toggleOrderGroup('${key.replace(/'/g,"\\'")}')">
+      <td></td>
+      <td colspan="2" style="color:#888;font-size:12px">${isOpen?'▼':'▶'} 共 ${g.orders.length} 筆訂單</td>
+      <td style="font-weight:700">${hl(g.name)}</td><td style="color:#888">${g.spec||'-'}</td>
+      <td class="col-num" style="font-weight:700">${totalQty}</td>
+      <td></td>
+      <td class="col-num" style="font-weight:700;color:#1565C0">${totalAmt>0?'$'+totalAmt.toLocaleString():'—'}</td>
+      <td class="col-num" style="color:#2E7D32;font-weight:700">${totalDone}</td><td class="col-num" style="color:#1565C0;font-weight:700">${totalUndone}</td>
+      <td class="col-num" style="color:#C62828">${totalDefect}</td><td class="col-num" style="color:#E65100">${totalShortage}</td>
+      <td></td>
+      <td style="min-width:70px">${pct}%<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div></td>
+      <td></td></tr>`);
+    if(isOpen){
+      for(const o of g.orders)html.push(orderRowHtml(o,20));
+    }
+  }
+  tb.innerHTML=html.join('');
   updateOrderSelUI();
 }
 window.openOrderDetail=function(orderId){
