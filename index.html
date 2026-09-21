@@ -350,6 +350,13 @@ textarea{resize:vertical;min-height:70px}
         <span style="font-size:13px;color:#888;white-space:nowrap">🔍 品名</span>
         <input type="text" id="shipping-keyword" placeholder="搜尋品名/訂單號/規格..." style="flex:1;max-width:260px;font-size:13px" oninput="onShippingSearch()">
       </div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <span style="font-size:13px;color:#888;white-space:nowrap">出貨日期</span>
+        <input type="date" id="ship-from" style="font-size:13px" onchange="renderShipping()">
+        <span style="color:#ccc">～</span>
+        <input type="date" id="ship-to" style="font-size:13px" onchange="renderShipping()">
+        <button class="btn btn-sm" onclick="document.getElementById('ship-from').value='';document.getElementById('ship-to').value='';renderShipping()">清除</button>
+      </div>
     </div>
   </div>
   <!-- 訂單列表 -->
@@ -2190,9 +2197,21 @@ function getShippingKeyword(){
   const el=document.getElementById('shipping-keyword');
   return el?el.value.trim().toLowerCase():'';
 }
+function getOrderShipments(orderId){
+  return window.DB.shipments.filter(s=>s.allocations&&s.allocations.some(a=>a.orderId===orderId))
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+}
+function inShipDateRange(s,from,to){
+  const d=s.date||'';
+  if(from&&d<from)return false;
+  if(to&&d>to)return false;
+  return true;
+}
 function renderShipping(){
   const tb=document.getElementById('shipping-tbody');if(!tb)return;
   const kw=getShippingKeyword();
+  const shipFrom=document.getElementById('ship-from')?.value||'';
+  const shipTo=document.getElementById('ship-to')?.value||'';
   let orders=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   // 過濾
   const rows=[];
@@ -2203,21 +2222,25 @@ function renderShipping(){
     if(_shipFilter==='部分出貨'&&info.st!=='部分出貨')continue;
     if(_shipFilter==='全數出貨'&&info.st!=='全數出貨')continue;
     if(!matchOrder(o,kw))continue;
-    rows.push({o,info});
+    let shipsInRange=getOrderShipments(o.id);
+    if(shipFrom||shipTo){
+      shipsInRange=shipsInRange.filter(s=>inShipDateRange(s,shipFrom,shipTo));
+      if(!shipsInRange.length)continue; // 此期間沒有出貨記錄 → 不顯示
+    }
+    rows.push({o,info,myShipments:shipsInRange});
   }
   if(!rows.length){
-    tb.innerHTML=`<tr><td colspan="8" style="text-align:center;padding:2rem;color:#aaa">${kw?`無符合「${kw}」的訂單`:'目前無符合的訂單'}</td></tr>`;
+    const noMatchMsg=(shipFrom||shipTo)?`此期間（${shipFrom||'…'}～${shipTo||'…'}）查無出貨記錄`:(kw?`無符合「${kw}」的訂單`:'目前無符合的訂單');
+    tb.innerHTML=`<tr><td colspan="8" style="text-align:center;padding:2rem;color:#aaa">${noMatchMsg}</td></tr>`;
     return;
   }
   const sc={'待出貨':'br','部分出貨':'ba','全數出貨':'bd'};
   let html='';
-  for(const {o,info} of rows){
+  for(const {o,info,myShipments} of rows){
     const isExpanded=_shipExpanded.has(o.id);
     const opacity=info.st==='全數出貨'?'opacity:0.65':'';
     const rowBg=info.st==='部分出貨'?'background:#E3F2FD':'';
-    // 出貨記錄
-    const myShipments=window.DB.shipments.filter(s=>s.allocations&&s.allocations.some(a=>a.orderId===o.id))
-      .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+    // 出貨記錄（若有設定出貨日期篩選，這裡只顯示範圍內的記錄）
     const shipRows=myShipments.map(s=>{
       const al=s.allocations.find(a=>a.orderId===o.id);
       return`<tr style="border-top:0.5px solid #f0f0f0">
