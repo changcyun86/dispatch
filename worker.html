@@ -32,7 +32,7 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 .badge{display:inline-block;padding:3px 9px;border-radius:20px;font-size:11px;font-weight:500}
 .bd{background:#E8F5E9;color:#2E7D32}.ba{background:#E3F2FD;color:#1565C0}
 .sync-dot{width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0}
-.sync-dot.ok{background:#43A047}.sync-dot.syncing{background:#FFB300;animation:pulse 1s infinite}
+.sync-dot.ok{background:#43A047}.sync-dot.err{background:#C62828}.sync-dot.syncing{background:#FFB300;animation:pulse 1s infinite}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}
 .tab-bar{display:flex;gap:0;background:#fff;border:1px solid #e8e8e8;border-radius:10px;overflow:hidden;margin-bottom:1rem}
 .tab-btn{flex:1;padding:10px;border:none;background:#fff;color:#666;font-family:inherit;font-size:13px;cursor:pointer;transition:all 0.15s}
@@ -177,6 +177,9 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 
     <!-- 待辦工單 -->
     <div id="panel-pending">
+      <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+        <button class="btn btn-sm" onclick="manualRefresh()">🔄 重新整理 / Làm mới</button>
+      </div>
       <div id="wm-tasks"><div style="text-align:center;color:#aaa;padding:2rem">載入中... / Đang tải...</div></div>
     </div>
 
@@ -229,16 +232,69 @@ function toTW(isoStr,showTime=true){
   const time=tw.toISOString().slice(11,16);
   return showTime?`${date} ${time}`:date;
 }
-function setSS(s){const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;if(s==='ok'){d.className='sync-dot ok';t.textContent='已同步';}else if(s==='syncing'){d.className='sync-dot syncing';t.textContent='同步中...';}else{d.className='sync-dot err';t.textContent='離線';}}
+// 同步狀態燈號：ok 時記錄並顯示最後同步時間（台灣時間）
+let lastSyncAt=null;
+function setSS(s){
+  const d=document.getElementById('sync-dot'),t=document.getElementById('sync-txt');if(!d)return;
+  t.onclick=null;t.style.cursor='';t.style.color='';
+  if(s==='ok'){
+    lastSyncAt=new Date();
+    d.className='sync-dot ok';
+    t.textContent='已同步 '+toTW(lastSyncAt.toISOString()).slice(11);
+  }else if(s==='syncing'){
+    d.className='sync-dot syncing';t.textContent='同步中...';
+  }else{
+    d.className='sync-dot err';t.textContent='離線，點此重新整理';
+    t.style.cursor='pointer';t.style.color='#C62828';
+    t.onclick=()=>location.reload();
+  }
+}
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
 
-db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');employees=snap.exists?snap.data().list||[]:[];if(!currentWorker)renderSelectScreen();},()=>setSS('err'));
-db.collection('dispatches').onSnapshot(snap=>{
+db.collection('system').doc('employees').onSnapshot(snap=>{employees=snap.exists?snap.data().list||[]:[];if(!currentWorker)renderSelectScreen();},()=>setSS('err'));
+// 派工監聽（includeMetadataChanges：可分辨資料是來自伺服器還是本機暫存）
+db.collection('dispatches').onSnapshot({includeMetadataChanges:true},snap=>{
+  if(snap.metadata.fromCache){
+    setSS('syncing');   // 暫存資料，可能不是最新
+  }else{
+    setSS('ok');        // 已與伺服器確認
+    if(resyncTimer){clearTimeout(resyncTimer);resyncTimer=null;}
+  }
   dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));
   if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}
-});
+},()=>setSS('err'));
 db.collection('orders').onSnapshot(snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
 db.collection('checkins').onSnapshot(snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker){renderCheckinStatus();renderLeaveRecords();renderWorkerMain();}});
+
+// ── 回到前景時強制重新同步 ──
+// 加到主畫面的網頁切到背景會被手機凍結，Firebase 連線可能已斷卻未被偵測，
+// 畫面會停在舊資料。回到前景時先斷線再重連，逼所有監聽重新向伺服器同步。
+let resyncTimer=null,resyncing=false;
+async function forceResync(){
+  if(resyncing)return;
+  resyncing=true;
+  setSS('syncing');
+  // 15 秒內沒收到伺服器資料 → 顯示離線，讓員工可點擊重新整理
+  if(resyncTimer)clearTimeout(resyncTimer);
+  resyncTimer=setTimeout(()=>{resyncTimer=null;setSS('err');},15000);
+  try{
+    await db.disableNetwork();
+    await db.enableNetwork();
+  }catch(e){
+    setSS('err');
+  }finally{
+    resyncing=false;
+  }
+  // 日期可能已經換日，重畫一次畫面
+  if(currentWorker){renderCheckinStatus();renderWorkerMain();}
+}
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState==='visible')forceResync();
+});
+window.addEventListener('pageshow',e=>{if(e.persisted)forceResync();});
+window.addEventListener('online',forceResync);
+// 手動重新整理：整頁重新載入，同時確保拿到最新版程式
+window.manualRefresh=function(){location.reload();};
 
 function init(){
   if(currentWorker){
