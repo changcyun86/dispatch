@@ -613,11 +613,11 @@ function getPayPeriod(offset){
   const now=new Date();
   const today=toTW(now.toISOString(),false);
   const pad=n=>String(n).padStart(2,'0');
+  const twY=parseInt(today.slice(0,4)),twM=parseInt(today.slice(5,7))-1; // 台灣時間年月
   if(offset===0){
-    const y=now.getFullYear(),m=now.getMonth();
-    return{from:`${y}-${pad(m+1)}-01`,to:today};
+    return{from:`${twY}-${pad(twM+1)}-01`,to:today};
   }
-  let year=now.getFullYear(),month=now.getMonth()+offset;
+  let year=twY,month=twM+offset;
   while(month<0){month+=12;year--;}while(month>11){month-=12;year++;}
   const lastDay=new Date(year,month+1,0).getDate();
   return{from:`${year}-${pad(month+1)}-01`,to:`${year}-${pad(month+1)}-${lastDay}`};
@@ -962,12 +962,18 @@ function renderWorkerMain(){
     }
     return isLatestBatch(d);
   });
-  const totalDone=myAll.reduce((a,d)=>a+(d.doneQty||0),0);
-  const totalEarned=myAll.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+  // 當月累計（台灣時間本月1日～今天，日期判斷與加工記錄「本月」相同）
+  const{from:monthFrom,to:monthTo}=getPayPeriod(0);
+  const myMonth=myAll.filter(d=>{
+    const dt=d.effectiveDate||toTW(d.createdAt,false);
+    return dt>=monthFrom&&dt<=monthTo;
+  });
+  const totalDone=myMonth.reduce((a,d)=>a+(d.doneQty||0),0);
+  const totalEarned=myMonth.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
   document.getElementById('wm-stats').innerHTML=`
     <div class="metric"><div class="metric-label">待辦工單<br><span style="font-size:10px;color:#bbb">Việc cần làm</span></div><div class="metric-val">${myPending.length}</div></div>
-    <div class="metric"><div class="metric-label">累計完工<br><span style="font-size:10px;color:#bbb">Hoàn thành</span></div><div class="metric-val">${totalDone}</div></div>
-    <div class="metric"><div class="metric-label">累計薪資<br><span style="font-size:10px;color:#bbb">Tổng lương</span></div><div class="metric-val">$${totalEarned.toFixed(0)}</div></div>
+    <div class="metric"><div class="metric-label">本月完工<br><span style="font-size:10px;color:#bbb">Hoàn thành tháng này</span></div><div class="metric-val">${totalDone}</div></div>
+    <div class="metric"><div class="metric-label">本月加工費<br><span style="font-size:10px;color:#bbb">Tiền gia công tháng này</span></div><div class="metric-val">$${totalEarned.toFixed(0)}</div></div>
   `;
   if(currentTab!=='pending')return;
   const tasks=document.getElementById('wm-tasks');
