@@ -584,6 +584,9 @@ if(sessionStorage.getItem('admin_auth')==='1')showAdminApp();
 const firebaseConfig={apiKey:"AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",authDomain:"changcyun-19b9b.firebaseapp.com",projectId:"changcyun-19b9b",storageBucket:"changcyun-19b9b.firebasestorage.app",messagingSenderId:"853660333384",appId:"1:853660333384:web:183107f8390c6c2ac92f7d"};
 const app=firebase.initializeApp(firebaseConfig);
 const db=firebase.firestore();
+// 本機暫存（IndexedDB）：重新整理或短時間內重新連線時，只向伺服器讀取有變動的資料，降低讀取量。
+// synchronizeTabs：同一台電腦開多個分頁時共用暫存。瀏覽器不支援（如無痕模式）時自動改回一般模式，功能不受影響。
+db.enablePersistence({synchronizeTabs:true}).catch(e=>console.warn('[本機暫存] 未啟用，改用一般模式：',e&&e.code));
 
 window.DB={employees:[],products:[],orders:[],dispatches:[],checkins:[],shipments:[]};
 let orderFilter='未完成';
