@@ -252,19 +252,156 @@ function setSS(s){
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
 
 db.collection('system').doc('employees').onSnapshot(snap=>{employees=snap.exists?snap.data().list||[]:[];if(!currentWorker)renderSelectScreen();},()=>setSS('err'));
-// 派工監聽（includeMetadataChanges：可分辨資料是來自伺服器還是本機暫存）
-db.collection('dispatches').onSnapshot({includeMetadataChanges:true},snap=>{
-  if(snap.metadata.fromCache){
-    setSS('syncing');   // 暫存資料，可能不是最新
-  }else{
-    setSS('ok');        // 已與伺服器確認
-    if(resyncTimer){clearTimeout(resyncTimer);resyncTimer=null;}
-  }
-  dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));
+// ══ 讀取範圍：只讀「目前登入員工」相關的資料（降低 Firestore 讀取量）══
+// 以前：一打開就讀全部派工／訂單／打卡（每次約 1,400 筆）。
+// 現在：登入後才開始讀，範圍是
+//   1. 自己的派工（上上上月 1 日以後建立的；畫面最多用到上上月，多留一個月緩衝）
+//   2. 「相關訂單」上所有人的派工：相關訂單 = 自己上上月 1 日以後派工的 orderId 與 mergedOrderIds
+//      （加工紀錄最多查到上上月，能回報/調整的派工都在這個範圍內）
+//   3. 相關訂單本身
+//   4. 自己的打卡與請假（上上月 1 日以後）
+// 計算剩餘量與寫回訂單加總所需的資料，跟舊版完全相同（同一訂單的所有派工都在）。
+// 相關訂單的資料尚未從伺服器確認前，禁止回報/調整，避免用不完整的資料寫回訂單。
+const SCOPE_CHUNK=30; // Firestore 'in' 查詢上限
+let _scopeWorker=null;
+let _unsubOwn=null,_unsubCI=null;
+let _ownDocs=[];               // 自己的派工
+let _relChunks=[];             // {ids:[], unsub, docs:[], ready:false}（同訂單所有人的派工）
+let _ordChunks=[];             // {ids:[], unsub, docs:[], ready:false}（相關訂單）
+let _ciReady=false;
+function _rebuildDispatches(){
+  const map=new Map();
+  for(const c of _relChunks)for(const d of c.docs)map.set(d.id,d);
+  for(const d of _ownDocs)map.set(d.id,d);
+  dispatches=[...map.values()];
+}
+function _rebuildOrders(){
+  const map=new Map();
+  for(const c of _ordChunks)for(const o of c.docs)map.set(o.id,o);
+  orders=[...map.values()];
+}
+function _renderScope(){
   if(currentWorker){renderWorkerMain();if(currentTab==='history')renderHistory();}
-},()=>setSS('err'));
-db.collection('orders').onSnapshot(snap=>{orders=snap.docs.map(d=>({id:d.id,...d.data()}));});
-db.collection('checkins').onSnapshot(snap=>{checkins=snap.docs.map(d=>({id:d.id,...d.data()}));if(currentWorker){renderCheckinStatus();renderLeaveRecords();renderWorkerMain();}});
+}
+// 自己上上月 1 日以後的派工所涉及的訂單 id（保留原本的型別，查詢比對與舊版的 === 一致）
+function _relatedOrderIds(){
+  const from=getPayPeriod(-2).from;
+  const ids=new Set();
+  for(const d of _ownDocs){
+    const dt=d.effectiveDate||toTW(d.createdAt,false);
+    if(dt&&dt<from)continue;
+    if(d.orderId!=null&&d.orderId!=='')ids.add(d.orderId);
+    if(Array.isArray(d.mergedOrderIds))for(const x of d.mergedOrderIds)if(x!=null&&x!=='')ids.add(x);
+  }
+  return ids;
+}
+// 增量訂閱：已訂閱的 id 不重訂（避免重讀），新 id 另開 chunk，完全不相關的 chunk 才取消
+function _syncChunks(chunks,wanted,subscribe){
+  const covered=new Set();
+  for(let i=chunks.length-1;i>=0;i--){
+    const c=chunks[i];
+    if(!c.ids.some(id=>wanted.has(id))){c.unsub&&c.unsub();chunks.splice(i,1);continue;}
+    c.ids.forEach(id=>covered.add(id));
+  }
+  const add=[...wanted].filter(id=>!covered.has(id));
+  for(let i=0;i<add.length;i+=SCOPE_CHUNK){
+    const c={ids:add.slice(i,i+SCOPE_CHUNK),docs:[],ready:false,unsub:null};
+    chunks.push(c);
+    subscribe(c);
+  }
+  return add.length>0;
+}
+function _subRelChunk(c){
+  c.unsub=db.collection('dispatches').where('orderId','in',c.ids)
+    .onSnapshot({includeMetadataChanges:true},snap=>{
+      if(!_relChunks.includes(c))return;
+      const firstReady=!c.ready&&!snap.metadata.fromCache;
+      if(firstReady)c.ready=true;
+      const changed=snap.docChanges().length>0;
+      c.docs=snap.docs.map(d=>({id:d.id,...d.data()}));
+      if(changed||firstReady){_rebuildDispatches();_renderScope();}
+    },()=>setSS('err'));
+}
+function _subOrdChunk(c){
+  const docIds=c.ids.map(x=>String(x));
+  c.unsub=db.collection('orders').where(firebase.firestore.FieldPath.documentId(),'in',docIds)
+    .onSnapshot({includeMetadataChanges:true},snap=>{
+      if(!_ordChunks.includes(c))return;
+      const firstReady=!c.ready&&!snap.metadata.fromCache;
+      if(firstReady)c.ready=true;
+      c.docs=snap.docs.map(d=>({id:d.id,...d.data()}));
+      _rebuildOrders();
+      // 與舊版相同：訂單變動本身不觸發重畫（下次重畫自然會用到新資料）；只有首次載入完成時重畫
+      if(firstReady)_renderScope();
+    },()=>setSS('err'));
+}
+// 此派工相關的訂單與派工是否都已從伺服器確認
+function scopeReadyFor(d){
+  if(!d)return false;
+  const ids=[d.orderId,...(Array.isArray(d.mergedOrderIds)?d.mergedOrderIds:[])].filter(x=>x!=null&&x!=='');
+  return ids.every(id=>
+    _relChunks.some(c=>c.ready&&c.ids.includes(id))&&
+    _ordChunks.some(c=>c.ready&&c.ids.includes(id))
+  );
+}
+const SCOPE_WAIT_MSG='資料同步中，請稍候再試 / Đang đồng bộ, vui lòng thử lại';
+function stopScope(){
+  _unsubOwn&&_unsubOwn();_unsubCI&&_unsubCI();_unsubOwn=_unsubCI=null;
+  for(const c of _relChunks)c.unsub&&c.unsub();
+  for(const c of _ordChunks)c.unsub&&c.unsub();
+  _relChunks=[];_ordChunks=[];_ownDocs=[];_ciReady=false;_scopeWorker=null;
+  dispatches=[];orders=[];checkins=[];
+}
+function startScope(name){
+  if(_scopeWorker===name)return;
+  stopScope();
+  _scopeWorker=name;
+  // 自己的派工：只讀「上上上月 1 日」以後建立的（畫面最多用到上上月，多留一個月緩衝給預約生效日）
+  // 需要 Firebase 複合索引（dispatches：worker + createdAt）；索引尚未建立時自動改讀全部，功能不受影響
+  const ownFromISO=new Date(getPayPeriod(-3).from+'T00:00:00+08:00').toISOString();
+  const ownHandler=snap=>{
+      if(_scopeWorker!==name)return;
+      if(snap.metadata.fromCache){
+        setSS('syncing');   // 暫存資料，可能不是最新
+      }else{
+        setSS('ok');        // 已與伺服器確認
+        if(resyncTimer){clearTimeout(resyncTimer);resyncTimer=null;}
+      }
+      _ownDocs=snap.docs.map(d=>({id:d.id,...d.data()}));
+      const wanted=_relatedOrderIds();
+      _syncChunks(_relChunks,wanted,_subRelChunk);
+      _syncChunks(_ordChunks,wanted,_subOrdChunk);
+      _rebuildDispatches();_rebuildOrders();
+      _renderScope();
+    };
+  _unsubOwn=_listenWithFallback(
+    db.collection('dispatches').where('worker','==',name).where('createdAt','>=',ownFromISO),
+    db.collection('dispatches').where('worker','==',name),
+    ownHandler,()=>_scopeWorker===name,u=>{_unsubOwn=u;});
+  // 自己的打卡與請假：只讀上上月 1 日以後（含之後的請假申請）
+  // 需要 Firebase 複合索引（checkins：worker + date）；索引尚未建立時自動改讀全部
+  const ciFrom=getPayPeriod(-2).from;
+  const ciHandler=snap=>{
+      if(_scopeWorker!==name)return;
+      if(!snap.metadata.fromCache)_ciReady=true;
+      checkins=snap.docs.map(d=>({id:d.id,...d.data()}));
+      if(currentWorker){renderCheckinStatus();renderLeaveRecords();renderWorkerMain();}
+    };
+  _unsubCI=_listenWithFallback(
+    db.collection('checkins').where('worker','==',name).where('date','>=',ciFrom),
+    db.collection('checkins').where('worker','==',name),
+    ciHandler,()=>_scopeWorker===name,u=>{_unsubCI=u;});
+}
+// 先用有日期範圍的查詢；若 Firebase 回報缺少複合索引，改用不含日期的查詢（讀取較多但功能正常）
+function _listenWithFallback(scoped,fallback,handler,stillActive,setUnsub){
+  let unsub=scoped.onSnapshot({includeMetadataChanges:true},handler,err=>{
+    if(err&&err.code==='failed-precondition'&&stillActive()){
+      console.warn('[讀取範圍] 尚未建立複合索引，暫時改讀全部：',err.message);
+      setUnsub(fallback.onSnapshot({includeMetadataChanges:true},handler,()=>setSS('err')));
+    }else setSS('err');
+  });
+  return unsub;
+}
 
 // ── 回到前景時強制重新同步 ──
 // 加到主畫面的網頁切到背景會被手機凍結，Firebase 連線可能已斷卻未被偵測，
@@ -357,6 +494,7 @@ window.pinBack=function(){
 window.pinCancel=function(){
   pinBuffer='';pinPending='';
   document.getElementById('pin-screen').style.display='none';
+  stopScope();
   currentWorker=null;localStorage.removeItem('worker_name');
   document.getElementById('select-screen').style.display='flex';
 }
@@ -405,10 +543,12 @@ function showMain(name){
   document.getElementById('pin-screen').style.display='none';
   document.getElementById('main-screen').style.display='block';
   document.getElementById('nav-name').textContent=name;
+  startScope(name);
   renderWorkerMain();renderCheckinStatus();
 }
 
 window.logoutWorker=function(){
+  stopScope();
   currentWorker=null;localStorage.removeItem('worker_name');
   document.getElementById('main-screen').style.display='none';
   document.getElementById('select-screen').style.display='flex';
@@ -478,6 +618,7 @@ window.openLeavePanel=function(){
 }
 window.submitLeave=async function(){
   if(!currentWorker)return;
+  if(!_ciReady){toast(SCOPE_WAIT_MSG);return;}
   const date=document.getElementById('leave-date').value;
   const leaveType=document.getElementById('leave-type').value;
   const leaveNote=document.getElementById('leave-note').value.trim();
@@ -527,6 +668,7 @@ function renderLeaveRecords(){
     </div>`).join('');
 }
 window.cancelLeave=async function(date){
+  if(!_ciReady){toast(SCOPE_WAIT_MSG);return;}
   if(!confirm('確定取消此請假申請？'))return;
   const id=`CI-${currentWorker}-${date}`;
   setSS('syncing');
@@ -538,6 +680,7 @@ window.cancelLeave=async function(date){
 }
 window.doCheckin=async function(type){
   if(!currentWorker)return;
+  if(!_ciReady){toast(SCOPE_WAIT_MSG);return;}
   const now=new Date();
   const today=toTW(now.toISOString(),false);
   const timeStr=now.toTimeString().slice(0,5);
@@ -789,6 +932,7 @@ window.validateEdit=function(id){
   return true;
 }
 window.saveEdit=async function(id){
+  if(!scopeReadyFor(dispatches.find(x=>x.id===id))){toast(SCOPE_WAIT_MSG);return;}
   if(!validateEdit(id))return;
   const d=dispatches.find(x=>x.id===id);if(!d)return;
   const done=parseInt(document.getElementById('eh-done-'+id).value)||0;
@@ -1172,6 +1316,7 @@ async function autoClockOut(){
 window.submitGroupRpt=async function(dispIds,groupId){
   const key=dispIds.join(',');
   if(_submittingGroup.has(key))return;
+  if(!dispIds.every(id=>scopeReadyFor(dispatches.find(x=>x.id===id)))){toast(SCOPE_WAIT_MSG);return;}
   // 驗證所有子工單
   let valid=true;
   for(const id of dispIds){if(!validateRpt(id))valid=false;}
@@ -1241,6 +1386,7 @@ window.validateRpt=function(id){
 const _submitting=new Set();
 window.submitRpt=async function(id){
   if(_submitting.has(id))return;
+  if(!scopeReadyFor(dispatches.find(x=>x.id===id))){toast(SCOPE_WAIT_MSG);return;}
   _submitting.add(id);
   if(!validateRpt(id)){_submitting.delete(id);return;}
   const d=dispatches.find(x=>x.id===id);if(!d){_submitting.delete(id);return;}
