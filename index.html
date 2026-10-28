@@ -550,6 +550,12 @@ textarea{resize:vertical;min-height:70px}
     </div>
   </div>
   <div class="card">
+    <div class="card-title">上次派工紀錄（派工頁「同品名上次」「加工過」）</div>
+    <div style="font-size:13px;margin-bottom:6px">狀態：<span id="ld-status">檢查中...</span></div>
+    <div style="font-size:12px;color:#888;margin-bottom:8px">已結案訂單的派工不會自動讀取，所以把每個品名最近一次的派工另外記成 1 筆紀錄。按「建立」會讀取全部派工一次（只讀不改），之後派工時自動更新。</div>
+    <button class="btn btn-sm btn-primary" onclick="ldRebuild()">建立／重新整理</button>
+  </div>
+  <div class="card">
     <div class="card-title">讀取範圍（降低 Firebase 讀取量）</div>
     <div style="font-size:13px;margin-bottom:6px">目前狀態：<span id="rs-status">檢查中...</span></div>
     <div style="font-size:12px;color:#888;margin-bottom:8px">啟用後，已完成且全數出貨的訂單不會自動讀取；薪資、每日紀錄、較早的打卡與出貨，查詢時才載入。啟用時會先自動下載完整備份，並替每張訂單新增「已結案」欄位（原有資料不變）。</div>
@@ -783,6 +789,129 @@ function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCou
 
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB.employees=snap.exists?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},()=>setSS('err'));
 db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});
+// ══ 上次派工 ══════════════════════════════════════════════════════
+// 本單上次：用已讀進來的派工計算（未完成訂單的派工本來就常駐，不增加讀取）
+// 同品名上次：已結案訂單的派工不會自動讀取，所以另外記在 system/lastDispatch 這 1 筆文件
+//   {byName:{品名:{date,workers,batchId,at}}}；派工、加派員工時更新，派工頁只讀這 1 筆
+window.DB.lastByName={};window.DB.lastByNameMeta=null;
+db.collection('system').doc('lastDispatch').onSnapshot(s=>{
+  const d=s.exists?s.data():null;
+  window.DB.lastByName=(d&&d.byName)||{};window.DB.lastByNameMeta=d?{builtAt:d.builtAt||''}:null;
+  window.DB.tallies=(d&&d.tallies)||{};
+  if(document.getElementById('pg-dispatch')?.classList.contains('active'))renderDispatchOrders();
+  ldRenderStatus();ldTallyReconcile();
+},e=>console.warn('[上次派工]',e));
+function ldRecord(names,date,workers,batchId,at){
+  names=[...new Set(names.filter(Boolean))];if(!names.length)return;
+  const patch={};names.forEach(n=>{patch[n]={date,workers:[...new Set(workers)],batchId:batchId||'',at};});
+  db.collection('system').doc('lastDispatch').set({byName:patch},{merge:true}).catch(e=>console.warn('[上次派工] 更新失敗',e));
+}
+// ── 加工過名單（同品名，名字＋累計完成數量）──
+// 已結案訂單：每張訂單各員工的完成量記在 system/lastDispatch.tallies[訂單id]={n:品名,w:{員工:[數量,最後日期]}}
+// 目前讀進來（含全部派工）的訂單：直接用即時資料計算，不看紀錄 → 數字永遠以最新資料為準
+// 寫入是「整筆覆蓋成目前的正確值」，重複寫也不會重複累加；只在數字有變動時寫入
+window.DB.tallies={};
+function ldContrib(orderId){
+  const w={};
+  for(const d of window.DB.dispatches){
+    if(d.orderId!==orderId||!(d.doneQty>0))continue;
+    const dt=dispWorkDate(d);const x=w[d.worker]||(w[d.worker]=[0,'']);
+    x[0]+=d.doneQty;if(dt>x[1])x[1]=dt;
+  }
+  return w;
+}
+// 這張訂單的全部派工是否都已從伺服器讀完（常駐）
+function ldOrderLive(id){
+  if(RS.mode!=='scoped')return false;
+  return rsChunkReady(RS.dispChunkOf,id)&&rsChunkReady(RS.mergedChunkOf,id)&&rsLiveEntries('orders').some(([k,m])=>m.has(String(id))&&RS.ready.get(k));
+}
+const _ldWriting=new Set();
+function ldTallyReconcile(){
+  if(RS.mode!=='scoped'||!window.DB.lastByNameMeta)return;
+  for(const o of window.DB.orders){
+    const id=String(o.id);if(_ldWriting.has(id)||!ldOrderLive(id))continue;
+    const cur=window.DB.tallies[id]||null;
+    let want=null;
+    if(o.closed===true){const w=ldContrib(o.id);if(Object.keys(w).length)want={n:o.name||'',w};}
+    if(JSON.stringify(cur)===JSON.stringify(want))continue;
+    if(cur&&want&&cur.n===want.n&&JSON.stringify(Object.entries(cur.w).sort())===JSON.stringify(Object.entries(want.w).sort()))continue;
+    _ldWriting.add(id);
+    db.collection('system').doc('lastDispatch').update({['tallies.'+id]:want===null?firebase.firestore.FieldValue.delete():want})
+      .catch(e=>console.warn('[加工過名單]',e)).finally(()=>_ldWriting.delete(id));
+  }
+}
+// 刪除訂單時，同時拿掉它的紀錄
+(function(){try{
+  const P=firebase.firestore.DocumentReference.prototype,del=P.delete;
+  P.delete=function(...a){
+    const path=this.path||'';
+    if(path.startsWith('orders/')){const id=path.slice(7);if(window.DB.tallies&&window.DB.tallies[id]){
+      db.collection('system').doc('lastDispatch').update({['tallies.'+id]:firebase.firestore.FieldValue.delete()}).catch(()=>{});}}
+    return del.apply(this,a);
+  };
+}catch(e){console.warn(e);}})();
+function ldWorkersForName(name){
+  const agg={},add=(w,q,dt)=>{const x=agg[w]||(agg[w]=[0,'']);x[0]+=q;if(dt>x[1])x[1]=dt;};
+  const live=new Set();
+  for(const o of window.DB.orders){if(o.name===name&&ldOrderLive(String(o.id)))live.add(String(o.id));}
+  if(RS.mode!=='scoped'){ // 讀取全部的模式：全部即時計算
+    for(const d of window.DB.dispatches)if(d.orderName===name&&d.doneQty>0)add(d.worker,d.doneQty,dispWorkDate(d));
+  }else{
+    for(const [oid,t] of Object.entries(window.DB.tallies))if(t&&t.n===name&&!live.has(oid))for(const [w,[q,dt]] of Object.entries(t.w||{}))add(w,q,dt);
+    for(const oid of live){const o=window.DB.orders.find(x=>String(x.id)===oid);for(const [w,[q,dt]] of Object.entries(ldContrib(o.id)))add(w,q,dt);}
+  }
+  return Object.entries(agg).sort((a,b)=>b[1][1].localeCompare(a[1][1])||b[1][0]-a[1][0]);
+}
+function ldFmtWorkers(list){
+  if(!list.length)return '尚無';
+  return list.map(([w,[q]])=>`${MAT.esc(w)}(${q.toLocaleString()})`).join('、');
+}
+// 最新的那一批派工：日期（生效日）＋該批的員工
+function ldLatest(list){
+  if(!list.length)return null;
+  let best=list[0];for(const d of list)if((d.createdAt||'')>(best.createdAt||''))best=d;
+  const same=list.filter(d=>best.batchId?d.batchId===best.batchId:d.createdAt===best.createdAt);
+  return{date:dispWorkDate(best),workers:[...new Set(same.map(d=>d.worker).filter(Boolean))],at:best.createdAt||''};
+}
+function ldForOrder(o){
+  return ldLatest(window.DB.dispatches.filter(d=>d.orderId===o.id||(Array.isArray(d.mergedOrderIds)&&d.mergedOrderIds.includes(o.id))));
+}
+function ldForName(name){
+  const loaded=ldLatest(window.DB.dispatches.filter(d=>d.orderName===name));
+  const rec=window.DB.lastByName[name];
+  const saved=rec&&rec.date?{date:rec.date,workers:rec.workers||[],at:rec.at||''}:null;
+  if(!loaded)return saved;if(!saved)return loaded;
+  return (saved.at||'')>(loaded.at||'')?saved:loaded;
+}
+function ldFmt(x){
+  if(!x)return '尚未派工';
+  const [,m,d]=(x.date||'').split('-');
+  return `${m?Number(m)+'/'+Number(d):x.date}${x.workers.length?`（${x.workers.map(w=>MAT.esc(w)).join('、')}）`:''}`;
+}
+function ldRenderStatus(){
+  const el=document.getElementById('ld-status');if(!el)return;
+  const m=window.DB.lastByNameMeta;
+  el.innerHTML=m&&m.builtAt?`已建立（${toTW(m.builtAt).slice(0,16)}），之後派工會自動更新`
+    :m?'已有紀錄（派工時自動累積），建議按一次「建立」把過去的派工也整理進來'
+    :'<span style="color:#E65100">尚未建立</span>：目前「同品名上次」只看得到未完成訂單的派工';
+}
+window.ldRebuild=async function(){
+  if(!confirm('會讀取「全部」派工和已結案訂單一次，整理出每個品名最近一次的派工、以及加工過的員工與累計數量。\n（只讀取，不會修改任何派工或訂單；讀取次數約等於派工總筆數，只需做一次）\n\n確定開始？'))return;
+  setSS('syncing');
+  try{
+    const [snap,cSnap]=await Promise.all([db.collection('dispatches').get(),db.collection('orders').where('closed','==',true).get()]);
+    const tallies={},closedIds=new Map(cSnap.docs.map(x=>[x.id,x.data().name||'']));
+    snap.docs.forEach(x=>{const d=x.data();if(!closedIds.has(String(d.orderId))||!(d.doneQty>0))return;
+      const t=tallies[d.orderId]||(tallies[d.orderId]={n:closedIds.get(String(d.orderId)),w:{}});
+      const dt=dispWorkDate(d),v=t.w[d.worker]||(t.w[d.worker]=[0,'']);v[0]+=d.doneQty;if(dt>v[1])v[1]=dt;});
+    const groups={};
+    snap.docs.forEach(x=>{const d={id:x.id,...x.data()};if(!d.orderName)return;(groups[d.orderName]=groups[d.orderName]||[]).push(d);});
+    const byName={};
+    for(const [n,list] of Object.entries(groups)){const l=ldLatest(list);if(l)byName[n]={date:l.date,workers:l.workers,batchId:'',at:l.at};}
+    await db.collection('system').doc('lastDispatch').set({byName,tallies,builtAt:new Date().toISOString()});
+    setSS('ok');toast(`已建立：${Object.keys(byName).length} 個品名（讀取 ${snap.size+cSnap.size} 筆）`);
+  }catch(e){console.error(e);setSS('err');alert('建立失敗：'+e.message);}
+};
 // ══ 讀取範圍（管理端）══════════════════════════════════════════════
 // 未啟用（legacy）：跟舊版一樣讀取四個集合的全部資料。
 // 啟用後（scoped）：
@@ -843,7 +972,7 @@ function rsFlush(){
   if(RS.mode==='scoped')rsCascade();
   for(const col of cols){try{RS_RENDER[col]();}catch(e){console.error(e);}}
   rsRenderNotes();
-  if(RS.mode==='scoped')rsReconcile();
+  if(RS.mode==='scoped'){rsReconcile();ldTallyReconcile();}
 }
 // 依 id 清單分批（每批 30 個）開監聽；已開過的 id 不重開
 function rsSyncChunks(name,col,wanted,mk){
@@ -1699,6 +1828,8 @@ function renderDispatchOrders(){
         <div style="font-size:11px;color:#888">
           ${o.orderno?`${highlight(o.orderno)} · `:''}收單 ${o.date||'-'} ／ 總量 ${o.qty} ／ 已完成 ${(o.done||0)+(o.defect||0)+(o.shortage||0)} ／ 剩 <strong style="color:#C62828">${remaining}</strong> ／ $${o.price}
         </div>
+        <div style="font-size:11px;color:#5F6B7A;margin-top:2px">本單上次：${ldFmt(ldForOrder(o))} ｜ 同品名上次：${ldFmt(ldForName(o.name))}</div>
+        <div style="font-size:11px;color:#5F6B7A">加工過：${ldFmtWorkers(ldWorkersForName(o.name))}</div>
       </div>
     </div>`;
   }).join('');
@@ -1787,6 +1918,7 @@ window.createDispatch=async function(){
       }
     }
   }
+  ldRecord(ids.map(id=>window.DB.orders.find(o=>o.id===id)?.name),effectiveDate,selectedWorkers,batchId,new Date().toISOString());
   document.getElementById('d-note').value='';
   document.getElementById('d-sequence').value='';
   document.getElementById('d-assign-qty').value='';
@@ -1964,6 +2096,7 @@ window.confirmAddWorkers=async function(orderId){
       note:'',status:'待完成',createdAt:now
     });
   }
+  ldRecord([o.name],toTW(now,false),selected,batchId,now);
   closeModal();
   toast(`已新增 ${selected.join('、')} 至 ${o.name}`);
 }
@@ -3725,7 +3858,7 @@ window.sw=function(p){
   if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();initDispatchForm();}
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
-  if(p==='settings'){rcInitUI();renderSettingsEmps();renderProducts();updateSysInfo();renderMatSettings(true);renderEmpInfo();}
+  if(p==='settings'){rcInitUI();ldRenderStatus();renderSettingsEmps();renderProducts();updateSysInfo();renderMatSettings(true);renderEmpInfo();}
   if(p==='payslip')psInit();
   if(p==='materials'&&!window._matAdminUI&&window.MAT){
     window._matAdminUI=MAT.mount(document.getElementById('mat-admin-root'),{mode:'admin',by:()=>'管理者',employees:()=>window.DB.employees,toast});
