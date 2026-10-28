@@ -105,6 +105,8 @@ textarea{resize:vertical;min-height:70px}
     <button class="nav-tab" onclick="sw('shipping')">出貨管理</button>
     <button class="nav-tab" onclick="sw('checkin')">打卡記錄</button>
     <button class="nav-tab" onclick="sw('salary')">薪資計算</button>
+    <button class="nav-tab" onclick="sw('payslip')">薪資單</button>
+    <button class="nav-tab" onclick="sw('materials')">耗材</button>
     <button class="nav-tab" onclick="sw('settings')">設定</button>
   </div>
   <div class="sync-indicator"><div class="sync-dot" id="sync-dot"></div><span id="sync-txt">連線中</span></div>
@@ -121,6 +123,7 @@ textarea{resize:vertical;min-height:70px}
 </div>
 <!-- 訂單管理 -->
 <div id="pg-orders" class="page active">
+  <div id="rs-note-orders" style="display:none;font-size:12px;color:#555;background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;padding:6px 12px;margin-bottom:8px"></div>
   <div class="section-hdr">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
       <strong style="font-size:15px">訂單列表</strong>
@@ -340,6 +343,7 @@ textarea{resize:vertical;min-height:70px}
     <strong style="font-size:15px">出貨管理</strong>
     <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7" onclick="exportShippingXlsx()">↓ 匯出 Excel</button>
   </div>
+  <div id="rs-note-shipping" style="display:none;font-size:12px;color:#555;background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;padding:6px 12px;margin-bottom:8px"></div>
   <!-- 篩選列 -->
   <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -457,6 +461,27 @@ textarea{resize:vertical;min-height:70px}
     </div>
   </div>
   <div id="sal-result"></div>
+  <div id="sal-mat"></div>
+</div>
+
+<!-- 薪資單 -->
+<div id="pg-payslip" class="page">
+  <div class="section-hdr"><strong style="font-size:15px">薪資單</strong></div>
+  <div class="info-box" style="margin-bottom:1rem">ℹ️ 以一個完整月份為單位。系統能算的自動帶入，其他在「編輯」手動填寫（自動儲存為草稿）；確認後按「鎖定本期」保存快照，同時鎖定當月耗材紀錄。</div>
+  <div class="card" style="padding:0.875rem 1.25rem">
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div><label>薪資月份</label><input type="month" id="ps-month" style="width:auto" onchange="psLoad()"></div>
+      <button class="btn btn-sm" onclick="psLoad()">🔄 重新整理</button>
+    </div>
+  </div>
+  <div id="ps-body"></div>
+</div>
+
+<!-- 耗材 -->
+<div id="pg-materials" class="page">
+  <div class="section-hdr"><strong style="font-size:15px">耗材領取</strong></div>
+  <div class="info-box" style="margin-bottom:1rem">ℹ️ 耗材費用從薪資扣除。品項與單價、耗材管理員在「設定」維護；月份在「薪資單」鎖定。已鎖定的月份只能用退還沖銷。</div>
+  <div id="mat-admin-root"></div>
 </div>
 
 <!-- 設定 -->
@@ -524,6 +549,36 @@ textarea{resize:vertical;min-height:70px}
       <button class="btn btn-sm btn-danger" onclick="clearAll()">清除所有資料</button>
     </div>
   </div>
+  <div class="card">
+    <div class="card-title">讀取範圍（降低 Firebase 讀取量）</div>
+    <div style="font-size:13px;margin-bottom:6px">目前狀態：<span id="rs-status">檢查中...</span></div>
+    <div style="font-size:12px;color:#888;margin-bottom:8px">啟用後，已完成且全數出貨的訂單不會自動讀取；薪資、每日紀錄、較早的打卡與出貨，查詢時才載入。啟用時會先自動下載完整備份，並替每張訂單新增「已結案」欄位（原有資料不變）。</div>
+    <button class="btn btn-sm btn-primary" id="rs-btn-enable" style="display:none" onclick="rsEnable()">啟用</button>
+    <button class="btn btn-sm" id="rs-btn-disable" style="display:none" onclick="rsDisable()">停用（恢復讀取全部）</button>
+  </div>
+  <div class="card">
+    <div class="card-title">員工薪資資料（到職日、固定加扣項目）</div>
+    <div style="font-size:12px;color:#888;margin-bottom:8px">年資獎金：每滿一年 +500，滿週年的次月生效，無上限。固定加扣項目每月自動帶入薪資單（正數為加項、負數為扣項），當月仍可在薪資單上修改。</div>
+    <div id="empinfo-editor"></div>
+    <div id="empinfo-list"></div>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <div class="card-title">耗材品項與單價</div>
+      <div style="font-size:12px;color:#888;margin-bottom:8px">同品名不同規格請分成不同品項。停用的品項員工選不到，但舊紀錄不受影響；已領取的紀錄以當時單價計算。</div>
+      <div id="mat-items-editor"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn btn-sm" onclick="matItemAdd()">＋ 新增品項</button>
+        <button class="btn btn-primary btn-sm" onclick="matItemsSave()">儲存品項</button>
+        <span id="mat-items-dirty" style="font-size:12px;color:#E65100;align-self:center"></span>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">耗材管理員</div>
+      <div style="font-size:12px;color:#888;margin-bottom:8px">勾選的員工在員工頁面會多一個「耗材發放」分頁，可確認發放、代登、登記退還。</div>
+      <div id="mat-keepers"></div>
+    </div>
+  </div>
 </div>
 </div><!-- main-app -->
 
@@ -547,12 +602,16 @@ textarea{resize:vertical;min-height:70px}
 
 <!-- 登入邏輯放在普通 script，確保 onclick 能呼叫到 -->
 <script>
+// ── 台灣時間（UTC+8）工具：不受電腦時區影響；twNow() 請用 getUTC* 讀取 ──
+function twNow(){return new Date(Date.now()+8*3600e3);}
+function twToday(){return twNow().toISOString().slice(0,10);}
+function twDateStr(y,m0,d){const x=new Date(Date.UTC(y,m0,d));return x.toISOString().slice(0,10);} // m0：0=一月，可超出範圍自動進位
 const ADMIN_PWD='0423';
 function showAdminApp(){
   document.getElementById('login-screen').style.display='none';
   document.getElementById('main-app').style.display='block';
-  setTimeout(checkBackupReminder,1000);
-  const md=document.getElementById('m-date');if(md)md.value=new Date().toISOString().slice(0,10);
+  setTimeout(()=>{if(typeof checkBackupReminder==='function')checkBackupReminder();},1000);
+  const md=document.getElementById('m-date');if(md)md.value=twToday();
 }
 function checkPwd(){
   const val=document.getElementById('pwd-input').value;
@@ -576,6 +635,7 @@ if(sessionStorage.getItem('admin_auth')==='1')showAdminApp();
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="materials.js?v=2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 
@@ -587,6 +647,8 @@ const db=firebase.firestore();
 // 本機暫存（IndexedDB）：重新整理或短時間內重新連線時，只向伺服器讀取有變動的資料，降低讀取量。
 // synchronizeTabs：同一台電腦開多個分頁時共用暫存。瀏覽器不支援（如無痕模式）時自動改回一般模式，功能不受影響。
 db.enablePersistence({synchronizeTabs:true}).catch(e=>console.warn('[本機暫存] 未啟用，改用一般模式：',e&&e.code));
+// 耗材：品項、管理員名單、鎖定月份（各 1 筆文件）
+if(window.MAT)MAT.init(db);
 
 window.DB={employees:[],products:[],orders:[],dispatches:[],checkins:[],shipments:[]};
 let orderFilter='未完成';
@@ -628,10 +690,245 @@ function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCou
 
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB.employees=snap.exists?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},()=>setSS('err'));
 db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});
-db.collection('orders').onSnapshot(snap=>{window.DB.orders=snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));renderOrders();renderDispatchOrders();updateSysInfo();});
-db.collection('dispatches').onSnapshot(snap=>{window.DB.dispatches=snap.docs.map(d=>({id:d.id,...d.data()}));renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();renderNoteAlerts();renderConfirmReports();});
-db.collection('checkins').onSnapshot(snap=>{window.DB.checkins=snap.docs.map(d=>({id:d.id,...d.data()}));renderCheckins();renderLeaveApproval();});
-db.collection('shipments').onSnapshot(snap=>{window.DB.shipments=snap.docs.map(d=>({id:d.id,...d.data()}));renderShipping();});
+// ══ 讀取範圍（管理端）══════════════════════════════════════════════
+// 未啟用（legacy）：跟舊版一樣讀取四個集合的全部資料。
+// 啟用後（scoped）：
+//   自動讀取：未結案訂單（closed==false）＋近 7 天新增的訂單（保險：舊版程式新增、還沒有 closed 欄位的訂單）
+//             ＋上述訂單的全部派工與出貨＋近 35 天有回報的派工（待確認回報／備註）＋今天以後的預約派工
+//             ＋近 35 天的打卡與出貨
+//   點選才讀：已結案訂單、薪資／每日紀錄／薪資單的派工、較早的打卡與出貨期間
+// 「已結案」＝已完成（完成＋不良＋來料不足 ≥ 訂單量）且全數出貨（已出貨 ≥ 完成數；完成數為 0 不需出貨）。
+// closed 欄位由管理端自動維護；只會新增／更新 closed（訂單）與 orderIds（出貨）兩個欄位，不改其他資料。
+const RS={mode:'loading',HOT_DAYS:7,NEW_DAYS:7,CHUNK:30,
+  src:{orders:new Map(),dispatches:new Map(),checkins:new Map(),shipments:new Map()},
+  ready:new Map(),                 // 來源 key → 已從伺服器確認
+  chunks:{dispByOrder:[],dispByMerged:[],shipByOrder:[],ordById:[]},
+  shipChunkOf:new Map(),           // 訂單 id → 負責讀它出貨紀錄的 chunk key
+  dispChunkOf:new Map(),mergedChunkOf:new Map(),
+  periods:new Map(),
+  sticky:new Set(),                // 本次開啟時看過、之後才結案的訂單：本次繼續顯示
+  closedState:'none',              // none | loading | loaded
+  dirty:new Set(),timer:null,writing:new Set(),hotFrom:''};
+const RS_RENDER={
+  orders:()=>{renderOrders();renderDispatchOrders();updateSysInfo();},
+  dispatches:()=>{renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();renderNoteAlerts();renderConfirmReports();},
+  checkins:()=>{renderCheckins();renderLeaveApproval();},
+  shipments:()=>{renderShipping();}
+};
+function rsTWDate(offsetDays){return toTW(new Date(Date.now()+(offsetDays||0)*864e5).toISOString(),false);}
+function rsAddDays(dateStr,n){const d=new Date(dateStr+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
+function rsTWStartISO(dateStr){return new Date(dateStr+'T00:00:00+08:00').toISOString();}
+function rsListen(col,key,query,onReady){
+  return query.onSnapshot({includeMetadataChanges:true},snap=>{
+    const firstReady=!snap.metadata.fromCache&&!RS.ready.get(key);
+    const changed=!RS.src[col].has(key)||snap.docChanges().length>0;
+    if(changed){const m=new Map();snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()}));RS.src[col].set(key,m);}
+    if(firstReady)RS.ready.set(key,true);
+    if(changed||firstReady)rsMark(col);
+    if(firstReady&&onReady)onReady();
+    if(!snap.metadata.fromCache)setSS('ok');
+  },err=>{console.warn('[讀取範圍]',key,err);setSS('err');});
+}
+function rsMark(col){RS.dirty.add(col);if(!RS.timer)RS.timer=setTimeout(rsFlush,30);}
+function rsFlush(){
+  if(RS.timer){clearTimeout(RS.timer);RS.timer=null;}
+  const cols=[...RS.dirty];RS.dirty.clear();
+  for(const col of cols){
+    const map=new Map();
+    for(const m of RS.src[col].values())for(const [id,d] of m)map.set(id,d);
+    // 跟 Firestore 一樣依文件 id 排序，畫面順序才會跟讀取全部時一致
+    let arr=[...map.values()].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
+    if(col==='orders')arr.sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
+    window.DB[col]=arr;
+  }
+  if(RS.mode==='scoped')rsCascade();
+  for(const col of cols){try{RS_RENDER[col]();}catch(e){console.error(e);}}
+  rsRenderNotes();
+  if(RS.mode==='scoped')rsReconcile();
+}
+// 依 id 清單分批（每批 30 個）開監聽；已開過的 id 不重開
+function rsSyncChunks(name,col,wanted,mk){
+  const covered=new Set();RS.chunks[name].forEach(c=>c.ids.forEach(id=>covered.add(id)));
+  const add=[...wanted].filter(id=>!covered.has(id));
+  for(let i=0;i<add.length;i+=RS.CHUNK){
+    const ids=add.slice(i,i+RS.CHUNK),key=name+':'+RS.chunks[name].length;
+    RS.chunks[name].push({ids,key});
+    if(name==='shipByOrder')ids.forEach(id=>RS.shipChunkOf.set(id,key));
+    if(name==='dispByOrder')ids.forEach(id=>RS.dispChunkOf.set(id,key));
+    if(name==='dispByMerged')ids.forEach(id=>RS.mergedChunkOf.set(id,key));
+    rsListen(col,key,mk(ids));
+  }
+}
+const rsValidId=id=>id!=null&&id!==''&&!String(id).includes('/');
+function rsCascade(){
+  const orderIds=new Set(window.DB.orders.map(o=>String(o.id)));
+  // 畫面上每一張訂單都讀它的「全部」派工：確認回報、調整、改單價、刪除時，重算訂單加總才會正確
+  const dispIds=orderIds;
+  rsSyncChunks('dispByOrder','dispatches',dispIds,ids=>db.collection('dispatches').where('orderId','in',ids));
+  rsSyncChunks('dispByMerged','dispatches',dispIds,ids=>db.collection('dispatches').where('mergedOrderIds','array-contains-any',ids));
+  rsSyncChunks('shipByOrder','shipments',orderIds,ids=>db.collection('shipments').where('orderIds','array-contains-any',ids));
+  // 近期回報的派工、出貨紀錄所屬的訂單（可能已結案）也讀進來，結案狀態才能正確更新
+  const ref=new Set(RS.sticky);
+  for(const m of RS.src.dispatches.values())for(const d of m.values())if(rsValidId(d.orderId))ref.add(String(d.orderId));
+  for(const m of RS.src.shipments.values())for(const s of m.values())(s.allocations||[]).forEach(a=>{if(rsValidId(a.orderId))ref.add(String(a.orderId));});
+  orderIds.forEach(id=>ref.delete(id));
+  rsSyncChunks('ordById','orders',ref,ids=>db.collection('orders').where(firebase.firestore.FieldPath.documentId(),'in',ids));
+}
+// 修改會重算訂單加總的動作，先確認這些訂單的全部派工（和出貨）都已從伺服器讀完
+function rsReadyFor(orderIds,needShip){
+  if(RS.mode!=='scoped')return true;
+  for(const raw of orderIds){
+    if(!rsValidId(raw))continue;const id=String(raw);
+    if(!window.DB.orders.some(o=>String(o.id)===id)){rsMark('orders');return false;}
+    const keys=[RS.dispChunkOf.get(id),RS.mergedChunkOf.get(id)];if(needShip)keys.push(RS.shipChunkOf.get(id));
+    if(keys.some(k=>!k||!RS.ready.get(k)))return false;
+  }
+  return true;
+}
+function rsGuard(orderIds,needShip){
+  if(rsReadyFor(orderIds,needShip))return true;
+  toast('資料載入中，請稍候 2 秒再試一次');return false;
+}
+function rsShipped(orderId){
+  let n=0;for(const s of window.DB.shipments)for(const a of (s.allocations||[]))if(a.orderId===orderId)n+=(a.qty||0);return n;
+}
+function rsDesiredClosed(o,shipped){
+  const qty=o.qty||0,rep=(o.done||0)+(o.defect||0)+(o.shortage||0);
+  if(!(qty>0&&rep>=qty))return false;
+  const done=o.done||0;
+  return done<=0||shipped>=done;
+}
+// 自動維護 closed／orderIds：只在資料已從伺服器確認時才寫，避免用不完整的出貨資料判斷
+function rsReconcile(){
+  for(const s of window.DB.shipments){
+    const want=[...new Set((s.allocations||[]).map(a=>a.orderId).filter(rsValidId).map(String))];
+    if(!want.length||RS.writing.has('S'+s.id))continue;
+    if(JSON.stringify(s.orderIds||null)===JSON.stringify(want))continue;
+    RS.writing.add('S'+s.id);
+    db.collection('shipments').doc(s.id).update({orderIds:want}).catch(e=>console.warn(e)).finally(()=>RS.writing.delete('S'+s.id));
+  }
+  for(const o of window.DB.orders){
+    const id=String(o.id);
+    if(RS.writing.has('O'+id))continue;
+    const ck=RS.shipChunkOf.get(id);if(!ck||!RS.ready.get(ck))continue;
+    let srcOk=false;for(const [k,m] of RS.src.orders)if(m.has(id)&&RS.ready.get(k)){srcOk=true;break;}
+    if(!srcOk)continue;
+    const want=rsDesiredClosed(o,rsShipped(o.id));
+    if(o.closed===want)continue;
+    if(want)RS.sticky.add(id);
+    RS.writing.add('O'+id);
+    db.collection('orders').doc(id).update({closed:want}).catch(e=>console.warn(e)).finally(()=>RS.writing.delete('O'+id));
+  }
+}
+// 點選才讀：確保某期間的資料已載入。已載入回傳 true；否則開始載入、回傳 false，載入完成後呼叫 rerender
+function rsEnsure(kind,from,to,rerender){
+  if(RS.mode!=='scoped')return true;
+  from=from||'2000-01-01';to=to||'2999-12-31';
+  if((kind==='ci'||kind==='ship')&&from>=RS.hotFrom)return true;
+  for(const p of RS.periods.values()){
+    if(p.kind===kind&&p.from<=from&&p.to>=to){if(p.ready)return true;if(rerender)p.cbs.push(rerender);return false;}
+  }
+  const key=`${kind}:${from}~${to}`;
+  const p={kind,from,to,ready:false,cbs:rerender?[rerender]:[],pending:0};
+  RS.periods.set(key,p);
+  let col,qs=[];
+  if(kind==='disp'){
+    col='dispatches';
+    qs.push(db.collection('dispatches').where('createdAt','>=',rsTWStartISO(from)).where('createdAt','<',rsTWStartISO(rsAddDays(to,1))));
+    qs.push(db.collection('dispatches').where('effectiveDate','>=',from).where('effectiveDate','<=',to));
+  }else if(kind==='ci'){col='checkins';qs.push(db.collection('checkins').where('date','>=',from).where('date','<=',to));}
+  else{col='shipments';qs.push(db.collection('shipments').where('date','>=',from).where('date','<=',to));}
+  p.pending=qs.length;
+  qs.forEach((q,i)=>rsListen(col,key+'#'+i,q,()=>{if(--p.pending===0)rsPeriodDone(p);}));
+  setTimeout(()=>rsPeriodDone(p),15000); // 離線時不要一直卡在載入中
+  return false;
+}
+function rsEnsureP(kind,from,to){return new Promise(res=>{if(rsEnsure(kind,from,to,res))res();});}
+function rsPeriodDone(p){
+  if(p.ready)return;p.ready=true;rsFlush();
+  const cbs=p.cbs;p.cbs=[];cbs.forEach(f=>{try{f();}catch(e){console.error(e);}});
+}
+const RS_LOADING='<div class="card" style="text-align:center;color:#888">⏳ 載入中...</div>';
+// 已結案訂單：使用者點選才讀
+window.rsLoadClosed=function(){
+  if(RS.mode!=='scoped'||RS.closedState!=='none')return;
+  RS.closedState='loading';rsRenderNotes();
+  rsListen('orders','o:closed',db.collection('orders').where('closed','==',true),()=>{RS.closedState='loaded';rsRenderNotes();});
+};
+function rsRenderNotes(){
+  const show=RS.mode==='scoped';
+  const msg=RS.closedState==='loaded'?'已載入全部訂單（含已結案）。'
+    :RS.closedState==='loading'?'已結案訂單載入中...'
+    :'目前只顯示未結案的訂單（已完成且全數出貨的訂單不會自動讀取）。 <button class="btn btn-sm" onclick="rsLoadClosed()" style="margin-left:6px">載入已結案訂單</button>';
+  ['rs-note-orders','rs-note-shipping'].forEach(id=>{
+    const el=document.getElementById(id);if(!el)return;
+    el.style.display=show?'block':'none';el.innerHTML=show?msg:'';
+  });
+  const st=document.getElementById('rs-status');
+  if(st)st.innerHTML=RS.mode==='scoped'
+    ?'<span style="color:#2E7D32;font-weight:600">已啟用</span>：只自動讀取未結案訂單與近期資料。'
+    :RS.mode==='legacy'?'<span style="color:#E65100;font-weight:600">未啟用</span>：每次開啟都讀取全部資料。':'檢查中...';
+  const b1=document.getElementById('rs-btn-enable'),b2=document.getElementById('rs-btn-disable');
+  if(b1)b1.style.display=RS.mode==='legacy'?'':'none';
+  if(b2)b2.style.display=RS.mode==='scoped'?'':'none';
+}
+// 啟用：先完整備份，再替每張訂單算出 closed、每筆出貨補上 orderIds（只新增這兩個欄位）
+window.rsEnable=async function(){
+  if(!confirm('啟用「只讀未結案資料」？\n\n1. 先自動下載完整備份\n2. 每張訂單新增「已結案」欄位、每筆出貨紀錄新增「訂單編號清單」欄位（原有資料不會改變）\n3. 完成後頁面會重新整理\n\n確定開始？'))return;
+  setSS('syncing');
+  try{
+    toast('備份中...');
+    await doFullBackup();
+    toast('計算結案狀態中...');
+    const [oSnap,sSnap]=await Promise.all([db.collection('orders').get(),db.collection('shipments').get()]);
+    const shipped=new Map(),ops=[];
+    sSnap.docs.forEach(d=>{
+      const s=d.data(),want=[...new Set((s.allocations||[]).map(a=>a.orderId).filter(rsValidId).map(String))];
+      (s.allocations||[]).forEach(a=>shipped.set(a.orderId,(shipped.get(a.orderId)||0)+(a.qty||0)));
+      if(want.length&&JSON.stringify(s.orderIds||null)!==JSON.stringify(want))ops.push([d.ref,{orderIds:want}]);
+    });
+    let nClosed=0;
+    oSnap.docs.forEach(d=>{
+      const o={id:d.id,...d.data()},want=rsDesiredClosed(o,shipped.get(o.id)||0);
+      if(want)nClosed++;
+      if(o.closed!==want)ops.push([d.ref,{closed:want}]);
+    });
+    for(let i=0;i<ops.length;i+=400){
+      const b=db.batch();ops.slice(i,i+400).forEach(([ref,patch])=>b.update(ref,patch));
+      await b.commit();
+      toast(`寫入中 ${Math.min(i+400,ops.length)}/${ops.length}...`);
+    }
+    await db.collection('system').doc('readScope').set({ready:true,enabledAt:new Date().toISOString()});
+    alert(`完成：共 ${oSnap.size} 張訂單，其中 ${nClosed} 張已結案。\n頁面將重新整理。`);
+    location.reload();
+  }catch(e){console.error(e);setSS('err');alert('啟用失敗，系統維持原本的讀取方式：'+e.message);}
+};
+window.rsDisable=async function(){
+  if(!confirm('停用後，管理端會恢復成每次讀取全部資料（已新增的欄位保留，不影響使用）。確定停用？'))return;
+  await db.collection('system').doc('readScope').set({ready:false,disabledAt:new Date().toISOString()},{merge:true});
+  location.reload();
+};
+async function rsStart(){
+  let ready=false;
+  try{const s=await db.collection('system').doc('readScope').get();ready=!!(s.exists&&s.data().ready);}
+  catch(e){console.warn('[讀取範圍] 無法讀取設定，使用完整讀取',e);}
+  RS.hotFrom=rsTWDate(-RS.HOT_DAYS);
+  if(!ready){
+    RS.mode='legacy';
+    ['orders','dispatches','checkins','shipments'].forEach(col=>rsListen(col,'all',db.collection(col)));
+  }else{
+    RS.mode='scoped';
+    rsListen('orders','o:open',db.collection('orders').where('closed','==',false));
+    rsListen('orders','o:new',db.collection('orders').where('createdAt','>=',new Date(Date.now()-RS.NEW_DAYS*864e5).toISOString()));
+    rsListen('dispatches','d:report',db.collection('dispatches').where('lastReportAt','>=',new Date(Date.now()-RS.HOT_DAYS*864e5).toISOString()));
+    rsListen('dispatches','d:scheduled',db.collection('dispatches').where('effectiveDate','>=',rsTWDate(0)));
+    rsListen('dispatches','d:adjust',db.collection('dispatches').where('adjustStatus','==','待確認')); // 員工申請調整：不管多久以前都要顯示
+    rsListen('checkins','c:hot',db.collection('checkins').where('date','>=',RS.hotFrom));
+    rsListen('shipments','s:hot',db.collection('shipments').where('date','>=',RS.hotFrom));
+  }
+  rsRenderNotes();
+}
+rsStart();
 
 async function saveOrder(o){setSS('syncing');try{await db.collection('orders').doc(o.id).set(o);setSS('ok');}catch(e){setSS('err');toast('儲存失敗');}}
 async function saveDispatch(d){setSS('syncing');try{await db.collection('dispatches').doc(String(d.id)).set(d);setSS('ok');}catch(e){setSS('err');}}
@@ -689,7 +986,7 @@ window.parseOrderPaste=async function(){
     if(!price){const f=lookupProduct(name);if(f)price=f.price;}
     let ds=dateVal.replace(/\//g,'-').replace(/(\d{4})-(\d{1,2})-(\d{1,2})/,(_,y,m,d)=>`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`);
     const uid=`ORD-${Date.now().toString(36).toUpperCase()}-${String(imported.length).padStart(3,'0')}`;
-    imported.push({id:uid,date:ds,orderno,name,spec,qty,price,done:0,defect:0,shortage:0,createdAt:new Date().toISOString()});
+    imported.push({id:uid,date:ds,orderno,name,spec,qty,price,done:0,defect:0,shortage:0,closed:false,createdAt:new Date().toISOString()});
   });
   if(!imported.length){alert('無法解析資料，請確認格式');return;}
 
@@ -703,6 +1000,8 @@ window.parseOrderPaste=async function(){
   let toImport=imported;
   if(duplicates.length>0){
     const dupList=duplicates.map(d=>`${d.orderno} ${d.name}${d.spec?' '+d.spec:''}`).join('\n');
+    const dupOld=window.DB.orders.filter(o=>duplicates.some(imp=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''))).map(o=>o.id);
+    if(!rsGuard(dupOld))return;
     const choice=confirm(`發現 ${duplicates.length} 筆重複訂單：\n${dupList}\n\n點「確定」→ 覆蓋重複的訂單\n點「取消」→ 跳過重複，只匯入新訂單`);
     if(choice){
       // 覆蓋：刪除舊的重複訂單，全部匯入
@@ -738,21 +1037,18 @@ window.parseOrderPaste=async function(){
 window.saveManual=async function(){
   const name=document.getElementById('m-name').value.trim(),qty=parseFloat(document.getElementById('m-qty').value)||0;
   if(!name)return alert('請輸入品名');if(qty<=0)return alert('請輸入有效數量');
-  await saveOrder({id:genId('ORD'),date:document.getElementById('m-date').value,orderno:document.getElementById('m-orderno').value.trim(),name,spec:document.getElementById('m-spec').value.trim(),qty,price:parseFloat(document.getElementById('m-price').value)||0,done:0,defect:0,shortage:0,createdAt:new Date().toISOString()});
+  await saveOrder({id:genId('ORD'),date:document.getElementById('m-date').value,orderno:document.getElementById('m-orderno').value.trim(),name,spec:document.getElementById('m-spec').value.trim(),qty,price:parseFloat(document.getElementById('m-price').value)||0,done:0,defect:0,shortage:0,closed:false,createdAt:new Date().toISOString()});
   closePanel('manual-panel');toast('訂單已新增');
 }
 window.setOrderDateRange=function(range){
-  const now=new Date();
-  const pad=n=>String(n).padStart(2,'0');
-  const y=now.getFullYear(),m=now.getMonth();
+  const now=twNow();
+  const y=now.getUTCFullYear(),m=now.getUTCMonth();
   if(range==='month'){
-    document.getElementById('order-from').value=`${y}-${pad(m+1)}-01`;
-    document.getElementById('order-to').value=now.toISOString().slice(0,10);
+    document.getElementById('order-from').value=twDateStr(y,m,1);
+    document.getElementById('order-to').value=twToday();
   }else if(range==='lastmonth'){
-    let ly=y,lm=m-1;if(lm<0){lm=11;ly--;}
-    const lastDay=new Date(ly,lm+1,0).getDate();
-    document.getElementById('order-from').value=`${ly}-${pad(lm+1)}-01`;
-    document.getElementById('order-to').value=`${ly}-${pad(lm+1)}-${lastDay}`;
+    document.getElementById('order-from').value=twDateStr(y,m-1,1);
+    document.getElementById('order-to').value=twDateStr(y,m,0);
   }
   renderOrders();
 }
@@ -791,6 +1087,7 @@ window.toggleAllOrders=function(allCk){
 window.delSelectedOrders=async function(){
   const ids=[...window._selectedOrderForDel];
   if(!ids.length)return;
+  if(!rsGuard(ids))return;
   if(!confirm(`確定刪除選取的 ${ids.length} 筆訂單？\n（相關派工記錄也會一併刪除）`))return;
   setSS('syncing');
   // 收集所有要刪除的 dispatch（避免重複刪除同一筆合併記錄）
@@ -1025,6 +1322,7 @@ window.editOrderQty=async function(orderId,newVal,inputEl){
   const o=window.DB.orders.find(x=>x.id===orderId);
   if(!o)return;
   if(qty===(o.qty||0))return;
+  if(!rsGuard([orderId])){inputEl.value=o.qty||0;return;}
   setSS('syncing');
   try{
     // 更新訂單數量
@@ -1044,6 +1342,7 @@ window.editOrderPrice=async function(orderId, newVal, inputEl){
   const o=window.DB.orders.find(x=>x.id===orderId);
   if(!o)return;
   if(price===(o.price||0))return; // 沒有變更
+  if(!rsGuard([orderId])){inputEl.value=o.price||0;return;}
   o.price=price;
   await saveOrder(o);
   // 同步更新所有相關派工記錄的 itemPrice
@@ -1074,6 +1373,7 @@ window.applyDbPrice=async function(orderId){
   if(!dbP){toast('品名單價資料庫查無對應品項');return;}
   const price=dbP.price;
   if(price===(o.price||0))return;
+  if(!rsGuard([orderId]))return;
   const related=findRelatedDispatches(orderId);
   const reported=related.filter(d=>(d.doneQty||0)>0);
   const confirmed=related.filter(d=>d.adminConfirmed);
@@ -1097,6 +1397,7 @@ window.applyDbPrice=async function(orderId){
   renderOrders();
 }
 window.delOrder=async function(id){
+  if(!rsGuard([id]))return;
   if(!confirm('確定刪除此訂單？'))return;
   await db.collection('orders').doc(id).delete();
   const toDelete=findRelatedDispatches(id);
@@ -1122,9 +1423,10 @@ function getOrderStatus(o){
 }
 // 初始化派工表單預設值
 function initDispatchForm(){
-  const today=new Date().toISOString().slice(0,10);
+  const today=toTW(new Date().toISOString(),false); // 台灣日期（toISOString 是格林威治時間，早上 8 點前會變成前一天）
   const el=document.getElementById('d-effective-date');
-  if(el&&!el.value)el.value=today;
+  // 空白、或還停留在前幾天（例如管理端從昨天開著沒關）→ 改回今天；預約的未來日期保留
+  if(el&&(!el.value||el.value<today))el.value=today;
 }
 window._selectedOrderIds=new Set(); // 複選訂單
 let _dispatchSearchTimer=null;
@@ -1250,9 +1552,10 @@ window.createDispatch=async function(){
   const ids=[...window._selectedOrderIds];
   const selectedWorkers=Array.from(document.querySelectorAll('#d-worker-checks input:checked')).map(c=>c.value);
   if(!ids.length)return alert('請勾選至少一筆訂單');
+  if(!rsGuard(ids))return;
   if(!selectedWorkers.length)return alert('請選擇至少一名員工');
   const note=document.getElementById('d-note').value;
-  const effectiveDate=document.getElementById('d-effective-date').value||new Date().toISOString().slice(0,10);
+  const effectiveDate=document.getElementById('d-effective-date').value||toTW(new Date().toISOString(),false);
   const sequenceVal=document.getElementById('d-sequence').value;
   const sequence=sequenceVal?parseInt(sequenceVal):null;
   const assignQtyInput=document.getElementById('d-assign-qty').value;
@@ -1297,7 +1600,7 @@ window.createDispatch=async function(){
   document.getElementById('d-note').value='';
   document.getElementById('d-sequence').value='';
   document.getElementById('d-assign-qty').value='';
-  const today=new Date().toISOString().slice(0,10);
+  const today=toTW(new Date().toISOString(),false);
   document.getElementById('d-effective-date').value=today;
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
   window._selectedOrderIds=new Set();
@@ -1476,6 +1779,7 @@ window.confirmAddWorkers=async function(orderId){
 }
 window.deleteDispatch=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
+  if(!rsGuard([d.orderId]))return;
   if(!confirm(`確定刪除「${d.worker}」的派工記錄？\n（已回報的數量也會從訂單中扣除）`))return;
   const o=window.DB.orders.find(x=>x.id===d.orderId);
   if(o){
@@ -1544,6 +1848,7 @@ window.openAdjust=function(id){
 }
 window.submitAdjust=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
+  if(!rsGuard([d.orderId]))return;
   const done=parseInt(document.getElementById('adj-done').value)||0;
   const def=parseInt(document.getElementById('adj-def').value)||0;
   const sho=parseInt(document.getElementById('adj-sho').value)||0;
@@ -1651,16 +1956,16 @@ window.setCIMode=function(mode){
 }
 
 window.setCIDateRange=function(range){
-  const now=new Date(),fmt=d=>d.toISOString().slice(0,10);
+  const now=twNow(),today=twToday();
   let from,to;
-  if(range==='today'){from=to=fmt(now);}
+  if(range==='today'){from=to=today;}
   else if(range==='week'){
-    const day=now.getDay()||7;
-    from=fmt(new Date(now.getFullYear(),now.getMonth(),now.getDate()-day+1));
-    to=fmt(now);
+    const day=now.getUTCDay()||7; // 週一為一週的開始
+    from=twDateStr(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()-day+1);
+    to=today;
   }else{
-    from=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`;
-    to=fmt(now);
+    from=twDateStr(now.getUTCFullYear(),now.getUTCMonth(),1);
+    to=today;
   }
   document.getElementById('ci-from').value=from;
   document.getElementById('ci-to').value=to;
@@ -1668,8 +1973,8 @@ window.setCIDateRange=function(range){
 }
 
 window.setCIWorkerMonth=function(offset,btn){
-  const now=new Date();
-  let y=now.getFullYear(),m=now.getMonth()+offset;
+  const now=twNow();
+  let y=now.getUTCFullYear(),m=now.getUTCMonth()+offset;
   while(m<0){m+=12;y--;}while(m>11){m-=12;y++;}
   const pad=n=>String(n).padStart(2,'0');
   const lastDay=new Date(y,m+1,0).getDate();
@@ -1683,6 +1988,9 @@ window.setCIWorkerMonth=function(offset,btn){
 }
 
 function renderCheckins(){
+  {const r=ciMode==='date'?[document.getElementById('ci-from')?.value||'',document.getElementById('ci-to')?.value||'']:[ciWorkerFrom||'',ciWorkerTo||''];
+   const need=document.getElementById('pg-checkin')?.classList.contains('active')&&(ciMode==='date'||!!document.getElementById('ci-worker-w')?.value);
+   if(need&&!rsEnsure('ci',r[0],r[1],()=>renderCheckins())){const tb=document.getElementById('ci-tbody');if(tb)tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:#888">⏳ 載入中...</td></tr>';return;}}
   const today=toTW(new Date().toISOString(),false);
   let list=window.DB.checkins;
   let workerFilter='';
@@ -1762,8 +2070,8 @@ function renderCheckins(){
 // ── 薪資 ──
 function setPayPeriod(offset,btn){
   // offset=0 → 本月；offset=-1 → 上月；offset=-2 → 上上月
-  const now=new Date();
-  let year=now.getFullYear(),month=now.getMonth()+offset;
+  const now=twNow();
+  let year=now.getUTCFullYear(),month=now.getUTCMonth()+offset;
   while(month<0){month+=12;year--;}while(month>11){month-=12;year++;}
   const pad=n=>String(n).padStart(2,'0');
   const lastDay=new Date(year,month+1,0).getDate();
@@ -1789,6 +2097,7 @@ window.calcSalary=function(){
   const filterWorker=document.getElementById('sal-worker').value;
   const kw=document.getElementById('sal-keyword')?.value.trim().toLowerCase()||'';
   if(!from||!to)return alert('請選擇日期範圍');
+  if(!rsEnsure('disp',from,to,()=>calcSalary())){document.getElementById('sal-result').innerHTML=RS_LOADING;window._salaryRows=[];return;}
   const rows=[];
   window.DB.dispatches.forEach(d=>{
     const dt=dispWorkDate(d);if(dt<from||dt>to)return;
@@ -1798,7 +2107,7 @@ window.calcSalary=function(){
     rows.push(d);
   });
   const el=document.getElementById('sal-result');
-  if(!rows.length){el.innerHTML=`<div class="card" style="text-align:center;color:#aaa">${kw?`此期間查無「${kw}」相關的薪資記錄`:'此期間無薪資記錄'}</div>`;return;}
+  if(!rows.length){el.innerHTML=`<div class="card" style="text-align:center;color:#aaa">${kw?`此期間查無「${kw}」相關的薪資記錄`:'此期間無薪資記錄'}</div>`;renderSalaryMaterials(from,to,filterWorker,{});return;}
 
   // 摘要
   const map={};
@@ -1885,12 +2194,14 @@ window.calcSalary=function(){
   // 儲存 TSV 供複製（不含標題列）
   window._salaryTSV=tsvForCopy;
   window._salaryRows=detailRows;
+  renderSalaryMaterials(from,to,filterWorker,map);
 }
 window.editSalaryPrice=async function(dispatchId, orderId, newVal, inputEl){
   const price=parseFloat(newVal);
   if(isNaN(price)||price<0){inputEl.value=0;return;}
   const d=window.DB.dispatches.find(x=>x.id===dispatchId);
   if(!d||price===(d.itemPrice||0))return;
+  if(!rsGuard([orderId||d.orderId])){inputEl.value=d.itemPrice||0;return;}
   // 找出此訂單所有相關派工記錄（含合併派工）
   const related=findRelatedDispatches(orderId||d.orderId);
   // 同步所有派工記錄
@@ -1909,15 +2220,26 @@ window.editSalaryPrice=async function(dispatchId, orderId, newVal, inputEl){
   // 回寫訂單單價（不動產品資料庫）
   const o=window.DB.orders.find(x=>x.id===(orderId||d.orderId));
   if(o){o.price=price;await saveOrder(o);}
-  // 重新渲染薪資表（更新合計）
-  renderSalaryWorkers();
+  // 重新計算薪資表：更新摘要、合計，以及「複製到 Excel」「匯出」「列印」使用的資料
+  // （原本這裡只重建員工下拉選單，摘要與複製內容仍是舊單價）
+  // 重算會重畫表格，所以保留捲動位置，以及游標所在的單價欄與其中尚未送出的輸入
+  const act=document.activeElement;
+  const actKey=act&&act.tagName==='INPUT'?act.getAttribute('onchange'):null;
+  const actVal=actKey?act.value:null;
+  const scrollY=window.scrollY;
+  if(document.getElementById('sal-detail-tbl'))calcSalary();
+  window.scrollTo(0,scrollY);
+  if(actKey){
+    const again=[...document.querySelectorAll('#sal-result input')].find(e=>e.getAttribute('onchange')===actKey);
+    if(again){again.value=actVal;again.focus();}
+  }
   toast(`單價已更新為 $${price}，同步 ${related.length} 筆派工記錄`);
 }
 // ── 備份系統 ──
 function checkBackupReminder(){
-  const today=new Date().toISOString().slice(0,10);
+  const today=twToday();
   const lastBackup=localStorage.getItem('lastBackupDate');
-  const hour=new Date().getHours();
+  const hour=twNow().getUTCHours();
   const banner=document.getElementById('backup-reminder');
   if(banner){
     // 超過中午12點且今天未備份
@@ -1950,20 +2272,23 @@ function downloadJson(filename,obj){
   URL.revokeObjectURL(url);
 }
 window.doFullBackup=async function(){
-  const today=new Date().toISOString().slice(0,10);
+  const today=twToday();
   setSS('syncing');
   try{
+    // ── 0. 備份一律向資料庫讀取完整資料（管理端平常只載入未結案資料，畫面上的資料不完整）──
+    toast('備份：讀取完整資料中...');
+    const cols=['orders','dispatches','checkins','shipments','materialRequests','payslips','system'];
+    const snaps=await Promise.all(cols.map(c=>db.collection(c).get()));
+    const ALL={};cols.forEach((c,i)=>ALL[c]=snaps[i].docs.map(d=>({id:d.id,...d.data()})));
     // ── 1. JSON 完整備份 ──
     downloadJson(`backup-${today}.json`,{
       exportedAt:new Date().toISOString(),
-      orders:window.DB.orders,
-      dispatches:window.DB.dispatches,
-      checkins:window.DB.checkins,
+      ...ALL,
     });
 
     // ── 2. 打卡記錄 xlsx ──
     const ciMonth=today.slice(0,7);
-    const ciList=window.DB.checkins
+    const ciList=ALL.checkins
       .filter(c=>c.date&&c.date.startsWith(ciMonth))
       .sort((a,b)=>a.date.localeCompare(b.date));
     const ciHeader=['日期','員工','上班時間','下班時間','工時(h)','假別','備註','狀態'];
@@ -1985,7 +2310,7 @@ window.doFullBackup=async function(){
     // ── 3. 薪資計算 xlsx ──
     const salMonth=ciMonth;
     const [salFrom,salTo]=getSalDateRange(salMonth);
-    const salDisps=window.DB.dispatches
+    const salDisps=ALL.dispatches
       .filter(d=>{const dt=dispWorkDate(d);return dt>=salFrom&&dt<=salTo&&(d.doneQty||0)>0;})
       .sort((a,b)=>dispWorkDate(a).localeCompare(dispWorkDate(b)));
     const salHeader=['日期','加工者','訂單號','品名','規格','加工單價','完成數量','金額'];
@@ -2000,16 +2325,13 @@ window.doFullBackup=async function(){
     document.getElementById('backup-reminder').style.display='none';
     setSS('ok');
     toast('備份完成 ✓ 共下載 3 個檔案：JSON、打卡記錄、薪資計算');
-  }catch(e){console.error(e);setSS('err');toast('備份失敗，請重試：'+e.message);}
+    return true;
+  }catch(e){console.error(e);setSS('err');toast('備份失敗，請重試：'+e.message);throw e;}
 }
 function getSalDateRange(yearMonth){
   // 薪資計算範圍（上個月的完整月份）
   const [y,m]=yearMonth.split('-').map(Number);
-  const prev=new Date(y,m-2,1);
-  const from=prev.toISOString().slice(0,10);
-  const last=new Date(y,m-1,0);
-  const to=last.toISOString().slice(0,10);
-  return[from,to];
+  return[twDateStr(y,m-2,1),twDateStr(y,m-1,0)]; // 純日期計算，不經過時區換算
 }
 window.exportSalaryXlsx=function(){
   if(!window._salaryRows||!window._salaryRows.length)return alert('請先選擇員工及日期範圍');
@@ -2043,6 +2365,15 @@ window.copySalaryTSV=function(){
 window.printSalary=function(){
   const tbl=document.getElementById('sal-detail-tbl');
   if(!tbl)return;
+  // 複製表格時，輸入欄只會帶出「畫面剛產生時」的值（例如改單價前的 0），
+  // 所以先把每個輸入欄換成它目前顯示的數字再列印
+  const printTbl=tbl.cloneNode(true);
+  const liveInputs=tbl.querySelectorAll('input,select,textarea');
+  printTbl.querySelectorAll('input,select,textarea').forEach((el,i)=>{
+    const span=document.createElement('span');
+    span.textContent=liveInputs[i]?liveInputs[i].value:el.value;
+    el.replaceWith(span);
+  });
   const from=document.getElementById('sal-from').value,to=document.getElementById('sal-to').value;
   const w=window.open('','_blank','width=900,height=700');
   w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>薪資明細</title>
@@ -2052,12 +2383,471 @@ window.printSalary=function(){
   th{background:#f5f5f5;font-weight:600}.num{text-align:right}.total{background:#f0f7f0;font-weight:600}
   @media print{button{display:none}}</style></head><body>
   <h2>薪資加工明細</h2><p>期間：${from} ～ ${to}</p>
-  ${tbl.innerHTML}
+  ${printTbl.innerHTML}
   <div style="margin-top:16px;text-align:right"><button onclick="window.print()">列印</button></div>
   </body></html>`);
   w.document.close();
   setTimeout(()=>w.print(),500);
 }
+
+// ══ 員工薪資資料（system/employeeInfo，新文件，不動員工名單） ══
+// {byName:{員工姓名:{hireDate:'YYYY-MM-DD', items:[{label,amount}]}}}
+window.EMPINFO={byName:{},ready:false};
+const _empInfoCbs=new Set();
+db.collection('system').doc('employeeInfo').onSnapshot(s=>{
+  EMPINFO.byName=s.exists?(s.data().byName||{}):{};EMPINFO.ready=true;
+  _empInfoCbs.forEach(f=>{try{f();}catch(e){console.error(e);}});
+  renderEmpInfo();
+},e=>console.warn('employeeInfo',e));
+function _ymAdd(ym,k){let[y,m]=ym.split('-').map(Number);m+=k;while(m<1){m+=12;y--;}while(m>12){m-=12;y++;}return y+'-'+String(m).padStart(2,'0');}
+// 年資（年）：計薪月份 payMonth（YYYY-MM）時已生效的滿週年數。滿週年的「次月」才生效。
+function seniorityYears(hireDate,payMonth){
+  if(!hireDate||!/^\d{4}-\d{2}/.test(hireDate))return 0;
+  const hm=hireDate.slice(0,7);let n=0;
+  while(n<100&&_ymAdd(hm,12*(n+1))<payMonth)n++;
+  return n;
+}
+function seniorityBonus(hireDate,payMonth){return seniorityYears(hireDate,payMonth)*500;}
+window.seniorityYears=seniorityYears;window.seniorityBonus=seniorityBonus;
+const toROC=d=>{if(!d)return'';const[y,m,dd]=d.split('-');return`${Number(y)-1911}.${m}.${dd}`;};
+let _empEdit=null; // {name,hireDate,items:[{label,amount}]}
+function renderEmpInfo(){
+  const list=document.getElementById('empinfo-list');if(!list)return;
+  const pm=new Date(Date.now()+8*3600e3).toISOString().slice(0,7);
+  const emps=window.DB.employees||[];
+  list.innerHTML=emps.length?`<div class="tbl-wrap"><table class="tbl" style="min-width:560px"><thead><tr><th>員工</th><th>到職日</th><th class="col-num">本月年資獎金</th><th>固定加扣項目</th><th></th></tr></thead><tbody>`+
+    emps.map(e=>{const info=EMPINFO.byName[e]||{};const items=info.items||[];
+      return`<tr><td style="font-weight:600">${MAT.esc(e)}</td>
+      <td>${info.hireDate?`${info.hireDate}<br><span style="color:#888;font-size:11px">民國 ${toROC(info.hireDate)}・${seniorityYears(info.hireDate,pm)} 年</span>`:'<span style="color:#E65100">未設定</span>'}</td>
+      <td class="col-num">${info.hireDate?'$'+seniorityBonus(info.hireDate,pm).toLocaleString():'—'}</td>
+      <td style="font-size:12px">${items.length?items.map(i=>`${MAT.esc(i.label||'（未命名）')} <span style="color:${i.amount<0?'#C62828':'#2E7D32'}">${i.amount<0?'-':'+'}$${Math.abs(i.amount).toLocaleString()}</span>`).join('<br>'):'<span style="color:#aaa">無</span>'}</td>
+      <td><button class="btn btn-sm" onclick="empInfoEdit('${MAT.esc(e)}')">編輯</button></td></tr>`;}).join('')+`</tbody></table></div>`
+    :'<div style="color:#aaa">尚無員工</div>';
+  renderEmpInfoEditor();
+}
+function renderEmpInfoEditor(){
+  const ed=document.getElementById('empinfo-editor');if(!ed)return;
+  const f=_empEdit;if(!f){ed.innerHTML='';return;}
+  ed.innerHTML=`<div class="card" style="border:1.5px solid #185FA5;margin-bottom:10px">
+    <div style="font-weight:600;margin-bottom:8px">編輯：${MAT.esc(f.name)}</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <label style="margin:0">到職日</label><input type="date" id="ei-hire" value="${MAT.esc(f.hireDate||'')}" style="width:auto" oninput="_empEdit.hireDate=this.value;document.getElementById('ei-roc').textContent=this.value?'民國 '+toROC(this.value):''">
+      <span id="ei-roc" style="font-size:12px;color:#888">${f.hireDate?'民國 '+toROC(f.hireDate):''}</span>
+    </div>
+    <div style="font-size:12px;color:#888;margin-bottom:6px">固定加扣項目（名稱可空白；扣款請填負數，例如 -2300）</div>
+    ${f.items.map((it,i)=>`<div style="display:flex;gap:6px;margin-bottom:6px">
+      <input placeholder="名稱（可空白）" value="${MAT.esc(it.label)}" oninput="_empEdit.items[${i}].label=this.value" style="flex:2">
+      <input type="number" step="1" placeholder="金額" value="${MAT.esc(it.amount)}" oninput="_empEdit.items[${i}].amount=this.value" style="flex:1;text-align:right">
+      <button class="btn btn-sm" onclick="_empEdit.items.splice(${i},1);renderEmpInfoEditor()">✕</button></div>`).join('')}
+    <button class="btn btn-sm" onclick="_empEdit.items.push({label:'',amount:''});renderEmpInfoEditor()" style="margin-bottom:10px">＋ 新增項目</button>
+    <div style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" onclick="empInfoSave()">儲存</button><button class="btn btn-sm" onclick="_empEdit=null;renderEmpInfoEditor()">取消</button></div>
+  </div>`;
+}
+window.empInfoEdit=function(name){
+  const info=EMPINFO.byName[name]||{};
+  _empEdit={name,hireDate:info.hireDate||'',items:(info.items||[]).map(i=>({label:i.label||'',amount:i.amount}))};
+  renderEmpInfoEditor();document.getElementById('empinfo-editor').scrollIntoView({block:'nearest'});
+}
+window.empInfoSave=async function(){
+  const f=_empEdit;if(!f)return;
+  if(!EMPINFO.ready)return alert('資料同步中，請稍候再試');
+  if(f.hireDate&&!/^\d{4}-\d{2}-\d{2}$/.test(f.hireDate))return alert('到職日格式不正確');
+  const items=[];
+  for(const it of f.items){
+    if((it.label||'').trim()===''&&(it.amount===''||it.amount==null))continue;
+    const a=Number(it.amount);
+    if(it.amount===''||!Number.isInteger(a)||a===0)return alert(`「${it.label||'未命名'}」的金額需為非 0 的整數（扣款填負數）`);
+    items.push({label:(it.label||'').trim(),amount:a});
+  }
+  // merge：只更新這位員工，不覆蓋另一台電腦同時修改的其他員工
+  try{await db.collection('system').doc('employeeInfo').set({byName:{[f.name]:{hireDate:f.hireDate||'',items}}},{merge:true});_empEdit=null;toast(`已儲存 ${f.name} 的薪資資料`);renderEmpInfo();}
+  catch(e){toast('儲存失敗，請重試');}
+}
+
+// ── 耗材：設定頁 ──
+let _matDraft=null; // 編輯中的品項（未儲存前不被即時更新覆蓋）
+// redraw=true：依草稿或已存資料重畫品項表；false（資料即時更新時）：有未儲存的編輯就不動品項表
+function renderMatSettings(redraw){
+  if(!window.MAT)return;
+  const ed=document.getElementById('mat-items-editor');
+  if(ed&&(redraw||!_matDraft)){
+    const rows=_matDraft||MAT.items;
+    ed.innerHTML=rows.length?`<div class="tbl-wrap"><table class="tbl" style="min-width:420px"><thead><tr><th>品名</th><th>規格</th><th>單位</th><th class="col-num">單價</th><th>啟用</th></tr></thead><tbody>`+
+      rows.map(r=>`<tr data-mid="${MAT.esc(r.id)}">
+        <td><input data-f="name" value="${MAT.esc(r.name)}" oninput="matDirty()"></td>
+        <td><input data-f="spec" value="${MAT.esc(r.spec||'')}" oninput="matDirty()"></td>
+        <td><input data-f="unit" value="${MAT.esc(r.unit||'')}" style="width:60px" oninput="matDirty()"></td>
+        <td><input data-f="price" type="number" min="0" step="0.01" value="${MAT.esc(r.price)}" style="width:90px;text-align:right" oninput="matDirty()"></td>
+        <td style="text-align:center"><input data-f="active" type="checkbox" ${r.active!==false?'checked':''} style="width:auto" onchange="matDirty()"></td></tr>`).join('')+
+      `</tbody></table></div>`:'<div style="color:#aaa;font-size:13px">尚無耗材品項，請按「新增品項」</div>';
+  }
+  const kp=document.getElementById('mat-keepers');
+  if(kp){
+    kp.innerHTML=window.DB.employees.length?window.DB.employees.map(e=>`<label style="display:inline-flex;align-items:center;gap:6px;margin:0 14px 8px 0;font-size:13px">
+      <input type="checkbox" style="width:auto" data-emp="${MAT.esc(e)}" ${MAT.isKeeper(e)?'checked':''} onchange="matKeeperToggle(this)">${MAT.esc(e)}</label>`).join(''):'<div style="color:#aaa">尚無員工</div>';
+  }
+}
+function _matReadDraft(){
+  const ed=document.getElementById('mat-items-editor');
+  return[...ed.querySelectorAll('tr[data-mid]')].map(tr=>{
+    const g=f=>tr.querySelector(`[data-f="${f}"]`);
+    return{id:tr.dataset.mid,name:g('name').value.trim(),spec:g('spec').value.trim(),unit:g('unit').value.trim(),
+      price:g('price').value===''?'':Number(g('price').value),active:g('active').checked};
+  });
+}
+window.matDirty=function(){document.getElementById('mat-items-dirty').textContent='尚未儲存';_matDraft=_matReadDraft();}
+window.matItemAdd=function(){
+  const rows=document.querySelector('#mat-items-editor tr[data-mid]')?_matReadDraft():MAT.items.map(x=>({...x}));
+  rows.push({id:'MAT-'+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,5).toUpperCase(),name:'',spec:'',unit:'',price:'',active:true});
+  _matDraft=rows;document.getElementById('mat-items-dirty').textContent='尚未儲存';
+  renderMatSettings(true);
+}
+window.matItemsSave=async function(){
+  const list=document.querySelector('#mat-items-editor tr[data-mid]')?_matReadDraft():MAT.items;
+  for(const r of list){
+    if(!r.name)return alert('品名不能空白');
+    if(r.price===''||!(r.price>=0))return alert(`「${r.name}」的單價不正確`);
+  }
+  const keys=list.map(r=>r.name+'||'+r.spec);
+  const dup=keys.find((k,i)=>keys.indexOf(k)!==i);
+  if(dup)return alert(`品名＋規格重複：${dup.replace('||',' ')}`);
+  try{await MAT.saveItems(list);_matDraft=null;document.getElementById('mat-items-dirty').textContent='';toast('耗材品項已儲存');renderMatSettings(true);}
+  catch(e){toast('儲存失敗，請重試');}
+}
+window.matKeeperToggle=async function(cb){
+  const name=cb.dataset.emp;
+  const set=new Set(MAT.keepers);cb.checked?set.add(name):set.delete(name);
+  try{await MAT.saveKeepers([...set]);toast(cb.checked?`已設定 ${name} 為耗材管理員`:`已取消 ${name} 的耗材管理員`);}
+  catch(e){cb.checked=!cb.checked;toast('儲存失敗，請重試');}
+}
+if(window.MAT)MAT.onChange(()=>{renderMatSettings(false);if(document.getElementById('sal-mat-body'))renderSalaryMaterials._redraw&&renderSalaryMaterials._redraw();});
+
+// ── 耗材：薪資頁（每人摘要、鎖定本期） ──
+let _salMatToken=0;
+async function renderSalaryMaterials(from,to,filterWorker,salaryMap){
+  const box=document.getElementById('sal-mat');if(!box||!window.MAT)return;
+  const token=++_salMatToken;
+  box.innerHTML='<div class="card" id="sal-mat-body" style="color:#aaa">耗材費用載入中...</div>';
+  let recs;
+  try{recs=await MAT.fetchMonths(MAT.monthsBetween(from,to));}
+  catch(e){if(token===_salMatToken)box.innerHTML='<div class="card" style="color:#C62828">耗材資料載入失敗，請重新計算</div>';return;}
+  if(token!==_salMatToken)return;
+  const draw=()=>{
+    const mat=MAT.summarize(recs,from,to);
+    const workers=[...new Set([...Object.keys(salaryMap),...Object.keys(mat)])]
+      .filter(w=>!filterWorker||w===filterWorker).sort((a,b)=>window.DB.employees.indexOf(a)-window.DB.employees.indexOf(b));
+    const rows=workers.map(w=>({w,sal:Math.round((salaryMap[w]&&salaryMap[w].salary)||0),mat:Math.round(mat[w]||0)}));
+    window._salaryMatTSV=rows.map(r=>[r.w,r.sal,r.mat?-r.mat:0].join('\t')).join('\n');
+    const lockMonth=from.slice(0,7);
+    const locked=MAT.isLocked(lockMonth);
+    const kw=document.getElementById('sal-keyword')?.value.trim();
+    box.innerHTML=`<div class="card" id="sal-mat-body">
+      <div class="card-title">每人摘要（加工金額／耗材費用）</div>
+      ${kw?'<div style="font-size:12px;color:#E65100;margin-bottom:6px">注意：品名篩選只影響加工金額，耗材費用不受影響</div>':''}
+      ${rows.length?`<div class="tbl-wrap"><table class="tbl" style="min-width:360px"><thead><tr><th>員工</th><th class="col-num">加工金額</th><th class="col-num">耗材費用</th></tr></thead><tbody>
+        ${rows.map(r=>`<tr><td>${MAT.esc(r.w)}</td><td class="col-num">$${r.sal.toLocaleString()}</td><td class="col-num" style="color:#C62828">${r.mat?'-$'+r.mat.toLocaleString():'—'}</td></tr>`).join('')}
+        </tbody></table></div>
+        <div style="font-size:11px;color:#888;margin:6px 0">耗材費用 = 期間內領取－退還，四捨五入成整數。複製內容為「員工、加工金額、耗材費用（負數）」，可直接貼到 Excel。</div>
+        <button class="btn btn-sm" onclick="copySalaryMat()">📋 複製每人摘要</button>`:'<div style="color:#aaa;font-size:13px">此期間沒有加工或耗材紀錄</div>'}
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid #eee;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:13px">耗材月份 <b>${lockMonth}</b>：${locked?'<span style="color:#C62828">🔒 已鎖定（只能用退還沖銷）</span>':'<span style="color:#2E7D32">未鎖定（可修改）</span>'}</span>
+        <span style="font-size:12px;color:#888">（鎖定請到「薪資單」頁）</span>
+      </div>
+      ${from.slice(0,7)!==to.slice(0,7)?'<div style="font-size:11px;color:#E65100;margin-top:4px">查詢期間跨月份，鎖定只套用在起始月份</div>':''}
+    </div>`;
+  };
+  renderSalaryMaterials._redraw=()=>{if(token===_salMatToken)draw();};
+  draw();
+}
+window.copySalaryMat=function(){
+  const txt=window._salaryMatTSV||'';if(!txt)return;
+  const done=()=>toast('已複製每人摘要，可貼到 Excel');
+  navigator.clipboard.writeText(txt).then(done).catch(()=>{const ta=document.createElement('textarea');ta.value=txt;ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();document.execCommand('copy');ta.remove();done();});
+}
+window.matLock=async function(m){
+  if(!confirm(`確定鎖定 ${m} 的耗材紀錄？\n鎖定後該月紀錄不能修改或作廢，只能用退還沖銷（記在退還當月）。`))return;
+  try{await MAT.setLock(m,true,'管理者');toast(`${m} 已鎖定`);}catch(e){toast(e.message||'鎖定失敗');}
+}
+window.matUnlock=async function(m){
+  const pw=prompt(`解鎖 ${m} 需要再次輸入管理密碼：`);
+  if(pw===null)return;
+  if(pw!==(typeof ADMIN_PWD!=='undefined'?ADMIN_PWD:'0423'))return alert('密碼錯誤');
+  try{await MAT.setLock(m,false,'管理者');toast(`${m} 已解鎖`);}catch(e){toast(e.message||'解鎖失敗');}
+}
+
+// ══════════════════════════════════════════════════════════════
+// 薪資單（階段四）
+// 資料：payslips/{YYYY-MM}（新集合，不碰既有資料）
+//   草稿：{month,status:'draft',requiredDays,overrides:{員工:{punctual,present,full,fixed,temp,bank,showLate}}}
+//   鎖定：再加上 slips:{員工:薪資單快照（含材料領取與加工完成明細）}, lockedAt
+// 計算：系統能算的自動帶入，overrides 是手動修改；鎖定後一律顯示快照，不再重算
+// ══════════════════════════════════════════════════════════════
+const PS={month:'',doc:null,unsub:null,mats:[],matsMonth:'',open:null,saveTimer:null,pendingSave:{},
+  MEAL:35,FULL:2000,ON_TIME:'08:10'};
+function psMonthRange(m){const[y,mm]=m.split('-').map(Number);const last=new Date(y,mm,0).getDate();return{from:`${m}-01`,to:`${m}-${String(last).padStart(2,'0')}`};}
+const psROCMonth=m=>`${Number(m.slice(0,4))-1911}.${m.slice(5,7)}`;
+const psFmt=n=>{const v=Math.round(Number(n)||0);return(v<0?'-':'')+Math.abs(v).toLocaleString();};
+// 出勤：08:10 以前上班打卡＝出勤（準時）；有上班打卡＝到班（含遲到，用來算伙食）；未拒絕的請假會讓全勤不成立
+function psAttendance(worker,from,to){
+  const cis=(window.DB.checkins||[]).filter(c=>c.worker===worker&&c.date>=from&&c.date<=to);
+  let present=0,punctual=0,leaves=0;
+  cis.forEach(c=>{
+    if(c.leave){if(c.status!=='拒絕')leaves++;return;}
+    if(c.inTime){present++;if(String(c.inTime).slice(0,5)<=PS.ON_TIME)punctual++;}
+  });
+  return{present,punctual,late:present-punctual,leaves};
+}
+function psWorkRows(worker,from,to){
+  return(window.DB.dispatches||[]).filter(d=>d.worker===worker&&(d.doneQty>0)&&dispWorkDate(d)>=from&&dispWorkDate(d)<=to)
+    .sort((a,b)=>dispWorkDate(a).localeCompare(dispWorkDate(b))||(a.createdAt||'').localeCompare(b.createdAt||''))
+    .map(d=>({date:dispWorkDate(d),worker:d.worker,name:d.orderName||'',spec:d.orderSpec||'',qty:d.doneQty||0,price:d.itemPrice||0,amount:(d.doneQty||0)*(d.itemPrice||0)}));
+}
+function psMatRows(worker,from,to){
+  return PS.mats.filter(r=>r.worker===worker&&r.status==='issued'&&r.date>=from&&r.date<=to)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.issuedAt||'').localeCompare(b.issuedAt||''))
+    .flatMap(r=>r.items.map(i=>{const sign=r.type==='return'?-1:1;
+      return{date:r.date,worker:r.worker,name:i.name,spec:i.spec||'',qty:sign*(Number(i.qty)||0),price:Number(i.price)||0,amount:sign*(Number(i.qty)||0)*(Number(i.price)||0),ret:r.type==='return'};}));
+}
+// 員工的薪資單（未鎖定時即時計算；已鎖定時回傳快照）
+function psCompute(worker){
+  const m=PS.month,{from,to}=psMonthRange(m);
+  const doc=PS.doc||{};
+  if(doc.status==='locked'&&doc.slips&&doc.slips[worker])return doc.slips[worker];
+  const ov=(doc.overrides||{})[worker]||{};
+  const info=(window.EMPINFO&&EMPINFO.byName[worker])||{};
+  const att=psAttendance(worker,from,to);
+  const punctual=ov.punctual!=null?Number(ov.punctual):att.punctual;
+  const present=ov.present!=null?Number(ov.present):att.present;
+  const late=Math.max(0,present-punctual);
+  const req=Number(doc.requiredDays)||0;
+  const fullAuto=req>0&&punctual>=req&&att.leaves===0;
+  const fullReason=!req?'尚未輸入應出勤天數':`出勤 ${punctual}／應出勤 ${req}${att.leaves?`、請假 ${att.leaves} 天`:''}${late?`、遲到 ${late} 天`:''}${fullAuto?'，符合全勤':''}`;
+  const full=ov.full!=null?Number(ov.full):(fullAuto?PS.FULL:0);
+  const work=psWorkRows(worker,from,to);
+  const mats=psMatRows(worker,from,to);
+  const workAmt=Math.round(work.reduce((a,r)=>a+r.amount,0));
+  const matAmt=Math.round(mats.reduce((a,r)=>a+r.amount,0));
+  const fixed=(ov.fixed||(info.items||[])).map(i=>({label:i.label||'',amount:Number(i.amount)||0}));
+  const temp=(ov.temp||[]).map(i=>({label:i.label||'',amount:Number(i.amount)||0}));
+  const bonus=seniorityBonus(info.hireDate,m);
+  const meal=present*PS.MEAL;
+  const lines=[];
+  lines.push({label:'加工金額',amount:workAmt});
+  lines.push({label:'年資獎金',amount:bonus});
+  lines.push({label:'全勤',amount:full});
+  fixed.filter(i=>i.amount>0).forEach(i=>lines.push({label:i.label,amount:i.amount}));
+  lines.push({label:'耗材費用',amount:-matAmt});
+  fixed.filter(i=>i.amount<0).forEach(i=>lines.push({label:i.label,amount:i.amount}));
+  lines.push({label:'伙食費用',amount:-meal});
+  temp.filter(i=>i.amount).forEach(i=>lines.push({label:i.label,amount:i.amount}));
+  const gross=lines.reduce((a,l)=>a+l.amount,0);
+  const net=Math.ceil(gross/100)*100;
+  const bank=ov.bank!=null&&ov.bank!==''?Number(ov.bank):net;
+  return{worker,month:m,hireDate:info.hireDate||'',punctual,present,late,leaves:att.leaves,
+    autoPunctual:att.punctual,autoPresent:att.present,requiredDays:req,fullAuto,fullReason,
+    showLate:!!ov.showLate,lines,gross,net,bank,cash:net-bank,fixed,temp,
+    work,mats,workTotal:work.reduce((a,r)=>a+r.amount,0),matTotal:mats.reduce((a,r)=>a+r.amount,0),
+    overridden:{punctual:ov.punctual!=null,present:ov.present!=null,full:ov.full!=null,fixed:!!ov.fixed,bank:ov.bank!=null&&ov.bank!==''}};
+}
+// 這個月要產生薪資單的員工：員工名單中有出勤、加工或耗材紀錄的人，加上已不在名單但當月有紀錄的人
+function psWorkers(){
+  const m=PS.month,{from,to}=psMonthRange(m);
+  if(PS.doc&&PS.doc.status==='locked'&&PS.doc.slips)return Object.keys(PS.doc.slips).sort((a,b)=>psEmpOrder(a)-psEmpOrder(b));
+  const set=new Set();
+  (window.DB.checkins||[]).forEach(c=>{if(c.date>=from&&c.date<=to&&(c.inTime||c.leave))set.add(c.worker);});
+  (window.DB.dispatches||[]).forEach(d=>{if(d.doneQty>0){const dt=dispWorkDate(d);if(dt>=from&&dt<=to)set.add(d.worker);}});
+  PS.mats.forEach(r=>{if(r.status==='issued'&&r.date>=from&&r.date<=to)set.add(r.worker);});
+  return[...set].filter(Boolean).sort((a,b)=>psEmpOrder(a)-psEmpOrder(b));
+}
+function psEmpOrder(w){const i=(window.DB.employees||[]).indexOf(w);return i<0?999:i;}
+// ── 讀取（只讀這個月的薪資單文件與耗材紀錄） ──
+window.psLoad=async function(){
+  const m=document.getElementById('ps-month').value;
+  if(!m)return;
+  if(PS.unsub){PS.unsub();PS.unsub=null;}
+  PS.month=m;PS.doc=null;PS.open=null;PS.mats=[];
+  document.getElementById('ps-body').innerHTML='<div class="card" style="color:#aaa">載入中...</div>';
+  PS.unsub=db.collection('payslips').doc(m).onSnapshot(s=>{if(PS.month!==m)return;PS.doc=s.exists?s.data():null;psRender();},e=>console.warn(e));
+  try{PS.mats=await MAT.fetchMonths([m]);PS.matsMonth=m;}catch(e){toast('耗材資料載入失敗');}
+  {const r=psMonthRange(m);await Promise.all([rsEnsureP('disp',r.from,r.to),rsEnsureP('ci',r.from,r.to)]);}
+  if(PS.month!==m)return;
+  psRender();
+};
+// ── 草稿儲存（合併寫入，只更新改到的欄位） ──
+function psQueue(patch){
+  if(PS.doc&&PS.doc.status==='locked')return;
+  const m=PS.month;
+  const merge=(a,b)=>{for(const k in b){if(b[k]&&typeof b[k]==='object'&&!Array.isArray(b[k])){a[k]=a[k]||{};merge(a[k],b[k]);}else a[k]=b[k];}return a;};
+  merge(PS.pendingSave,patch);
+  // 先套用到畫面上的資料，讓數字立即更新
+  PS.doc=merge(PS.doc||{month:m,status:'draft'},JSON.parse(JSON.stringify(patch)));
+  clearTimeout(PS.saveTimer);
+  // 不立即重畫：離開欄位時立刻重畫會吃掉使用者接著的點擊；稍後與儲存一起重畫
+  PS.saveTimer=setTimeout(()=>{psFlush();psRender();},400);
+}
+async function psFlush(){
+  clearTimeout(PS.saveTimer);
+  const data=PS.pendingSave;PS.pendingSave={};
+  if(!Object.keys(data).length)return;
+  try{await db.collection('payslips').doc(PS.month).set({month:PS.month,status:'draft',...data},{merge:true});}
+  catch(e){toast('薪資單草稿儲存失敗，請重試');}
+}
+const psOv=(w,patch)=>psQueue({overrides:{[w]:patch}});
+window.psSetRequired=v=>psQueue({requiredDays:v===''?0:Math.max(0,parseInt(v)||0)});
+window.psSetNum=(w,k,v)=>psOv(w,{[k]:v===''?null:Number(v)});
+window.psSetLate=(w,v)=>psOv(w,{showLate:!!v});
+window.psReset=(w,k)=>psOv(w,{[k]:null});
+window.psItem=(w,list,i,k,v)=>{
+  const s=psCompute(w);const arr=s[list].map(x=>({...x}));
+  if(k==='del')arr.splice(i,1);else if(k==='add')arr.push({label:'',amount:0});else arr[i][k]=k==='amount'?(Number(v)||0):v;
+  psOv(w,{[list]:arr});
+};
+window.psToggle=w=>{PS.open=PS.open===w?null:w;psRender();};
+// ── 畫面 ──
+function psRender(){
+  const body=document.getElementById('ps-body');if(!body||!PS.month)return;
+  // 重畫前記住游標所在欄位
+  const ae=document.activeElement;
+  const keepKey=ae&&body.contains(ae)&&ae.tagName==='INPUT'?ae.getAttribute('onchange'):null;
+  const keepVal=keepKey?ae.value:null;
+  _psRenderBody(body);
+  if(keepKey){const n=[...body.querySelectorAll('input')].find(e=>e.getAttribute('onchange')===keepKey);if(n){n.value=keepVal;n.focus();}}
+}
+function _psRenderBody(body){
+  const locked=!!(PS.doc&&PS.doc.status==='locked');
+  const ws=psWorkers();
+  const slips=ws.map(psCompute);
+  const req=(PS.doc&&PS.doc.requiredDays)||'';
+  const dis=locked?'disabled':'';
+  body.innerHTML=`<div class="card">
+    <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+      <div><label>應出勤天數（全員共用）</label><input type="number" min="0" step="1" value="${req}" ${dis} onchange="psSetRequired(this.value)" style="width:110px"></div>
+      <div style="font-size:13px">${locked?`<span style="color:#C62828">🔒 已鎖定（${(PS.doc.lockedAt||'').slice(0,10)}），顯示的是鎖定時的快照</span>`:'<span style="color:#2E7D32">草稿：修改會自動儲存</span>'}</div>
+      <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="psPrint()">🖨️ 列印全部個人月結明細</button>
+        ${locked?`<button class="btn btn-sm" onclick="psUnlock()">解鎖</button>`:`<button class="btn btn-warn btn-sm" onclick="psLock()">🔒 鎖定本期</button>`}
+      </div>
+    </div>
+    ${!req&&!locked?'<div style="font-size:12px;color:#E65100;margin-top:6px">請先輸入本月應出勤天數，系統才能判斷全勤</div>':''}
+  </div>
+  ${slips.length?`<div class="card" style="padding:0"><div class="tbl-wrap"><table class="tbl" style="min-width:640px"><thead><tr>
+    <th>員工</th><th class="col-num">出勤/到班</th><th class="col-num">加工金額</th><th class="col-num">全勤</th><th class="col-num">耗材</th><th class="col-num">應領</th><th class="col-num">實領</th><th class="col-num">匯款/現金</th><th></th></tr></thead><tbody>
+    ${slips.map(s=>{const L=k=>(s.lines.find(l=>l.label===k)||{}).amount||0;
+      return`<tr><td style="font-weight:600">${MAT.esc(s.worker)}${s.hireDate?'':' <span style="color:#E65100;font-size:11px">未設到職日</span>'}</td>
+      <td class="col-num">${s.punctual}/${s.present}</td><td class="col-num">${psFmt(L('加工金額'))}</td><td class="col-num">${psFmt(L('全勤'))}</td>
+      <td class="col-num" style="color:#C62828">${psFmt(L('耗材費用'))}</td><td class="col-num">${psFmt(s.gross)}</td><td class="col-num" style="font-weight:700">${psFmt(s.net)}</td>
+      <td class="col-num">${psFmt(s.bank)} / ${psFmt(s.cash)}</td>
+      <td style="white-space:nowrap"><button class="btn btn-sm" onclick="psToggle('${MAT.esc(s.worker)}')">${PS.open===s.worker?'收合':(locked?'查看':'編輯')}</button>
+        <button class="btn btn-sm" onclick="psPrint('${MAT.esc(s.worker)}')">列印</button></td></tr>
+      ${PS.open===s.worker?`<tr><td colspan="9" style="background:#fafafa">${psEditor(s,locked)}</td></tr>`:''}`;}).join('')}
+    </tbody></table></div></div>`:'<div class="card" style="color:#aaa">此月份沒有任何出勤、加工或耗材紀錄</div>'}`;
+}
+function psEditor(s,locked){
+  const w=MAT.esc(s.worker),dis=locked?'disabled':'';
+  const num=(k,v,auto,note)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><label style="width:96px;margin:0">${note}</label>
+    <input type="number" min="0" step="1" value="${v}" ${dis} onchange="psSetNum('${w}','${k}',this.value)" style="width:90px">
+    ${!locked&&s.overridden[k]?`<span style="font-size:11px;color:#E65100">已手動修改（系統：${auto}）</span> <button class="btn btn-sm" onclick="psReset('${w}','${k}')">還原</button>`:`<span style="font-size:11px;color:#888">系統：${auto}</span>`}</div>`;
+  const list=(key,title)=>`<div style="margin:8px 0 4px;font-size:12px;color:#555">${title}${!locked&&s.overridden.fixed&&key==='fixed'?' <span style="color:#E65100">（本月已修改）</span>':''}</div>
+    ${s[key].map((i,idx)=>`<div style="display:flex;gap:6px;margin-bottom:4px"><input value="${MAT.esc(i.label)}" ${dis} placeholder="名稱" onchange="psItem('${w}','${key}',${idx},'label',this.value)" style="flex:2">
+      <input type="number" step="1" value="${i.amount}" ${dis} onchange="psItem('${w}','${key}',${idx},'amount',this.value)" style="flex:1;text-align:right">
+      ${locked?'':`<button class="btn btn-sm" onclick="psItem('${w}','${key}',${idx},'del')">✕</button>`}</div>`).join('')||'<div style="font-size:12px;color:#aaa">無</div>'}
+    ${locked?'':`<button class="btn btn-sm" onclick="psItem('${w}','${key}',0,'add')">＋ 新增</button>`}`;
+  return`<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;padding:6px 0">
+    <div>
+      ${num('punctual',s.punctual,s.autoPunctual,'出勤天數')}
+      ${num('present',s.present,s.autoPresent,'到班天數')}
+      <div style="font-size:11px;color:#888;margin:-2px 0 6px 102px">出勤＝08:10 前打卡；到班含遲到，伙食 = 到班 × ${PS.MEAL}</div>
+      <label style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input type="checkbox" style="width:auto" ${s.showLate?'checked':''} ${dis} onchange="psSetLate('${w}',this.checked)">薪資單顯示遲到天數（${s.late} 天）</label>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px"><label style="width:96px;margin:0">全勤</label>
+        <input type="number" min="0" step="1" value="${(s.lines.find(l=>l.label==='全勤')||{}).amount||0}" ${dis} onchange="psSetNum('${w}','full',this.value)" style="width:90px">
+        ${!locked&&s.overridden.full?`<button class="btn btn-sm" onclick="psReset('${w}','full')">還原</button>`:''}</div>
+      <div style="font-size:11px;color:${s.fullAuto?'#2E7D32':'#888'};margin:0 0 8px 102px">${MAT.esc(s.fullReason)}</div>
+      <div style="display:flex;gap:6px;align-items:center"><label style="width:96px;margin:0">匯款</label>
+        <input type="number" min="0" step="1" value="${s.bank}" ${dis} onchange="psSetNum('${w}','bank',this.value)" style="width:90px">
+        <span style="font-size:12px">現金 ${psFmt(s.cash)}</span></div>
+    </div>
+    <div>${list('fixed','固定加扣項目（來自員工薪資資料，可只改本月）')}${list('temp','本月臨時加扣（借支等）')}</div>
+    <div>${psSlipHtml(s)}</div>
+  </div>`;
+}
+// 薪資單本體（畫面預覽與列印共用）
+function psSlipHtml(s){
+  let run=0;
+  const rows=[];
+  rows.push(`<tr><td>出勤天數</td><td class="n">${s.punctual}</td><td class="n"></td></tr>`);
+  if(s.showLate)rows.push(`<tr><td>遲到天數</td><td class="n">${s.late}</td><td class="n"></td></tr>`);
+  s.lines.forEach(l=>{run+=l.amount;rows.push(`<tr><td>${MAT.esc(l.label)}</td><td class="n">${psFmt(l.amount)}</td><td class="n">${psFmt(run)}</td></tr>`);});
+  rows.push(`<tr><td></td><td class="n">應領</td><td class="n">${psFmt(s.gross)}</td></tr>`);
+  rows.push(`<tr class="b"><td></td><td class="n">實領</td><td class="n">${psFmt(s.net)}</td></tr>`);
+  rows.push(`<tr><td></td><td class="n">匯款</td><td class="n">${psFmt(s.bank)}</td></tr>`);
+  rows.push(`<tr><td></td><td class="n">現金</td><td class="n">${psFmt(s.cash)}</td></tr>`);
+  return`<table class="slip"><tr class="h"><td>${MAT.esc(s.worker)}</td><td class="n">${s.hireDate?toROC(s.hireDate):''}</td><td class="n">月份:${psROCMonth(s.month)}</td></tr>${rows.join('')}</table>`;
+}
+const PS_CSS=`.slip,.det{border-collapse:collapse;width:100%;font-size:11px}.slip td,.det td,.det th{border:1px solid #999;padding:2px 5px}
+.slip .n,.det .n{text-align:right}.slip .h td{font-weight:600}.slip .b td{font-weight:700;border-width:2px}.det th{background:#f0f0f0;font-weight:600}
+.det .ret td{color:#2E7D32}`;
+function psDetailHtml(title,rows,cols){
+  const total=rows.reduce((a,r)=>a+r.amount,0);
+  return`<div style="text-align:center;font-weight:600;font-size:14px;margin:6px 0 2px">${title}</div>
+  <table class="det"><tr><td colspan="2">金額合計:</td><td colspan="${cols.length-2}" class="n">${(Math.round(total*100)/100).toLocaleString()}</td></tr>
+  <tr>${cols.map(c=>`<th>${c[0]}</th>`).join('')}</tr>
+  ${rows.map(r=>`<tr class="${r.ret?'ret':''}">${cols.map(c=>`<td class="${c[2]||''}">${c[1](r)}</td>`).join('')}</tr>`).join('')}</table>`;
+}
+function psPageHtml(s){
+  const matCols=[['日期',r=>r.date.replace(/-0?/g,'/')],['領取人',r=>MAT.esc(r.worker)],['品名',r=>MAT.esc(r.name)+(r.ret?'（退還）':'')],['規格',r=>MAT.esc(r.spec)],['數量',r=>r.qty,'n'],['單價',r=>r.price,'n'],['金額',r=>Math.round(r.amount*100)/100,'n']];
+  const workCols=[['日期',r=>r.date.replace(/-0?/g,'/')],['加工者',r=>MAT.esc(r.worker)],['品名',r=>MAT.esc(r.name)],['規格',r=>MAT.esc(r.spec)],['完成數量',r=>r.qty,'n'],['加工單價',r=>r.price,'n'],['金額',r=>Math.round(r.amount*100)/100,'n']];
+  return`<div class="page"><div class="col l">${psSlipHtml(s)}${psDetailHtml('材料領取記錄',s.mats,matCols)}</div>
+    <div class="col r">${psDetailHtml('加工完成記錄',s.work,workCols)}</div></div>`;
+}
+window.psPrint=function(only){
+  const locked=!!(PS.doc&&PS.doc.status==='locked');
+  const slips=(only?[only]:psWorkers()).map(psCompute);
+  if(!slips.length)return alert('沒有可列印的薪資單');
+  const w=window.open('','_blank','width=1000,height=800');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>個人月結明細 ${PS.month}</title><style>
+    body{font-family:'Microsoft JhengHei',sans-serif;margin:0;padding:10px}${PS_CSS}
+    .page{display:flex;gap:10px;align-items:flex-start;page-break-after:always}.page:last-child{page-break-after:auto}
+    .col.l{width:42%}.col.r{width:58%}.draft{color:#C62828;font-size:12px;margin-bottom:4px}
+    @page{size:A4;margin:8mm}@media print{button{display:none}}</style></head><body>
+    ${locked?'':'<div class="draft">※ 草稿（尚未鎖定），數字可能還會變動</div>'}
+    ${slips.map(psPageHtml).join('')}
+    <div style="text-align:right;margin-top:10px"><button onclick="window.print()">列印</button></div></body></html>`);
+  w.document.close();
+  setTimeout(()=>w.print(),500);
+};
+// ── 鎖定／解鎖：同時鎖定薪資單（存快照）與當月耗材 ──
+window.psLock=async function(){
+  const m=PS.month;
+  if(PS.matsMonth!==m)return alert('資料載入中，請稍候');
+  if(!confirm(`確定鎖定 ${m} 薪資單？\n鎖定後會保存目前的薪資單內容（含加工與耗材明細），之後即使資料變動也不會改變；當月耗材紀錄也會一併鎖定，只能用退還沖銷。`))return;
+  await psFlush();
+  try{
+    PS.mats=await MAT.fetchMonths([m]);
+    const slips={};psWorkers().forEach(w=>{slips[w]=JSON.parse(JSON.stringify(psCompute(w)));});
+    await db.collection('payslips').doc(m).set({month:m,status:'locked',lockedAt:new Date().toISOString(),slips,
+      requiredDays:(PS.doc&&PS.doc.requiredDays)||0,overrides:(PS.doc&&PS.doc.overrides)||{}},{merge:true});
+    if(!MAT.isLocked(m))await MAT.setLock(m,true,'管理者');
+    toast(`${m} 薪資單已鎖定`);
+  }catch(e){toast('鎖定未完成，請再按一次「鎖定本期」：'+(e.message||''));}
+};
+window.psUnlock=async function(){
+  const m=PS.month;
+  const pw=prompt(`解鎖 ${m} 薪資單需要再次輸入管理密碼：`);if(pw===null)return;
+  if(pw!==(typeof ADMIN_PWD!=='undefined'?ADMIN_PWD:'0423'))return alert('密碼錯誤');
+  try{
+    await db.collection('payslips').doc(m).set({status:'draft',unlockedAt:new Date().toISOString()},{merge:true});
+    if(MAT.isLocked(m))await MAT.setLock(m,false,'管理者');
+    toast(`${m} 已解鎖，恢復為草稿`);
+  }catch(e){toast('解鎖未完成，請重試');}
+};
+window.psInit=function(){
+  if(!document.getElementById('ps-style')){const st=document.createElement('style');st.id='ps-style';st.textContent=PS_CSS;document.head.appendChild(st);}
+  const el=document.getElementById('ps-month');
+  if(!el.value){const d=new Date(Date.now()+8*3600e3);d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()-1);el.value=d.toISOString().slice(0,7);}
+  if(PS.month!==el.value)psLoad();else psRender();
+};
+
+_empInfoCbs.add(()=>{if(document.getElementById('pg-payslip').classList.contains('active'))psRender();});
 
 // ── 設定 ──
 function renderSettingsEmps(){
@@ -2144,7 +2934,7 @@ window.saveEditProd=async function(i){
     toast(`已更新單價：${prods[i].name} → $${price}`);
   }catch(e){setSS('err');toast('更新失敗，請重試');}
 }
-function updateSysInfo(){['orders','emps','disps','prods'].forEach((k,i)=>{const el=document.getElementById('si-'+k);if(el)el.textContent=[window.DB.orders,window.DB.employees,window.DB.dispatches,window.DB.products][i].length;});}
+function updateSysInfo(){['orders','emps','disps','prods'].forEach((k,i)=>{const el=document.getElementById('si-'+k);if(el)el.textContent=[window.DB.orders,window.DB.employees,window.DB.dispatches,window.DB.products][i].length+((RS.mode==='scoped'&&(k==='orders'||k==='disps'))?'（目前已載入）':'');});}
 window.addEmp=async function(){const n=document.getElementById('new-emp').value.trim();if(!n)return;if(window.DB.employees.includes(n))return alert('員工已存在');window.DB.employees.push(n);document.getElementById('new-emp').value='';await saveEmployees();toast(`已新增員工：${n}`);}
 window.removeEmp=async function(i){if(!confirm('確定移除？'))return;window.DB.employees.splice(i,1);await saveEmployees();}
 window.parseProdPaste=async function(){
@@ -2270,6 +3060,7 @@ function renderShipping(){
   const kw=getShippingKeyword();
   const shipFrom=document.getElementById('ship-from')?.value||'';
   const shipTo=document.getElementById('ship-to')?.value||'';
+  if((shipFrom||shipTo)&&!rsEnsure('ship',shipFrom,shipTo,()=>renderShipping())){tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:#888">⏳ 載入中...</td></tr>';return;}
   let orders=[...window.DB.orders].sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   // 過濾
   const rows=[];
@@ -2352,7 +3143,7 @@ window.toggleShipOrder=function(id){
 window.openShipModal=function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   const info=getOrderShipStatus(o);if(!info)return;
-  const today=new Date().toISOString().slice(0,10);
+  const today=twToday();
   document.getElementById('modal-title-txt').textContent=`出貨 — ${o.orderno||o.name}`;
   document.getElementById('modal-content').innerHTML=`
     <div style="font-size:13px;font-weight:600;margin-bottom:8px">${o.name}${o.spec?' ('+o.spec+')':''}</div>
@@ -2374,6 +3165,7 @@ window.openShipModal=function(orderId){
 }
 window.submitShipment=async function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  if(!rsGuard([orderId],true))return;
   const date=document.getElementById('ship-date').value;
   const qty=parseInt(document.getElementById('ship-qty').value)||0;
   const note=document.getElementById('ship-note').value.trim();
@@ -2386,6 +3178,7 @@ window.submitShipment=async function(orderId){
       orderName:o.name,orderSpec:o.spec||'',
       qty,date,note,
       allocations:[{orderId:o.id,orderNo:o.orderno||'',qty}],
+      orderIds:[String(o.id)],
       createdAt:new Date().toISOString()
     });
     setSS('ok');closeModal();
@@ -2416,7 +3209,7 @@ window.exportShippingXlsx=function(){
       d2.push([o.orderno||'',o.name,s.date,al?al.qty:s.qty,s.note||'']);
     }
   }
-  downloadXlsx(`出貨管理-${new Date().toISOString().slice(0,10)}.xlsx`,[
+  downloadXlsx(`出貨管理-${twToday()}.xlsx`,[
     {name:'出貨彙總',data:[h1,...d1]},
     {name:'出貨記錄',data:[h2,...d2]}
   ]);
@@ -2471,6 +3264,7 @@ function renderConfirmReports(){
 }
 window.confirmReport=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
+  if(!rsGuard([d.orderId]))return;
   setSS('syncing');
   try{
     const isAdj=d.adjustStatus==='待確認';
@@ -2519,6 +3313,7 @@ window.confirmAllReports=async function(){
     ((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0))>0&&
     (!d.adminConfirmed||d.adjustStatus==='待確認')
   );
+  if(!rsGuard(pending.filter(d=>d.adjustStatus==='待確認').map(d=>d.orderId)))return;
   setSS('syncing');
   try{
     for(const d of pending){
@@ -2589,8 +3384,8 @@ window.confirmNote=async function(id){
 }
 // ── 每日記錄 ──
 function initDailyReport(){
-  // 預設今天
-  const today=new Date().toISOString().slice(0,10);
+  // 預設今天（台灣日期）
+  const today=twToday();
   const dateEl=document.getElementById('daily-date');
   if(dateEl&&!dateEl.value)dateEl.value=today;
   // 填入員工清單
@@ -2617,6 +3412,11 @@ window.renderDailyReport=function(){
   const worker=document.getElementById('daily-worker').value;
   const kw=document.getElementById('daily-keyword')?.value.trim().toLowerCase()||'';
   if(!date)return;
+  if(!rsEnsure('disp',date,date,()=>renderDailyReport())){
+    const c=document.getElementById('daily-dispatch-count');if(c)c.textContent='載入中...';
+    const t=document.getElementById('daily-dispatch-tbody');if(t)t.innerHTML='<tr><td colspan="20" style="text-align:center;padding:1.5rem;color:#888">⏳ 載入中...</td></tr>';
+    return;
+  }
 
   // 取得當天派工記錄（有 effectiveDate 用 effectiveDate，否則用 createdAt 台灣時間）
   let dispatches=window.DB.dispatches.filter(d=>{
@@ -2700,6 +3500,7 @@ window.renderDailyReport=function(){
 window.exportDailyXlsx=function(){
   const date=document.getElementById('daily-date').value;
   if(!date)return alert('請先選擇日期');
+  if(!rsEnsure('disp',date,date,null))return toast('資料載入中，請稍候再匯出');
   let dispatches=window.DB.dispatches.filter(d=>dispWorkDate(d)===date)
     .sort((a,b)=>(a.worker||'').localeCompare(b.worker||''));
   // 派工記錄工作表
@@ -2730,11 +3531,15 @@ window.sw=function(p){
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(x=>x.classList.remove('active'));
   document.getElementById('pg-'+p).classList.add('active');
-  ['orders','dispatch','daily','shipping','checkin','salary','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
+  ['orders','dispatch','daily','shipping','checkin','salary','payslip','materials','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
   if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();initDispatchForm();}
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
-  if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();}
+  if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();renderMatSettings(true);renderEmpInfo();}
+  if(p==='payslip')psInit();
+  if(p==='materials'&&!window._matAdminUI&&window.MAT){
+    window._matAdminUI=MAT.mount(document.getElementById('mat-admin-root'),{mode:'admin',by:()=>'管理者',employees:()=>window.DB.employees,toast});
+  }
   if(p==='daily'){initDailyReport();renderNoteAlerts();renderConfirmReports();}
   if(p==='shipping'){renderShipping();}
 }

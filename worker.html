@@ -173,6 +173,12 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
       <button class="tab-btn" id="tab-history" onclick="switchTab('history')">
         加工記錄 / Lịch sử
       </button>
+      <button class="tab-btn" id="tab-req" onclick="switchTab('req')">
+        領耗材 / Lĩnh vật tư
+      </button>
+      <button class="tab-btn" id="tab-mat" style="display:none" onclick="switchTab('mat')">
+        耗材發放 / Phát vật tư
+      </button>
     </div>
 
     <!-- 待辦工單 -->
@@ -194,6 +200,12 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
       <div id="history-period-label" style="font-size:12px;color:#185FA5;margin-bottom:8px"></div>
       <div id="history-list"></div>
     </div>
+
+    <!-- 領耗材（所有員工） -->
+    <div id="panel-req" style="display:none"><div id="req-root"></div></div>
+
+    <!-- 耗材發放（只有耗材管理員看得到） -->
+    <div id="panel-mat" style="display:none"><div id="mat-root"></div></div>
   </div>
 </div>
 
@@ -201,11 +213,14 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script src="materials.js?v=2"></script>
 <script>
 
 const firebaseConfig={apiKey:"AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",authDomain:"changcyun-19b9b.firebaseapp.com",projectId:"changcyun-19b9b",storageBucket:"changcyun-19b9b.firebasestorage.app",messagingSenderId:"853660333384",appId:"1:853660333384:web:183107f8390c6c2ac92f7d"};
 const app=firebase.initializeApp(firebaseConfig);
 const db=firebase.firestore();
+// 耗材：品項、管理員名單、鎖定月份（各 1 筆文件）
+if(window.MAT)MAT.init(db);
 
 let currentWorker=localStorage.getItem('worker_name')||null;
 let employees=[],dispatches=[],orders=[],checkins=[],workerPins={};
@@ -545,10 +560,11 @@ function showMain(name){
   document.getElementById('nav-name').textContent=name;
   startScope(name);
   renderWorkerMain();renderCheckinStatus();
+  updateMatTab();
 }
 
 window.logoutWorker=function(){
-  stopScope();
+  stopScope();unmountMat();unmountReq();if(currentTab==='mat'||currentTab==='req')switchTab('pending');
   currentWorker=null;localStorage.removeItem('worker_name');
   document.getElementById('main-screen').style.display='none';
   document.getElementById('select-screen').style.display='flex';
@@ -683,7 +699,7 @@ window.doCheckin=async function(type){
   if(!_ciReady){toast(SCOPE_WAIT_MSG);return;}
   const now=new Date();
   const today=toTW(now.toISOString(),false);
-  const timeStr=now.toTimeString().slice(0,5);
+  const timeStr=new Date(now.getTime()+8*60*60*1000).toISOString().slice(11,16); // 台灣時間，不受手機時區設定影響
   const ci=getTodayCheckin();
 
   if(type==='in'){
@@ -745,8 +761,34 @@ window.switchTab=function(tab){
   document.getElementById('panel-history').style.display=tab==='history'?'block':'none';
   document.getElementById('tab-pending').classList[tab==='pending'?'add':'remove']('active');
   document.getElementById('tab-history').classList[tab==='history'?'add':'remove']('active');
+  document.getElementById('panel-mat').style.display=tab==='mat'?'block':'none';
+  document.getElementById('panel-req').style.display=tab==='req'?'block':'none';
+  document.getElementById('tab-req').classList[tab==='req'?'add':'remove']('active');
+  if(tab==='req')mountReq();
+  document.getElementById('tab-mat').classList[tab==='mat'?'add':'remove']('active');
   if(tab==='history')renderHistory();
+  if(tab==='mat')mountMat();
 }
+// ── 耗材發放（耗材管理員專用） ──
+let _matUI=null;
+function mountMat(){
+  if(_matUI||!window.MAT||!currentWorker||!MAT.isKeeper(currentWorker))return;
+  _matUI=MAT.mount(document.getElementById('mat-root'),{mode:'keeper',by:()=>currentWorker,employees:()=>employees,toast});
+}
+function unmountMat(){if(_matUI){_matUI.unmount();_matUI=null;}}
+// ── 領耗材（員工自己申請；打開這個分頁才開始讀取自己的耗材紀錄） ──
+let _reqUI=null;
+function mountReq(){
+  if(_reqUI||!window.MAT||!currentWorker)return;
+  _reqUI=MAT.mountWorker(document.getElementById('req-root'),{worker:currentWorker,toast});
+}
+function unmountReq(){if(_reqUI){_reqUI.unmount();_reqUI=null;}}
+function updateMatTab(){
+  const isK=!!(window.MAT&&currentWorker&&MAT.isKeeper(currentWorker));
+  const btn=document.getElementById('tab-mat');if(btn)btn.style.display=isK?'':'none';
+  if(!isK){unmountMat();if(currentTab==='mat')switchTab('pending');}
+}
+if(window.MAT)MAT.onChange(updateMatTab);
 
 // ── 薪資週期計算 ──
 // offset=0：當月1號到今天
@@ -810,6 +852,37 @@ function renderHistory(){
     '未回報':{bg:'',badge:'background:#f5f5f5;color:#aaa',border:''},
   };
 
+  // 合併群組修改：只退回自己這次的分配，再依目前剩餘量重新分配
+  if(editingGroup){
+    const first=myAll.find(x=>x.id===editingGroup);
+    const list=first?grpSort(grpMembers(first).filter(x=>myAll.includes(x))):[];
+    if(list.length){
+      const gid=String(first.id).replace(/[^A-Za-z0-9_-]/g,'_');
+      const cap=list.reduce((a,d)=>a+grpCapEdit(d),0);
+      const sum=k=>list.reduce((a,d)=>a+(d[k]||0),0);
+      const confirmed=list.some(d=>d.adminConfirmed);
+      const inp=(k,val,label,color)=>`<div><div style="font-size:11px;color:${color};font-weight:600;margin-bottom:3px">${label}</div>
+        <input type="number" id="ge${k}-${gid}" min="0" value="${val}" inputmode="numeric" oninput="grpUpdate('ge','${gid}')"></div>`;
+      el.innerHTML=`<div class="card" data-grp="ge${gid}" data-ids="${list.map(d=>d.id).join(',')}" style="border:1.5px solid #185FA5;padding:0.875rem;margin-bottom:10px">
+        <div style="font-weight:600;margin-bottom:4px">${first.orderName}${first.orderSpec?' '+first.orderSpec:''} <span style="font-size:11px;color:#185FA5">合併 ${list.length} 張</span></div>
+        <div style="font-size:11px;color:#888;margin-bottom:10px"><strong style="color:#185FA5">可回報 ${cap}</strong>（已扣除其他人的回報）${confirmed?'<br><span style="color:#6A1B9A">已確認的紀錄，修改後需等管理員確認 / Cần quản lý xác nhận</span>':''}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:8px">
+          ${inp('d',sum('doneQty'),'✓ 完成 / Hoàn thành','#2E7D32')}${inp('f',sum('defectQty'),'✗ 不良 / Lỗi','#C62828')}${inp('s',sum('shortageQty'),'✗ 來料不足','#E65100')}
+        </div>
+        <div style="font-size:12px;color:#888;text-align:right">總數：<span id="get-${gid}" style="font-weight:600">${sum('doneQty')+sum('defectQty')+sum('shortageQty')}</span></div>
+        <div id="gee-${gid}" class="err-box"></div>
+        <div id="gep-${gid}" style="background:#f8f9fa;border-radius:8px;padding:0 10px;margin-top:6px"></div>
+        ${confirmed?'':`<div style="margin-top:8px"><div class="bilabel" style="margin-bottom:4px"><span class="zh">📝 備註</span><span class="vi">Ghi chú</span></div>
+          <input type="text" id="gen-${gid}" value="${(first.workerNote||'').replace(/"/g,'&quot;')}" style="width:100%;box-sizing:border-box"></div>`}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn btn-primary btn-sm" onclick="saveGroupEdit('${gid}')" style="flex:1;padding:10px">儲存 / Lưu</button>
+          <button class="btn btn-sm" onclick="cancelGroupEdit()" style="padding:10px">取消</button>
+        </div></div>`;
+      grpUpdate('ge',gid);
+      return;
+    }
+    editingGroup=null;
+  }
   // 編輯模式（待確認才可直接調整）
   if(editingId){
     const d=myAll.find(x=>x.id===editingId);
@@ -848,7 +921,49 @@ function renderHistory(){
   }
 
   // 表格顯示
-  const rows=myAll.map(d=>{
+  // 合併群組（同 batch、同品名、兩筆以上）合成一列
+  const _grpCount={};myAll.forEach(d=>{const k=grpKeyOf(d);if(k)_grpCount[k]=(_grpCount[k]||0)+1;});
+  const _seen=new Set();
+  const entries=[];
+  myAll.forEach(d=>{const k=grpKeyOf(d);
+    if(k&&_grpCount[k]>1){if(_seen.has(k))return;_seen.add(k);entries.push({group:grpSort(myAll.filter(x=>grpKeyOf(x)===k))});}
+    else entries.push({d});});
+  const groupRow=list=>{
+    const sts=list.map(getDispStatus);
+    const st=sts.includes('調整待確認')?'調整待確認':sts.includes('已拒絕')?'已拒絕':sts.every(x=>x==='已確認')?'已確認':sts.some(x=>x!=='未回報')?'待確認':'未回報';
+    const ss=statusStyle[st]||statusStyle['未回報'];
+    const f=list[0];const date=f.effectiveDate||toTW(f.createdAt,false);
+    const done=list.reduce((a,d)=>a+(d.doneQty||0),0);
+    const earn=list.reduce((a,d)=>a+(d.adminConfirmed?(d.doneQty||0):0)*(d.itemPrice||0),0);
+    const est=list.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+    const prices=[...new Set(list.map(d=>d.itemPrice||0))];
+    let salaryCell='—';
+    if(st==='已確認'||st==='調整待確認')salaryCell=`<span style="color:#2E7D32;font-weight:600">$${earn.toFixed(0)} ✓</span>`;
+    else if(st==='待確認')salaryCell=`<span style="color:#E65100;font-size:12px">$${est.toFixed(0)}<br><span style="font-size:10px">預估</span></span>`;
+    let actionBtn='';
+    if(st==='待確認')actionBtn=`<button class="btn btn-sm" onclick="startGroupEdit('${f.id}')" style="font-size:11px;padding:2px 8px">調整 / Sửa</button>`;
+    else if(st==='已確認')actionBtn=`<button class="btn btn-sm" onclick="startGroupEdit('${f.id}')" style="font-size:11px;padding:2px 8px">申請調整</button>`;
+    else if(st==='已拒絕')actionBtn=`<button class="btn btn-sm" style="font-size:11px;padding:2px 8px;background:#185FA5;color:#fff;border:none" onclick="startGroupEdit('${f.id}')">重新填寫 / Nhập lại</button>`;
+    const detail=list.map(d=>`${d.orderNo||d.orderId}：✓${d.doneQty||0}${d.defectQty?` ✗${d.defectQty}`:''}${d.shortageQty?` 缺${d.shortageQty}`:''}`).join('<br>');
+    const rej=list.find(d=>d.adjustStatus==='已拒絕'&&d.adjustRejectReason);
+    return`<tr style="border-bottom:0.5px solid #f0f0f0;background:${ss.bg}">
+      <td style="padding:8px 10px;font-size:12px;color:#888;white-space:nowrap">${date.slice(5)}</td>
+      <td style="padding:8px 10px">
+        <div style="font-weight:500;font-size:13px">${f.orderName} <span style="font-size:10px;color:#185FA5">合併 ${list.length} 張</span></div>
+        ${f.orderSpec?`<div style="font-size:11px;color:#aaa">${f.orderSpec}</div>`:''}
+        <div style="font-size:10px;color:#888;margin-top:2px">${detail}</div>
+        ${f.workerNote?`<div style="font-size:10px;color:#1565C0">💬 ${f.workerNote}</div>`:''}
+        ${rej?`<div style="font-size:10px;color:#C62828">${rej.adjustRejectReason}</div>`:''}
+      </td>
+      <td style="padding:8px 10px;text-align:right;color:#2E7D32;font-weight:600">${done}</td>
+      <td style="padding:8px 10px;text-align:right;color:#888;font-size:12px">${prices.map(p=>'$'+p).join('<br>')}</td>
+      <td style="padding:8px 10px;text-align:right">${salaryCell}</td>
+      <td style="padding:8px 10px"><span style="padding:2px 6px;border-radius:20px;font-size:11px;${ss.badge}">${st}</span></td>
+      <td style="padding:8px 10px;white-space:nowrap">${actionBtn}</td>
+    </tr>`;
+  };
+  const rows=entries.map(e=>e.group?groupRow(e.group):singleRow(e.d)).join('');
+  function singleRow(d){
     const st=getDispStatus(d);
     const ss=statusStyle[st]||statusStyle['未回報'];
     const earn=(d.adminConfirmed?d.doneQty||0:0)*(d.itemPrice||0);
@@ -878,7 +993,7 @@ function renderHistory(){
       <td style="padding:8px 10px"><span style="padding:2px 6px;border-radius:20px;font-size:11px;${ss.badge}">${st}</span></td>
       <td style="padding:8px 10px;white-space:nowrap">${actionBtn}</td>
     </tr>`;
-  }).join('');
+  }
 
   const totalRow=`<tr style="background:#f5f5f5">
     <td colspan="2" style="padding:8px 10px;font-weight:600;font-size:12px;color:#888">合計</td>
@@ -910,7 +1025,7 @@ function renderHistory(){
 }
 
 let editingId=null;
-window.startEdit=function(id){editingId=id;renderHistory();}
+window.startEdit=function(id){editingId=id;editingGroup=null;renderHistory();}
 window.cancelEdit=function(){editingId=null;renderHistory();}
 window.validateEdit=function(id){
   const d=dispatches.find(x=>x.id===id);if(!d)return true;
@@ -1080,6 +1195,8 @@ function renderWorkerMain(){
   const myPending=myAll.filter(d=>{
     const myReported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
     if(myReported>0)return false;
+    // 合併卡片已回報過（分配為 0 的訂單也一起從待辦消失）
+    if(d.groupReportedAt)return false;
     // 生效日期判斷：effectiveDate 存在時用它，否則用 createdAt
     const effectiveDate=d.effectiveDate||toTW(d.createdAt,false);
     // 生效日期是未來 → 還沒到，不顯示
@@ -1184,86 +1301,40 @@ function renderWorkerMain(){
           </button>
         </div>`;
       }else{
-        // 同品名合併群組（多筆 dispatch，grouped 顯示）
+        // 同品名合併群組：一張卡片、填總數，系統依接單日期分配回各訂單
         const first=group[0];
-        const totalRemain=group.reduce((a,d)=>{
-          const o=orders.find(x=>x.id===d.orderId);
-          return a+(o?getOrderRemain(o,d.id):0);
-        },0);
-        // 先進先出分配建議數量
-        function calcSuggest(totalInput){
-          const sorted=[...group].sort((a,b)=>{
-            const oa=orders.find(x=>x.id===a.orderId);
-            const ob=orders.find(x=>x.id===b.orderId);
-            const dateDiff=(oa?.date||'').localeCompare(ob?.date||'');
-            if(dateDiff!==0)return dateDiff;
-            return (oa?.createdAt||'').localeCompare(ob?.createdAt||'');
-          });
-          let rem=totalInput;
-          const result={};
-          for(const d of sorted){
-            const o=orders.find(x=>x.id===d.orderId);
-            const canTake=o?getOrderRemain(o,d.id):0;
-            const take=Math.min(rem,canTake);
-            result[d.id]=take;
-            rem-=take;
-            if(rem<=0)break;
-          }
-          return result;
-        }
-        const groupId=`grp-${first.batchId}`;
-        const subRows=group.map(d=>{
-          const o=orders.find(x=>x.id===d.orderId);
-          const remain=o?getOrderRemain(o,d.id):0;
-          return`<div style="background:#f8f9fa;border-radius:8px;padding:10px;margin-bottom:8px">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-              <span style="font-size:12px;font-weight:600;color:#555">${d.orderNo||d.orderId}</span>
-              <span style="font-size:11px;color:#888">總量 ${d.assignQty} ／ 可回報 <strong style="color:#185FA5">${remain}</strong></span>
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-              <div>
-                <div style="font-size:11px;color:#2E7D32;margin-bottom:2px">✓ 完成</div>
-                <input type="number" id="rd-${d.id}" min="0" max="${remain}" value="0" oninput="validateRpt('${d.id}')" inputmode="numeric">
-              </div>
-              <div>
-                <div style="font-size:11px;color:#C62828;margin-bottom:2px">✗ 不良</div>
-                <input type="number" id="rf-${d.id}" min="0" max="${remain}" value="0" oninput="validateRpt('${d.id}')" inputmode="numeric">
-              </div>
-              <div>
-                <div style="font-size:11px;color:#E65100;margin-bottom:2px">✗ 來料不足</div>
-                <input type="number" id="rs-${d.id}" min="0" max="${remain}" value="0" oninput="validateRpt('${d.id}')" inputmode="numeric">
-              </div>
-            </div>
-            <div id="re-${d.id}" class="err-box" style="margin-top:4px"></div>
-          </div>`;
-        }).join('');
-        return`<div class="card">
+        const gid=String(first.id).replace(/[^A-Za-z0-9_-]/g,'_');
+        const list=grpSort(group);
+        const totalRemain=list.reduce((a,d)=>a+grpCapNew(d),0);
+        const prices=[...new Set(list.map(d=>d.itemPrice))];
+        const inp=(k,label,color)=>`<div>
+              <div style="font-size:11px;color:${color};font-weight:600;margin-bottom:3px">${label}</div>
+              <input type="number" id="g${k}-${gid}" min="0" value="0" inputmode="numeric" oninput="grpUpdate('g','${gid}')">
+            </div>`;
+        return`<div class="card" data-grp="g${gid}" data-ids="${list.map(d=>d.id).join(',')}">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
             <div><span style="font-weight:600;font-size:15px">${first.orderName}</span>${first.orderSpec?` <span style="color:#aaa;font-size:12px">${first.orderSpec}</span>`:''}</div>
-            <span style="font-size:11px;background:#E3F2FD;color:#185FA5;padding:2px 8px;border-radius:12px">合併 ${group.length} 張</span>
+            <span style="font-size:11px;background:#E3F2FD;color:#185FA5;padding:2px 8px;border-radius:12px">合併 ${list.length} 張 / Gộp ${list.length}</span>
           </div>
-          <div style="font-size:13px;color:#666;margin-bottom:10px">
-            單價：<strong>$${first.itemPrice}</strong>／件　總可回報：<strong style="color:#185FA5">${totalRemain}</strong> 件
-            ${first.note?`<div style="margin-top:4px">備註：${first.note}</div>`:''}
+          <div style="font-size:13px;color:#666;margin-bottom:10px;line-height:2">
+            <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>${prices.map(p=>'$'+p).join('、')}</strong>／件</div>
+            <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5">${totalRemain}</strong></div>
+            ${first.note?`<div>備註：${first.note}</div>`:''}
           </div>
-          <div style="background:#E8F5E9;border-radius:8px;padding:10px;margin-bottom:10px">
-            <div style="font-size:12px;color:#2E7D32;font-weight:600;margin-bottom:6px">輸入完工總數，系統自動依先進先出分配<br><span style="font-weight:400;color:#888;font-size:11px">Nhập tổng hoàn thành, hệ thống tự phân bổ</span></div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <input type="number" id="rtotal-input-${groupId}" min="0" max="${totalRemain}" placeholder="完工總數" inputmode="numeric"
-                style="flex:1;font-size:16px;font-weight:600;text-align:center"
-                data-dispids="${group.map(d=>d.id).join(',')}"
-                oninput="autoAllocateGroup('${groupId}',this.dataset.dispids.split(','))">
-              <span style="font-size:12px;color:#888">/ ${totalRemain}</span>
-            </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
+            ${inp('d','✓ 完成 / Hoàn thành','#2E7D32')}${inp('f','✗ 不良 / Lỗi','#C62828')}${inp('s','✗ 來料不足 / Thiếu NVL','#E65100')}
           </div>
-          ${subRows}
+          <div style="font-size:12px;color:#888;text-align:right;margin-bottom:4px">
+            本次回報總數：<span id="gt-${gid}" style="font-weight:600;color:#185FA5">0</span>
+          </div>
+          <div id="ge-${gid}" class="err-box"></div>
+          <div id="gp-${gid}" style="background:#f8f9fa;border-radius:8px;padding:0 10px;margin-top:6px"></div>
           <div style="margin-top:10px">
             <div class="bilabel" style="margin-bottom:4px"><span class="zh">📝 備註</span><span class="vi">Ghi chú</span></div>
-            <input type="text" id="rn-grp-${groupId}" placeholder="可填寫備註說明 / Nhập ghi chú nếu cần" style="width:100%;box-sizing:border-box">
+            <input type="text" id="gn-${gid}" placeholder="可填寫備註說明 / Nhập ghi chú nếu cần" style="width:100%;box-sizing:border-box">
           </div>
           <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px"
-            data-dispids="${group.map(d=>d.id).join(',')}" data-groupid="${groupId}"
-            onclick="submitGroupRpt(this.dataset.dispids.split(','),this.dataset.groupid)">
+            onclick="submitGroupRpt('${list.map(d=>d.id).join(',')}'.split(','),'${gid}')">
             回報完工 / Báo cáo hoàn thành
           </button>
         </div>`;
@@ -1271,32 +1342,8 @@ function renderWorkerMain(){
     }).join('');
   })();}
 
-// ── 先進先出自動分配（同品名合併群組）──
-window.autoAllocateGroup=function(groupId, dispIds){
-  const totalInput=parseInt(document.getElementById('rtotal-input-'+groupId).value)||0;
-  // 依收單日期排序
-  const sortedDisps=dispIds.map(id=>dispatches.find(x=>x.id===id)).filter(Boolean)
-    .sort((a,b)=>{
-      const oa=orders.find(x=>x.id===a.orderId);
-      const ob=orders.find(x=>x.id===b.orderId);
-      const dateDiff=(oa?.date||'').localeCompare(ob?.date||'');
-      if(dateDiff!==0)return dateDiff;
-      return (oa?.createdAt||'').localeCompare(ob?.createdAt||'');
-    });
-  let remain=totalInput;
-  for(const d of sortedDisps){
-    const o=orders.find(x=>x.id===d.orderId);
-    const canTake=o?getOrderRemain(o,d.id):0;
-    const take=Math.min(remain,canTake);
-    const el=document.getElementById('rd-'+d.id);
-    if(el)el.value=take;
-    remain-=take;
-    validateRpt(d.id);
-  }
-}
 
 // ── 同品名合併群組批次回報 ──
-const _submittingGroup=new Set();
 async function autoClockOut(){
   // 回報完工後自動更新下班打卡時間
   if(!currentWorker)return;
@@ -1313,53 +1360,135 @@ async function autoClockOut(){
     }
   }catch(e){console.warn('autoClockOut failed',e);}
 }
-window.submitGroupRpt=async function(dispIds,groupId){
-  const key=dispIds.join(',');
-  if(_submittingGroup.has(key))return;
-  if(!dispIds.every(id=>scopeReadyFor(dispatches.find(x=>x.id===id)))){toast(SCOPE_WAIT_MSG);return;}
-  // 驗證所有子工單
-  let valid=true;
-  for(const id of dispIds){if(!validateRpt(id))valid=false;}
-  if(!valid)return;
-  _submittingGroup.add(key);
-  const workerNote=(document.getElementById('rn-grp-'+groupId)||{}).value||'';
-  setSS('syncing');
-  // 先收集所有輸入值（讀取時 DOM 確定存在）
-  const reports=[];
-  for(const id of dispIds){
-    const d=dispatches.find(x=>x.id===id);if(!d)continue;
-    reports.push({
-      d,
-      done:parseInt(document.getElementById('rd-'+id)?.value)||0,
-      def:parseInt(document.getElementById('rf-'+id)?.value)||0,
-      sho:parseInt(document.getElementById('rs-'+id)?.value)||0,
+// ══ 同品名合併回報（同一次派工 batchId、同品名 → 一張卡片） ══
+// 後台結構不變：仍是每張訂單一筆派工紀錄。員工填總數，系統依接單日期（早的先補滿）分配回各筆派工。
+// 完成、不良、來料不足各自一個總數，依同樣順序分配：先分完成，再分不良，最後分來料不足。
+function grpKeyOf(d){return d.isMerged?`${d.batchId}||${d.groupName||d.orderName}||${d.worker}`:null;}
+function grpSort(list){
+  return[...list].sort((a,b)=>{
+    const oa=orders.find(x=>x.id===a.orderId),ob=orders.find(x=>x.id===b.orderId);
+    return(oa?.date||'').localeCompare(ob?.date||'')||(oa?.createdAt||'').localeCompare(ob?.createdAt||'')||String(a.id).localeCompare(String(b.id));
+  });
+}
+// 新回報：與單筆工單相同的可回報量
+function grpCapNew(d){const o=orders.find(x=>x.id===d.orderId);return o?getOrderRemain(o,d.id):0;}
+// 修改：退回自己這筆的分配後，以目前剩餘量計算（與單筆修改相同）
+function grpCapEdit(d){
+  const o=orders.find(x=>x.id===d.orderId);
+  const others=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==d.id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+  return Math.max(0,(o?o.qty:(d.assignQty||0))-others);
+}
+function grpAllocate(list,done,def,sho,capFn){
+  const sorted=grpSort(list);
+  const left={};let cap=0;
+  sorted.forEach(d=>{left[d.id]=Math.max(0,capFn(d));cap+=left[d.id];});
+  const alloc={};sorted.forEach(d=>alloc[d.id]={done:0,def:0,sho:0});
+  for(const [k,amt] of [['done',done],['def',def],['sho',sho]]){
+    let r=amt;
+    for(const d of sorted){if(r<=0)break;const t=Math.min(r,left[d.id]);alloc[d.id][k]+=t;left[d.id]-=t;r-=t;}
+  }
+  return{alloc,cap,sorted};
+}
+const GRP_OVER=cap=>`超過可回報量 ${cap}，請填 ${cap} 以內，多出的數量請寫在備註<br>Vượt quá số lượng có thể báo cáo (${cap}). Nhập tối đa ${cap}, phần dư ghi vào ghi chú`;
+function grpReadInputs(prefix,gid){
+  const v=id=>Math.max(0,parseInt(document.getElementById(id+gid)?.value)||0);
+  return{done:v(prefix+'d-'),def:v(prefix+'f-'),sho:v(prefix+'s-')};
+}
+function grpPreviewHtml(res){
+  return res.sorted.map(d=>{const o=orders.find(x=>x.id===d.orderId);const a=res.alloc[d.id];
+    return`<div style="display:flex;justify-content:space-between;font-size:11px;color:#666;padding:2px 0">
+      <span>${d.orderNo||d.orderId}${o?.date?` <span style="color:#aaa">${o.date.slice(5)}</span>`:''}</span>
+      <span>✓${a.done}${a.def?` ✗${a.def}`:''}${a.sho?` 缺${a.sho}`:''}</span></div>`;}).join('');
+}
+// 畫面上的輸入變動 → 驗證與分配預覽（prefix 'g' 為待辦卡片，'ge' 為歷史修改）
+window.grpUpdate=function(prefix,gid){
+  const box=document.querySelector(`[data-grp="${prefix}${gid}"]`);if(!box)return true;
+  const ids=box.dataset.ids.split(',');
+  const list=ids.map(id=>dispatches.find(x=>x.id===id)).filter(Boolean);
+  const v=grpReadInputs(prefix,gid);
+  const res=grpAllocate(list,v.done,v.def,v.sho,prefix==='g'?grpCapNew:grpCapEdit);
+  const total=v.done+v.def+v.sho;
+  const tEl=document.getElementById(prefix+'t-'+gid);if(tEl)tEl.textContent=total;
+  const pEl=document.getElementById(prefix+'p-'+gid);if(pEl)pEl.innerHTML=total?grpPreviewHtml(res):'';
+  const err=document.getElementById(prefix+'e-'+gid);
+  const over=total>res.cap;
+  if(err){err.style.display=over?'block':'none';err.innerHTML=over?GRP_OVER(res.cap):'';}
+  return!over;
+};
+// 依分配結果寫回派工與訂單（訂單加總：同訂單所有派工，本次的以新值計算）
+async function grpWrite(updatedList){
+  for(const u of updatedList)await db.collection('dispatches').doc(String(u.id)).set(u);
+  const byId=new Map(updatedList.map(u=>[u.id,u]));
+  const orderIds=[...new Set(updatedList.map(u=>u.orderId))];
+  for(const oid of orderIds){
+    const o=orders.find(x=>x.id===oid);if(!o)continue;
+    const all=dispatches.filter(x=>x.orderId===oid&&!byId.has(x.id)).concat(updatedList.filter(u=>u.orderId===oid));
+    await db.collection('orders').doc(o.id).update({
+      done:Math.min(o.qty,all.reduce((a,x)=>a+(x.doneQty||0),0)),
+      defect:all.reduce((a,x)=>a+(x.defectQty||0),0),
+      shortage:all.reduce((a,x)=>a+(x.shortageQty||0),0)
     });
   }
+}
+const _submittingGroup=new Set();
+window.submitGroupRpt=async function(dispIds,gid){
+  const key=dispIds.join(',');
+  if(_submittingGroup.has(key))return;
+  const list=dispIds.map(id=>dispatches.find(x=>x.id===id)).filter(Boolean);
+  if(!list.length)return;
+  if(!list.every(d=>scopeReadyFor(d))){toast(SCOPE_WAIT_MSG);return;}
+  const v=grpReadInputs('g',gid);
+  if(v.done+v.def+v.sho<=0){toast('請填寫數量 / Vui lòng nhập số lượng');return;}
+  if(!grpUpdate('g',gid))return;
+  const res=grpAllocate(list,v.done,v.def,v.sho,grpCapNew);
+  if(v.done+v.def+v.sho>res.cap)return;
+  _submittingGroup.add(key);
+  const workerNote=(document.getElementById('gn-'+gid)||{}).value||'';
+  const now=new Date().toISOString();
+  setSS('syncing');
   try{
-    for(const {d,done,def,sho} of reports){
-      const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
-        workerNote,status:done+def+sho>0?'回報中':'待完成',
-        lastReportAt:new Date().toISOString()};
-      await db.collection('dispatches').doc(String(d.id)).set(updated);
-      // 更新訂單 done：用本次收集的 reports 加上其他員工的 dispatches
-      const o=orders.find(x=>x.id===d.orderId);
-      if(o){
-        // 同訂單其他員工的 dispatch（不在本次 reports 裡的）
-        const reportIds=new Set(reports.map(r=>r.d.id));
-        const otherDisp=dispatches.filter(x=>!reportIds.has(x.id)&&x.orderId===d.orderId);
-        const newDone=Math.min(o.qty,otherDisp.reduce((a,x)=>a+(x.doneQty||0),0)+done);
-        const newDefect=otherDisp.reduce((a,x)=>a+(x.defectQty||0),0)+def;
-        const newShortage=otherDisp.reduce((a,x)=>a+(x.shortageQty||0),0)+sho;
-        await db.collection('orders').doc(o.id).update({
-          done:newDone,defect:newDefect,shortage:newShortage
-        });
-      }
-    }
+    const updated=list.map(d=>{const a=res.alloc[d.id];
+      return{...d,doneQty:a.done,defectQty:a.def,shortageQty:a.sho,workerNote,
+        status:a.done+a.def+a.sho>0?'回報中':'待完成',groupReportedAt:now,lastReportAt:now};});
+    await grpWrite(updated);
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
     autoClockOut();
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
   finally{_submittingGroup.delete(key);}
-}
+};
+// ── 歷史：合併群組的修改 ──
+let editingGroup=null; // 群組第一筆派工 id
+window.startGroupEdit=function(id){editingGroup=id;editingId=null;renderHistory();};
+window.cancelGroupEdit=function(){editingGroup=null;renderHistory();};
+function grpMembers(first){const k=grpKeyOf(first);return k?dispatches.filter(x=>grpKeyOf(x)===k):[first];}
+window.saveGroupEdit=async function(gid){
+  const box=document.querySelector(`[data-grp="ge${gid}"]`);if(!box)return;
+  const list=box.dataset.ids.split(',').map(id=>dispatches.find(x=>x.id===id)).filter(Boolean);
+  if(!list.every(d=>scopeReadyFor(d))){toast(SCOPE_WAIT_MSG);return;}
+  if(!grpUpdate('ge',gid))return;
+  const v=grpReadInputs('ge',gid);
+  const res=grpAllocate(list,v.done,v.def,v.sho,grpCapEdit);
+  if(v.done+v.def+v.sho>res.cap)return;
+  const workerNote=(document.getElementById('gen-'+gid)||{}).value||'';
+  const now=new Date().toISOString();
+  setSS('syncing');
+  try{
+    if(list.some(d=>d.adminConfirmed)){
+      // 有已確認的 → 送出調整申請，等管理員確認（與單筆相同）
+      for(const d of list){const a=res.alloc[d.id];
+        await db.collection('dispatches').doc(String(d.id)).update({
+          pendingDoneQty:a.done,pendingDefectQty:a.def,pendingShortageQty:a.sho,
+          adjustStatus:'待確認',adjustRejectReason:null,lastReportAt:now});}
+      editingGroup=null;setSS('ok');toast('調整申請已送出，等待管理員確認 / Đã gửi yêu cầu ✓');return;
+    }
+    const updated=list.map(d=>{const a=res.alloc[d.id];
+      return{...d,doneQty:a.done,defectQty:a.def,shortageQty:a.sho,workerNote,
+        adminConfirmed:false,adjustStatus:null,adjustRejectReason:null,
+        status:a.done+a.def+a.sho>0?'回報中':'待完成',lastReportAt:now};});
+    await grpWrite(updated);
+    editingGroup=null;setSS('ok');toast('已儲存 / Đã lưu ✓');
+  }catch(e){setSS('err');toast('儲存失敗，請重試');}
+};
 
 // ── 單筆工單驗證與回報 ──
 window.validateRpt=function(id){
