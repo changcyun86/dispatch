@@ -219,10 +219,89 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 const firebaseConfig={apiKey:"AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",authDomain:"changcyun-19b9b.firebaseapp.com",projectId:"changcyun-19b9b",storageBucket:"changcyun-19b9b.firebasestorage.app",messagingSenderId:"853660333384",appId:"1:853660333384:web:183107f8390c6c2ac92f7d"};
 const app=firebase.initializeApp(firebaseConfig);
 const db=firebase.firestore();
+// ══ 本機讀取計數（估計值）════════════════════════════════════════════
+// 統計這台裝置今天大約向 Firebase 讀了幾次，每 10 分鐘寫入 readStats/{台灣日期}，
+// 管理端「設定」頁可查看各裝置的數字。只做計數，不影響任何功能；寫入失敗也不影響使用。
+// 計法（與 Firebase 計費規則對應的估計）：第一次從伺服器收到結果＝結果筆數（至少 1）；
+// 之後只算新增／變動的筆數；休眠或離開超過 30 分鐘後重新連上＝再算一次全部筆數；get()＝結果筆數（至少 1）。
+const RC=(function(){
+  const twDate=()=>new Date(Date.now()+8*3600e3).toISOString().slice(0,10);
+  const twHour=()=>new Date(Date.now()+8*3600e3).toISOString().slice(11,13);
+  let dev=null;try{dev=localStorage.getItem('rc-dev');}catch(e){}
+  if(!dev){dev='D'+Math.random().toString(36).slice(2,8).toUpperCase();try{localStorage.setItem('rc-dev',dev);}catch(e){}}
+  const st={dev,label:'',date:twDate(),total:0,hours:{},dirty:false,suspendedAt:null,lastBeat:Date.now()};
+  try{const s=JSON.parse(localStorage.getItem('rc-day')||'null');if(s&&s.date===st.date){st.total=s.total||0;st.hours=s.hours||{};}}catch(e){}
+  function add(n){
+    if(!(n>0))return;
+    const d=twDate();if(d!==st.date){st.date=d;st.total=0;st.hours={};}
+    st.total+=n;const h=twHour();st.hours[h]=(st.hours[h]||0)+n;st.dirty=true;
+    try{localStorage.setItem('rc-day',JSON.stringify({date:st.date,total:st.total,hours:st.hours}));}catch(e){}
+  }
+  // 休眠／切到背景偵測：記下「開始中斷」的時間；回到前景且穩定 3 分鐘後清除
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='hidden'){if(!st.suspendedAt)st.suspendedAt=Date.now();st.resumeAt=null;flush();}
+    else st.resumeAt=Date.now();
+  });
+  setInterval(()=>{const now=Date.now();
+    if(now-st.lastBeat>120e3){if(!st.suspendedAt)st.suspendedAt=st.lastBeat;st.resumeAt=now;} // 計時器停擺＝電腦休眠
+    else if(st.suspendedAt&&document.visibilityState==='visible'){if(!st.resumeAt)st.resumeAt=now;else if(now-st.resumeAt>180e3){st.suspendedAt=null;st.resumeAt=null;}}
+    st.lastBeat=now;},60e3);
+  const longGap=()=>st.suspendedAt&&Date.now()-st.suspendedAt>30*60e3;
+  function wrapQueryCb(cb){
+    let first=true,wasCache=false;
+    return function(snap){
+      try{
+        if(snap&&snap.metadata){
+          if(snap.metadata.fromCache){wasCache=true;}
+          else if(typeof snap.docChanges==='function'){
+            let n;
+            if(first)n=Math.max(1,snap.size);
+            else if(wasCache&&longGap())n=Math.max(1,snap.size);
+            else n=snap.docChanges().filter(c=>c.type!=='removed').length;
+            first=false;wasCache=false;add(n);
+          }else{ // 單筆文件
+            if(first||!wasCache||longGap())add(1);
+            first=false;wasCache=false;
+          }
+        }
+      }catch(e){}
+      return cb.apply(this,arguments);
+    };
+  }
+  function patch(proto){
+    if(!proto||proto.__rc)return;proto.__rc=true;
+    const on=proto.onSnapshot,get=proto.get;
+    proto.onSnapshot=function(...args){
+      const i=args.findIndex(a=>typeof a==='function');
+      if(i>=0)args[i]=wrapQueryCb(args[i]);
+      else if(args[0]&&typeof args[0].next==='function'){const o=args[0];args[0]={...o,next:wrapQueryCb(o.next.bind(o))};}
+      return on.apply(this,args);
+    };
+    proto.get=function(...args){
+      return get.apply(this,args).then(s=>{try{add(s&&typeof s.size==='number'?Math.max(1,s.size):1);}catch(e){}return s;});
+    };
+  }
+  try{const F=firebase.firestore;patch(F.Query&&F.Query.prototype);patch(F.DocumentReference&&F.DocumentReference.prototype);}catch(e){console.warn('[讀取計數] 未啟用',e);}
+  let dbRef=null;
+  function flush(){
+    if(!dbRef||!st.dirty||!st.label)return;
+    st.dirty=false;
+    const data={};data[st.dev]={label:st.label,total:st.total,hours:st.hours,updatedAt:new Date().toISOString()};
+    dbRef.collection('readStats').doc(st.date).set(data,{merge:true}).catch(()=>{st.dirty=true;});
+  }
+  setInterval(flush,10*60e3);
+  return{
+    start(db,label){dbRef=db;st.label=label||st.label;setTimeout(flush,60e3);},
+    setLabel(l){if(l&&l!==st.label){st.label=l;st.dirty=true;}},
+    get dev(){return st.dev;},get total(){return st.total;},get hours(){return st.hours;},
+    flush
+  };
+})();
 // 耗材：品項、管理員名單、鎖定月份（各 1 筆文件）
 if(window.MAT)MAT.init(db);
 
 let currentWorker=localStorage.getItem('worker_name')||null;
+RC.start(db,currentWorker?'員工 '+currentWorker:'員工端（未登入）');
 let employees=[],dispatches=[],orders=[],checkins=[],workerPins={};
 let historyOffset=0;
 let currentTab='pending';
@@ -558,6 +637,7 @@ function showMain(name){
   document.getElementById('pin-screen').style.display='none';
   document.getElementById('main-screen').style.display='block';
   document.getElementById('nav-name').textContent=name;
+  RC.setLabel('員工 '+name);
   startScope(name);
   renderWorkerMain();renderCheckinStatus();
   updateMatTab();

@@ -555,6 +555,20 @@ textarea{resize:vertical;min-height:70px}
     <div style="font-size:12px;color:#888;margin-bottom:8px">啟用後，已完成且全數出貨的訂單不會自動讀取；薪資、每日紀錄、較早的打卡與出貨，查詢時才載入。啟用時會先自動下載完整備份，並替每張訂單新增「已結案」欄位（原有資料不變）。</div>
     <button class="btn btn-sm btn-primary" id="rs-btn-enable" style="display:none" onclick="rsEnable()">啟用</button>
     <button class="btn btn-sm" id="rs-btn-disable" style="display:none" onclick="rsDisable()">停用（恢復讀取全部）</button>
+    <div style="border-top:1px solid #eee;margin-top:12px;padding-top:10px">
+      <div style="font-size:13px;font-weight:600;margin-bottom:6px">各裝置讀取次數（估計）</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px;margin-bottom:8px">
+        這台電腦的名稱：<input id="rc-name" style="width:140px" placeholder="例如：我的電腦">
+        <button class="btn btn-sm" onclick="rcSaveName()">儲存名稱</button>
+        <span style="color:#888">本機今天約 <b id="rc-mine">0</b> 次</span>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:13px">
+        日期：<input type="date" id="rc-date">
+        <button class="btn btn-sm" onclick="rcShow()">查看各裝置</button>
+        <span style="font-size:12px;color:#888">每台裝置約每 10 分鐘回報一次，數字會稍有延遲</span>
+      </div>
+      <div id="rc-result" style="margin-top:8px"></div>
+    </div>
   </div>
   <div class="card">
     <div class="card-title">員工薪資資料（到職日、固定加扣項目）</div>
@@ -644,6 +658,85 @@ if(sessionStorage.getItem('admin_auth')==='1')showAdminApp();
 const firebaseConfig={apiKey:"AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",authDomain:"changcyun-19b9b.firebaseapp.com",projectId:"changcyun-19b9b",storageBucket:"changcyun-19b9b.firebasestorage.app",messagingSenderId:"853660333384",appId:"1:853660333384:web:183107f8390c6c2ac92f7d"};
 const app=firebase.initializeApp(firebaseConfig);
 const db=firebase.firestore();
+// ══ 本機讀取計數（估計值）════════════════════════════════════════════
+// 統計這台裝置今天大約向 Firebase 讀了幾次，每 10 分鐘寫入 readStats/{台灣日期}，
+// 管理端「設定」頁可查看各裝置的數字。只做計數，不影響任何功能；寫入失敗也不影響使用。
+// 計法（與 Firebase 計費規則對應的估計）：第一次從伺服器收到結果＝結果筆數（至少 1）；
+// 之後只算新增／變動的筆數；休眠或離開超過 30 分鐘後重新連上＝再算一次全部筆數；get()＝結果筆數（至少 1）。
+const RC=(function(){
+  const twDate=()=>new Date(Date.now()+8*3600e3).toISOString().slice(0,10);
+  const twHour=()=>new Date(Date.now()+8*3600e3).toISOString().slice(11,13);
+  let dev=null;try{dev=localStorage.getItem('rc-dev');}catch(e){}
+  if(!dev){dev='D'+Math.random().toString(36).slice(2,8).toUpperCase();try{localStorage.setItem('rc-dev',dev);}catch(e){}}
+  const st={dev,label:'',date:twDate(),total:0,hours:{},dirty:false,suspendedAt:null,lastBeat:Date.now()};
+  try{const s=JSON.parse(localStorage.getItem('rc-day')||'null');if(s&&s.date===st.date){st.total=s.total||0;st.hours=s.hours||{};}}catch(e){}
+  function add(n){
+    if(!(n>0))return;
+    const d=twDate();if(d!==st.date){st.date=d;st.total=0;st.hours={};}
+    st.total+=n;const h=twHour();st.hours[h]=(st.hours[h]||0)+n;st.dirty=true;
+    try{localStorage.setItem('rc-day',JSON.stringify({date:st.date,total:st.total,hours:st.hours}));}catch(e){}
+  }
+  // 休眠／切到背景偵測：記下「開始中斷」的時間；回到前景且穩定 3 分鐘後清除
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='hidden'){if(!st.suspendedAt)st.suspendedAt=Date.now();st.resumeAt=null;flush();}
+    else st.resumeAt=Date.now();
+  });
+  setInterval(()=>{const now=Date.now();
+    if(now-st.lastBeat>120e3){if(!st.suspendedAt)st.suspendedAt=st.lastBeat;st.resumeAt=now;} // 計時器停擺＝電腦休眠
+    else if(st.suspendedAt&&document.visibilityState==='visible'){if(!st.resumeAt)st.resumeAt=now;else if(now-st.resumeAt>180e3){st.suspendedAt=null;st.resumeAt=null;}}
+    st.lastBeat=now;},60e3);
+  const longGap=()=>st.suspendedAt&&Date.now()-st.suspendedAt>30*60e3;
+  function wrapQueryCb(cb){
+    let first=true,wasCache=false;
+    return function(snap){
+      try{
+        if(snap&&snap.metadata){
+          if(snap.metadata.fromCache){wasCache=true;}
+          else if(typeof snap.docChanges==='function'){
+            let n;
+            if(first)n=Math.max(1,snap.size);
+            else if(wasCache&&longGap())n=Math.max(1,snap.size);
+            else n=snap.docChanges().filter(c=>c.type!=='removed').length;
+            first=false;wasCache=false;add(n);
+          }else{ // 單筆文件
+            if(first||!wasCache||longGap())add(1);
+            first=false;wasCache=false;
+          }
+        }
+      }catch(e){}
+      return cb.apply(this,arguments);
+    };
+  }
+  function patch(proto){
+    if(!proto||proto.__rc)return;proto.__rc=true;
+    const on=proto.onSnapshot,get=proto.get;
+    proto.onSnapshot=function(...args){
+      const i=args.findIndex(a=>typeof a==='function');
+      if(i>=0)args[i]=wrapQueryCb(args[i]);
+      else if(args[0]&&typeof args[0].next==='function'){const o=args[0];args[0]={...o,next:wrapQueryCb(o.next.bind(o))};}
+      return on.apply(this,args);
+    };
+    proto.get=function(...args){
+      return get.apply(this,args).then(s=>{try{add(s&&typeof s.size==='number'?Math.max(1,s.size):1);}catch(e){}return s;});
+    };
+  }
+  try{const F=firebase.firestore;patch(F.Query&&F.Query.prototype);patch(F.DocumentReference&&F.DocumentReference.prototype);}catch(e){console.warn('[讀取計數] 未啟用',e);}
+  let dbRef=null;
+  function flush(){
+    if(!dbRef||!st.dirty||!st.label)return;
+    st.dirty=false;
+    const data={};data[st.dev]={label:st.label,total:st.total,hours:st.hours,updatedAt:new Date().toISOString()};
+    dbRef.collection('readStats').doc(st.date).set(data,{merge:true}).catch(()=>{st.dirty=true;});
+  }
+  setInterval(flush,10*60e3);
+  return{
+    start(db,label){dbRef=db;st.label=label||st.label;setTimeout(flush,60e3);},
+    setLabel(l){if(l&&l!==st.label){st.label=l;st.dirty=true;}},
+    get dev(){return st.dev;},get total(){return st.total;},get hours(){return st.hours;},
+    flush
+  };
+})();
+RC.start(db,(()=>{try{return localStorage.getItem('rc-label');}catch(e){return null;}})()||('管理端 '+RC.dev.slice(-4)));
 // 本機暫存（IndexedDB）：重新整理或短時間內重新連線時，只向伺服器讀取有變動的資料，降低讀取量。
 // synchronizeTabs：同一台電腦開多個分頁時共用暫存。瀏覽器不支援（如無痕模式）時自動改回一般模式，功能不受影響。
 db.enablePersistence({synchronizeTabs:true}).catch(e=>console.warn('[本機暫存] 未啟用，改用一般模式：',e&&e.code));
@@ -697,6 +790,9 @@ db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=sna
 //             ＋上述訂單的全部派工與出貨＋近 35 天有回報的派工（待確認回報／備註）＋今天以後的預約派工
 //             ＋近 35 天的打卡與出貨
 //   點選才讀：已結案訂單、薪資／每日紀錄／薪資單的派工、較早的打卡與出貨期間
+//             → 用一次性讀取（get），不持續監聽：電腦休眠喚醒時不會整批重新計費；30 分鐘內重複查詢同一期間不重讀
+//             → 不連帶讀取整張訂單的派工；只有在要修改某張舊訂單時，才臨時讀那一張（rsGuard）
+//   來源 key 以「P:」開頭的是點選才讀的資料（頁面範圍），其他是常駐資料
 // 「已結案」＝已完成（完成＋不良＋來料不足 ≥ 訂單量）且全數出貨（已出貨 ≥ 完成數；完成數為 0 不需出貨）。
 // closed 欄位由管理端自動維護；只會新增／更新 closed（訂單）與 orderIds（出貨）兩個欄位，不改其他資料。
 const RS={mode:'loading',HOT_DAYS:7,NEW_DAYS:7,CHUNK:30,
@@ -704,10 +800,11 @@ const RS={mode:'loading',HOT_DAYS:7,NEW_DAYS:7,CHUNK:30,
   ready:new Map(),                 // 來源 key → 已從伺服器確認
   chunks:{dispByOrder:[],dispByMerged:[],shipByOrder:[],ordById:[]},
   shipChunkOf:new Map(),           // 訂單 id → 負責讀它出貨紀錄的 chunk key
-  dispChunkOf:new Map(),mergedChunkOf:new Map(),
+  dispChunkOf:new Map(),mergedChunkOf:new Map(),ordChunkOf:new Map(),
   periods:new Map(),
   sticky:new Set(),                // 本次開啟時看過、之後才結案的訂單：本次繼續顯示
   closedState:'none',              // none | loading | loaded
+  closedAt:0,
   dirty:new Set(),timer:null,writing:new Set(),hotFrom:''};
 const RS_RENDER={
   orders:()=>{renderOrders();renderDispatchOrders();updateSysInfo();},
@@ -734,8 +831,10 @@ function rsFlush(){
   if(RS.timer){clearTimeout(RS.timer);RS.timer=null;}
   const cols=[...RS.dirty];RS.dirty.clear();
   for(const col of cols){
-    const map=new Map();
-    for(const m of RS.src[col].values())for(const [id,d] of m)map.set(id,d);
+    const map=new Map(),live=new Map();
+    for(const [k,m] of RS.src[col])if(!k.startsWith('P:'))for(const [id,d] of m)live.set(id,d);
+    for(const [k,m] of RS.src[col])if(k.startsWith('P:'))for(const [id,d] of m)if(!live.has(id)&&!rsLiveOwns(col,d))map.set(id,d);
+    for(const [id,d] of live)map.set(id,d);
     // 跟 Firestore 一樣依文件 id 排序，畫面順序才會跟讀取全部時一致
     let arr=[...map.values()].sort((a,b)=>a.id<b.id?-1:a.id>b.id?1:0);
     if(col==='orders')arr.sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
@@ -756,12 +855,22 @@ function rsSyncChunks(name,col,wanted,mk){
     if(name==='shipByOrder')ids.forEach(id=>RS.shipChunkOf.set(id,key));
     if(name==='dispByOrder')ids.forEach(id=>RS.dispChunkOf.set(id,key));
     if(name==='dispByMerged')ids.forEach(id=>RS.mergedChunkOf.set(id,key));
+    if(name==='ordById')ids.forEach(id=>RS.ordChunkOf.set(id,key));
     rsListen(col,key,mk(ids));
   }
 }
 const rsValidId=id=>id!=null&&id!==''&&!String(id).includes('/');
+const rsChunkReady=(m,id)=>{const k=m.get(String(id));return !!(k&&RS.ready.get(k));};
+// 這筆「點選才讀」的資料，常駐監聽是否已經有權威版本（有的話以常駐為準；常駐裡沒有＝已被刪除）
+function rsLiveOwns(col,d){
+  if(col==='orders')return rsChunkReady(RS.ordChunkOf,d.id);
+  if(col==='dispatches')return rsValidId(d.orderId)&&rsChunkReady(RS.dispChunkOf,d.orderId);
+  if(col==='shipments'){const ids=(d.allocations||[]).map(a=>a.orderId).filter(rsValidId);return ids.length>0&&ids.every(id=>rsChunkReady(RS.shipChunkOf,id));}
+  return false;
+}
+const rsLiveEntries=col=>[...RS.src[col]].filter(([k])=>!k.startsWith('P:'));
 function rsCascade(){
-  const orderIds=new Set(window.DB.orders.map(o=>String(o.id)));
+  const orderIds=new Set();for(const [,m] of rsLiveEntries('orders'))for(const id of m.keys())orderIds.add(String(id));
   // 畫面上每一張訂單都讀它的「全部」派工：確認回報、調整、改單價、刪除時，重算訂單加總才會正確
   const dispIds=orderIds;
   rsSyncChunks('dispByOrder','dispatches',dispIds,ids=>db.collection('dispatches').where('orderId','in',ids));
@@ -769,8 +878,8 @@ function rsCascade(){
   rsSyncChunks('shipByOrder','shipments',orderIds,ids=>db.collection('shipments').where('orderIds','array-contains-any',ids));
   // 近期回報的派工、出貨紀錄所屬的訂單（可能已結案）也讀進來，結案狀態才能正確更新
   const ref=new Set(RS.sticky);
-  for(const m of RS.src.dispatches.values())for(const d of m.values())if(rsValidId(d.orderId))ref.add(String(d.orderId));
-  for(const m of RS.src.shipments.values())for(const s of m.values())(s.allocations||[]).forEach(a=>{if(rsValidId(a.orderId))ref.add(String(a.orderId));});
+  for(const [,m] of rsLiveEntries('dispatches'))for(const d of m.values())if(rsValidId(d.orderId))ref.add(String(d.orderId));
+  for(const [,m] of rsLiveEntries('shipments'))for(const s of m.values())(s.allocations||[]).forEach(a=>{if(rsValidId(a.orderId))ref.add(String(a.orderId));});
   orderIds.forEach(id=>ref.delete(id));
   rsSyncChunks('ordById','orders',ref,ids=>db.collection('orders').where(firebase.firestore.FieldPath.documentId(),'in',ids));
 }
@@ -779,18 +888,32 @@ function rsReadyFor(orderIds,needShip){
   if(RS.mode!=='scoped')return true;
   for(const raw of orderIds){
     if(!rsValidId(raw))continue;const id=String(raw);
-    if(!window.DB.orders.some(o=>String(o.id)===id)){rsMark('orders');return false;}
+    const liveHas=rsLiveEntries('orders').some(([k,m])=>m.has(id)&&RS.ready.get(k));
+    if(!liveHas&&!RS.sticky.has(id)){RS.sticky.add(id);rsMark('orders');return false;}
+    if(!liveHas)return false;
     const keys=[RS.dispChunkOf.get(id),RS.mergedChunkOf.get(id)];if(needShip)keys.push(RS.shipChunkOf.get(id));
-    if(keys.some(k=>!k||!RS.ready.get(k)))return false;
+    if(keys.some(k=>!k||!RS.ready.get(k))){rsMark('orders');return false;}
   }
   return true;
 }
-function rsGuard(orderIds,needShip){
+// 資料還沒讀完：先臨時讀取，讀完後自動再執行一次原本的動作（最多等 20 秒）
+function rsGuard(orderIds,needShip,retry){
   if(rsReadyFor(orderIds,needShip))return true;
-  toast('資料載入中，請稍候 2 秒再試一次');return false;
+  toast('讀取這張訂單的資料中，稍後自動完成...');
+  if(retry){
+    const t0=Date.now();
+    const tick=()=>{
+      if(rsReadyFor(orderIds,needShip)){retry();return;}
+      if(Date.now()-t0>20000){toast('資料載入逾時，請稍後再試一次');return;}
+      setTimeout(tick,300);
+    };
+    setTimeout(tick,300);
+  }
+  return false;
 }
 function rsShipped(orderId){
-  let n=0;for(const s of window.DB.shipments)for(const a of (s.allocations||[]))if(a.orderId===orderId)n+=(a.qty||0);return n;
+  const seen=new Map();for(const [,m] of rsLiveEntries('shipments'))for(const [id,s] of m)seen.set(id,s);
+  let n=0;for(const s of seen.values())for(const a of (s.allocations||[]))if(a.orderId===orderId)n+=(a.qty||0);return n;
 }
 function rsDesiredClosed(o,shipped){
   const qty=o.qty||0,rep=(o.done||0)+(o.defect||0)+(o.shortage||0);
@@ -800,18 +923,19 @@ function rsDesiredClosed(o,shipped){
 }
 // 自動維護 closed／orderIds：只在資料已從伺服器確認時才寫，避免用不完整的出貨資料判斷
 function rsReconcile(){
-  for(const s of window.DB.shipments){
+  for(const [,m] of rsLiveEntries('shipments'))for(const s of m.values()){
     const want=[...new Set((s.allocations||[]).map(a=>a.orderId).filter(rsValidId).map(String))];
     if(!want.length||RS.writing.has('S'+s.id))continue;
     if(JSON.stringify(s.orderIds||null)===JSON.stringify(want))continue;
     RS.writing.add('S'+s.id);
     db.collection('shipments').doc(s.id).update({orderIds:want}).catch(e=>console.warn(e)).finally(()=>RS.writing.delete('S'+s.id));
   }
-  for(const o of window.DB.orders){
+  const liveOrders=new Map();for(const [,m] of rsLiveEntries('orders'))for(const [id,o] of m)liveOrders.set(id,o);
+  for(const o of liveOrders.values()){
     const id=String(o.id);
     if(RS.writing.has('O'+id))continue;
     const ck=RS.shipChunkOf.get(id);if(!ck||!RS.ready.get(ck))continue;
-    let srcOk=false;for(const [k,m] of RS.src.orders)if(m.has(id)&&RS.ready.get(k)){srcOk=true;break;}
+    let srcOk=false;for(const [k,m] of rsLiveEntries('orders'))if(m.has(id)&&RS.ready.get(k)){srcOk=true;break;}
     if(!srcOk)continue;
     const want=rsDesiredClosed(o,rsShipped(o.id));
     if(o.closed===want)continue;
@@ -821,39 +945,104 @@ function rsReconcile(){
   }
 }
 // 點選才讀：確保某期間的資料已載入。已載入回傳 true；否則開始載入、回傳 false，載入完成後呼叫 rerender
+const RS_COLD_TTL=30*60e3;
+function rsColdKeyAdd(p,col,key,snap){
+  const m=new Map();snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()}));
+  RS.src[col].set(key,m);RS.ready.set(key,true);p.keys.push([col,key]);
+}
 function rsEnsure(kind,from,to,rerender){
   if(RS.mode!=='scoped')return true;
   from=from||'2000-01-01';to=to||'2999-12-31';
   if((kind==='ci'||kind==='ship')&&from>=RS.hotFrom)return true;
-  for(const p of RS.periods.values()){
-    if(p.kind===kind&&p.from<=from&&p.to>=to){if(p.ready)return true;if(rerender)p.cbs.push(rerender);return false;}
+  if(kind==='disp'&&from>=rsTWDate(0))return true; // 今天以後的派工本來就常駐（預約派工）
+  const now=Date.now();
+  for(const [k,p] of RS.periods){
+    if(p.kind!==kind||!(p.from<=from&&p.to>=to))continue;
+    if(!p.ready){if(rerender)p.cbs.push(rerender);return false;}
+    if(now-p.at<RS_COLD_TTL)return true;
+    rsDropPeriod(k); // 過期：重新讀取
   }
-  const key=`${kind}:${from}~${to}`;
-  const p={kind,from,to,ready:false,cbs:rerender?[rerender]:[],pending:0};
+  const key=`P:${kind}:${from}~${to}`;
+  const p={kind,from,to,ready:false,cbs:rerender?[rerender]:[],at:now,keys:[]};
   RS.periods.set(key,p);
-  let col,qs=[];
-  if(kind==='disp'){
-    col='dispatches';
-    qs.push(db.collection('dispatches').where('createdAt','>=',rsTWStartISO(from)).where('createdAt','<',rsTWStartISO(rsAddDays(to,1))));
-    qs.push(db.collection('dispatches').where('effectiveDate','>=',from).where('effectiveDate','<=',to));
-  }else if(kind==='ci'){col='checkins';qs.push(db.collection('checkins').where('date','>=',from).where('date','<=',to));}
-  else{col='shipments';qs.push(db.collection('shipments').where('date','>=',from).where('date','<=',to));}
-  p.pending=qs.length;
-  qs.forEach((q,i)=>rsListen(col,key+'#'+i,q,()=>{if(--p.pending===0)rsPeriodDone(p);}));
-  setTimeout(()=>rsPeriodDone(p),15000); // 離線時不要一直卡在載入中
+  (async()=>{
+    try{
+      if(kind==='disp'){
+        const [a,b]=await Promise.all([
+          db.collection('dispatches').where('createdAt','>=',rsTWStartISO(from)).where('createdAt','<',rsTWStartISO(rsAddDays(to,1))).get(),
+          db.collection('dispatches').where('effectiveDate','>=',from).where('effectiveDate','<=',to).get()]);
+        rsColdKeyAdd(p,'dispatches',key+'#c',a);rsColdKeyAdd(p,'dispatches',key+'#e',b);
+      }else if(kind==='ci'){
+        rsColdKeyAdd(p,'checkins',key,await db.collection('checkins').where('date','>=',from).where('date','<=',to).get());
+      }else{
+        rsColdKeyAdd(p,'shipments',key,await db.collection('shipments').where('date','>=',from).where('date','<=',to).get());
+        // 再讀這些出貨所屬的訂單、以及那些訂單的全部出貨（出貨狀態才正確）
+        const ids=new Set();for(const s of RS.src.shipments.get(key).values())(s.allocations||[]).forEach(a=>{if(rsValidId(a.orderId))ids.add(String(a.orderId));});
+        const list=[...ids],jobs=[];
+        for(let i=0;i<list.length;i+=RS.CHUNK){
+          const part=list.slice(i,i+RS.CHUNK),j=i/RS.CHUNK;
+          jobs.push(db.collection('orders').where(firebase.firestore.FieldPath.documentId(),'in',part).get().then(sn=>rsColdKeyAdd(p,'orders',key+'#o'+j,sn)));
+          jobs.push(db.collection('shipments').where('orderIds','array-contains-any',part).get().then(sn=>rsColdKeyAdd(p,'shipments',key+'#s'+j,sn)));
+        }
+        await Promise.all(jobs);
+      }
+    }catch(e){console.warn('[讀取範圍] 載入失敗',e);RS.periods.delete(key);p.keys.forEach(([c,k])=>{RS.src[c].delete(k);RS.ready.delete(k);});toast('資料載入失敗，請稍後再試');}
+    p.keys.forEach(([c])=>rsMark(c));
+    rsPeriodDone(p);
+  })();
   return false;
 }
+function rsDropPeriod(key){
+  const p=RS.periods.get(key);if(!p)return;
+  p.keys.forEach(([c,k])=>{RS.src[c].delete(k);RS.ready.delete(k);rsMark(c);});
+  RS.periods.delete(key);
+}
+// ── 讀取計數：設定頁 ──
+function rcInitUI(){
+  const n=document.getElementById('rc-name');if(n&&!n.value){try{n.value=(localStorage.getItem('rc-label')||'').replace(/^管理端 /,'');}catch(e){}}
+  const d=document.getElementById('rc-date');if(d&&!d.value)d.value=twToday();
+  const m=document.getElementById('rc-mine');if(m)m.textContent=RC.total.toLocaleString();
+}
+window.rcSaveName=function(){
+  const v=(document.getElementById('rc-name').value||'').trim();if(!v)return alert('請輸入名稱');
+  try{localStorage.setItem('rc-label','管理端 '+v);}catch(e){}
+  RC.setLabel('管理端 '+v);RC.flush();toast('已儲存');
+};
+window.rcShow=async function(){
+  const date=document.getElementById('rc-date').value||twToday();
+  const el=document.getElementById('rc-result');el.innerHTML='載入中...';
+  RC.flush();
+  try{
+    const s=await db.collection('readStats').doc(date).get();
+    const data=s.exists?s.data():{};
+    const rows=Object.values(data).filter(r=>r&&typeof r.total==='number').sort((a,b)=>b.total-a.total);
+    if(!rows.length){el.innerHTML='<div style="color:#888;font-size:13px">這天還沒有資料</div>';return;}
+    const sum=rows.reduce((a,r)=>a+r.total,0);
+    const hrs=r=>Object.entries(r.hours||{}).sort((a,b)=>b[1]-a[1]).slice(0,3).map(([h,n])=>`${h}點 ${n.toLocaleString()}`).join('、');
+    el.innerHTML=`<div style="overflow-x:auto"><table><thead><tr><th>裝置</th><th class="col-num">讀取次數</th><th>最多的時段</th><th>最後回報</th></tr></thead><tbody>${
+      rows.map(r=>`<tr><td>${MAT.esc(r.label||'')}</td><td class="col-num">${r.total.toLocaleString()}</td><td style="font-size:12px">${hrs(r)}</td><td style="font-size:12px">${r.updatedAt?toTW(r.updatedAt).slice(11,16):''}</td></tr>`).join('')
+    }<tr style="font-weight:700"><td>合計</td><td class="col-num">${sum.toLocaleString()}</td><td colspan="2" style="font-size:12px;color:#888">Firebase 用量頁的數字還包含主控台等，會比這裡略高</td></tr></tbody></table></div>`;
+  }catch(e){el.innerHTML='讀取失敗：'+MAT.esc(e.message);}
+};
 function rsEnsureP(kind,from,to){return new Promise(res=>{if(rsEnsure(kind,from,to,res))res();});}
 function rsPeriodDone(p){
-  if(p.ready)return;p.ready=true;rsFlush();
+  if(p.ready)return;p.ready=true;p.at=Date.now();rsFlush();
   const cbs=p.cbs;p.cbs=[];cbs.forEach(f=>{try{f();}catch(e){console.error(e);}});
 }
 const RS_LOADING='<div class="card" style="text-align:center;color:#888">⏳ 載入中...</div>';
 // 已結案訂單：使用者點選才讀
 window.rsLoadClosed=function(){
-  if(RS.mode!=='scoped'||RS.closedState!=='none')return;
+  if(RS.mode!=='scoped'||RS.closedState==='loading')return;
+  if(RS.closedState==='loaded'&&Date.now()-RS.closedAt<RS_COLD_TTL)return;
   RS.closedState='loading';rsRenderNotes();
-  rsListen('orders','o:closed',db.collection('orders').where('closed','==',true),()=>{RS.closedState='loaded';rsRenderNotes();});
+  // 已結案訂單＋全部出貨紀錄（出貨頁顯示這些訂單的出貨狀態需要）；一次性讀取
+  Promise.all([db.collection('orders').where('closed','==',true).get(),db.collection('shipments').get()]).then(([sn,ss])=>{
+    const m=new Map();sn.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()}));
+    const ms=new Map();ss.docs.forEach(d=>ms.set(d.id,{id:d.id,...d.data()}));
+    RS.src.orders.set('P:closed',m);RS.ready.set('P:closed',true);
+    RS.src.shipments.set('P:closedShip',ms);RS.ready.set('P:closedShip',true);
+    RS.closedState='loaded';RS.closedAt=Date.now();rsMark('orders');rsMark('shipments');rsRenderNotes();
+  }).catch(e=>{console.warn(e);RS.closedState='none';rsRenderNotes();toast('載入失敗，請稍後再試');});
 };
 function rsRenderNotes(){
   const show=RS.mode==='scoped';
@@ -924,6 +1113,7 @@ async function rsStart(){
     rsListen('dispatches','d:scheduled',db.collection('dispatches').where('effectiveDate','>=',rsTWDate(0)));
     rsListen('dispatches','d:adjust',db.collection('dispatches').where('adjustStatus','==','待確認')); // 員工申請調整：不管多久以前都要顯示
     rsListen('checkins','c:hot',db.collection('checkins').where('date','>=',RS.hotFrom));
+    rsListen('checkins','c:leave',db.collection('checkins').where('status','==','待審核')); // 待審核的請假：不管日期都要顯示
     rsListen('shipments','s:hot',db.collection('shipments').where('date','>=',RS.hotFrom));
   }
   rsRenderNotes();
@@ -1001,7 +1191,7 @@ window.parseOrderPaste=async function(){
   if(duplicates.length>0){
     const dupList=duplicates.map(d=>`${d.orderno} ${d.name}${d.spec?' '+d.spec:''}`).join('\n');
     const dupOld=window.DB.orders.filter(o=>duplicates.some(imp=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''))).map(o=>o.id);
-    if(!rsGuard(dupOld))return;
+    if(!rsGuard(dupOld,false,()=>parseOrderPaste()))return;
     const choice=confirm(`發現 ${duplicates.length} 筆重複訂單：\n${dupList}\n\n點「確定」→ 覆蓋重複的訂單\n點「取消」→ 跳過重複，只匯入新訂單`);
     if(choice){
       // 覆蓋：刪除舊的重複訂單，全部匯入
@@ -1087,7 +1277,7 @@ window.toggleAllOrders=function(allCk){
 window.delSelectedOrders=async function(){
   const ids=[...window._selectedOrderForDel];
   if(!ids.length)return;
-  if(!rsGuard(ids))return;
+  if(!rsGuard(ids,false,()=>delSelectedOrders()))return;
   if(!confirm(`確定刪除選取的 ${ids.length} 筆訂單？\n（相關派工記錄也會一併刪除）`))return;
   setSS('syncing');
   // 收集所有要刪除的 dispatch（避免重複刪除同一筆合併記錄）
@@ -1322,7 +1512,7 @@ window.editOrderQty=async function(orderId,newVal,inputEl){
   const o=window.DB.orders.find(x=>x.id===orderId);
   if(!o)return;
   if(qty===(o.qty||0))return;
-  if(!rsGuard([orderId])){inputEl.value=o.qty||0;return;}
+  if(!rsGuard([orderId],false,()=>editOrderQty(orderId,newVal,inputEl)))return;
   setSS('syncing');
   try{
     // 更新訂單數量
@@ -1342,7 +1532,7 @@ window.editOrderPrice=async function(orderId, newVal, inputEl){
   const o=window.DB.orders.find(x=>x.id===orderId);
   if(!o)return;
   if(price===(o.price||0))return; // 沒有變更
-  if(!rsGuard([orderId])){inputEl.value=o.price||0;return;}
+  if(!rsGuard([orderId],false,()=>editOrderPrice(orderId,newVal,inputEl)))return;
   o.price=price;
   await saveOrder(o);
   // 同步更新所有相關派工記錄的 itemPrice
@@ -1373,7 +1563,7 @@ window.applyDbPrice=async function(orderId){
   if(!dbP){toast('品名單價資料庫查無對應品項');return;}
   const price=dbP.price;
   if(price===(o.price||0))return;
-  if(!rsGuard([orderId]))return;
+  if(!rsGuard([orderId],false,()=>applyDbPrice(orderId)))return;
   const related=findRelatedDispatches(orderId);
   const reported=related.filter(d=>(d.doneQty||0)>0);
   const confirmed=related.filter(d=>d.adminConfirmed);
@@ -1397,7 +1587,7 @@ window.applyDbPrice=async function(orderId){
   renderOrders();
 }
 window.delOrder=async function(id){
-  if(!rsGuard([id]))return;
+  if(!rsGuard([id],false,()=>delOrder(id)))return;
   if(!confirm('確定刪除此訂單？'))return;
   await db.collection('orders').doc(id).delete();
   const toDelete=findRelatedDispatches(id);
@@ -1552,7 +1742,7 @@ window.createDispatch=async function(){
   const ids=[...window._selectedOrderIds];
   const selectedWorkers=Array.from(document.querySelectorAll('#d-worker-checks input:checked')).map(c=>c.value);
   if(!ids.length)return alert('請勾選至少一筆訂單');
-  if(!rsGuard(ids))return;
+  if(!rsGuard(ids,false,()=>createDispatch()))return;
   if(!selectedWorkers.length)return alert('請選擇至少一名員工');
   const note=document.getElementById('d-note').value;
   const effectiveDate=document.getElementById('d-effective-date').value||toTW(new Date().toISOString(),false);
@@ -1779,7 +1969,7 @@ window.confirmAddWorkers=async function(orderId){
 }
 window.deleteDispatch=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
-  if(!rsGuard([d.orderId]))return;
+  if(!rsGuard([d.orderId],false,()=>deleteDispatch(id)))return;
   if(!confirm(`確定刪除「${d.worker}」的派工記錄？\n（已回報的數量也會從訂單中扣除）`))return;
   const o=window.DB.orders.find(x=>x.id===d.orderId);
   if(o){
@@ -1848,7 +2038,7 @@ window.openAdjust=function(id){
 }
 window.submitAdjust=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
-  if(!rsGuard([d.orderId]))return;
+  if(!rsGuard([d.orderId],false,()=>submitAdjust(id)))return;
   const done=parseInt(document.getElementById('adj-done').value)||0;
   const def=parseInt(document.getElementById('adj-def').value)||0;
   const sho=parseInt(document.getElementById('adj-sho').value)||0;
@@ -2201,7 +2391,7 @@ window.editSalaryPrice=async function(dispatchId, orderId, newVal, inputEl){
   if(isNaN(price)||price<0){inputEl.value=0;return;}
   const d=window.DB.dispatches.find(x=>x.id===dispatchId);
   if(!d||price===(d.itemPrice||0))return;
-  if(!rsGuard([orderId||d.orderId])){inputEl.value=d.itemPrice||0;return;}
+  if(!rsGuard([orderId||d.orderId],false,()=>editSalaryPrice(dispatchId,orderId,newVal,inputEl)))return;
   // 找出此訂單所有相關派工記錄（含合併派工）
   const related=findRelatedDispatches(orderId||d.orderId);
   // 同步所有派工記錄
@@ -3165,7 +3355,7 @@ window.openShipModal=function(orderId){
 }
 window.submitShipment=async function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
-  if(!rsGuard([orderId],true))return;
+  if(!rsGuard([orderId],true,()=>submitShipment(orderId)))return;
   const date=document.getElementById('ship-date').value;
   const qty=parseInt(document.getElementById('ship-qty').value)||0;
   const note=document.getElementById('ship-note').value.trim();
@@ -3264,7 +3454,7 @@ function renderConfirmReports(){
 }
 window.confirmReport=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
-  if(!rsGuard([d.orderId]))return;
+  if(!rsGuard([d.orderId],false,()=>confirmReport(id)))return;
   setSS('syncing');
   try{
     const isAdj=d.adjustStatus==='待確認';
@@ -3307,13 +3497,13 @@ ${d.worker} — ${d.orderName}`);
     setSS('ok');toast('已拒絕');
   }catch(e){setSS('err');toast('操作失敗');}
 }
-window.confirmAllReports=async function(){
-  if(!confirm('確定全部確認？'))return;
+window.confirmAllReports=async function(skipAsk){
+  if(skipAsk!==true&&!confirm('確定全部確認？'))return;
   const pending=window.DB.dispatches.filter(d=>
     ((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0))>0&&
     (!d.adminConfirmed||d.adjustStatus==='待確認')
   );
-  if(!rsGuard(pending.filter(d=>d.adjustStatus==='待確認').map(d=>d.orderId)))return;
+  if(!rsGuard(pending.filter(d=>d.adjustStatus==='待確認').map(d=>d.orderId),false,()=>confirmAllReports(true)))return;
   setSS('syncing');
   try{
     for(const d of pending){
@@ -3535,7 +3725,7 @@ window.sw=function(p){
   if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();initDispatchForm();}
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
-  if(p==='settings'){renderSettingsEmps();renderProducts();updateSysInfo();renderMatSettings(true);renderEmpInfo();}
+  if(p==='settings'){rcInitUI();renderSettingsEmps();renderProducts();updateSysInfo();renderMatSettings(true);renderEmpInfo();}
   if(p==='payslip')psInit();
   if(p==='materials'&&!window._matAdminUI&&window.MAT){
     window._matAdminUI=MAT.mount(document.getElementById('mat-admin-root'),{mode:'admin',by:()=>'管理者',employees:()=>window.DB.employees,toast});
