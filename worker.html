@@ -425,7 +425,7 @@ function _subRelChunk(c){
       const changed=snap.docChanges().length>0;
       c.docs=snap.docs.map(d=>({id:d.id,...d.data()}));
       if(changed||firstReady){_rebuildDispatches();_renderScope();}
-    },()=>setSS('err'));
+    },_scopeErr);
 }
 function _subOrdChunk(c){
   const docIds=c.ids.map(x=>String(x));
@@ -438,7 +438,7 @@ function _subOrdChunk(c){
       _rebuildOrders();
       // 與舊版相同：訂單變動本身不觸發重畫（下次重畫自然會用到新資料）；只有首次載入完成時重畫
       if(firstReady)_renderScope();
-    },()=>setSS('err'));
+    },_scopeErr);
 }
 // 此派工相關的訂單與派工是否都已從伺服器確認
 function scopeReadyFor(d){
@@ -457,6 +457,21 @@ function stopScope(){
   _relChunks=[];_ordChunks=[];_ownDocs=[];_ciReady=false;_scopeWorker=null;
   _histDocs=new Map();_histLoaded={};_histLoading=false;_extraOrderIds=new Set();
   dispatches=[];orders=[];checkins=[];
+}
+// 監聽出錯（例如讀取額度用完、網路長時間中斷）時，Firestore 會永久停止該監聽，回到前景也不會恢復。
+// 改成：出錯後整組重新開始監聽（60 秒後；連續出錯逐次加倍，最多 5 分鐘）。
+let _scopeRetryTimer=null,_scopeRetryTries=0,_scopeRetryAt=0;
+function _scopeErr(err){
+  console.warn('[讀取範圍] 監聽中斷',err);
+  setSS('err');
+  if(_scopeRetryTimer||!currentWorker)return;
+  if(Date.now()-_scopeRetryAt>600000)_scopeRetryTries=0; // 10 分鐘內沒再出錯 → 重新計算
+  const wait=Math.min(300000,60000*Math.pow(2,_scopeRetryTries++));
+  _scopeRetryTimer=setTimeout(()=>{
+    _scopeRetryTimer=null;_scopeRetryAt=Date.now();
+    const name=currentWorker;if(!name)return;
+    stopScope();startScope(name);
+  },wait);
 }
 function _twToday(){return toTW(new Date().toISOString(),false);}
 function _addDays(date,n){const d=new Date(date+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
@@ -556,8 +571,8 @@ function _listenWithFallback(scoped,fallback,handler,stillActive,setUnsub){
   let unsub=scoped.onSnapshot({includeMetadataChanges:true},handler,err=>{
     if(err&&err.code==='failed-precondition'&&stillActive()){
       console.warn('[讀取範圍] 尚未建立複合索引，暫時改讀全部：',err.message);
-      setUnsub(fallback.onSnapshot({includeMetadataChanges:true},handler,()=>setSS('err')));
-    }else setSS('err');
+      setUnsub(fallback.onSnapshot({includeMetadataChanges:true},handler,_scopeErr));
+    }else _scopeErr(err);
   });
   return unsub;
 }
@@ -1317,20 +1332,24 @@ function renderWorkerMain(){
     const allForOrder=dispatches.filter(x=>
       x.worker===d.worker&&(x.orderId===refOrderId||(x.mergedOrderIds&&x.mergedOrderIds.includes(refOrderId)))
     );
-    // 用 createdAt 找最新的 batchId（取最晚時間的那筆的 batchId）
+    // 找最新的 batchId：還沒生效的預派不算；依「生效日期，再比建立時間」排序
+    // （晚上預派明天的工作時，今天的卡片今晚仍可回報，明天才換成預派的那一批）
+    const _today=toTW(new Date().toISOString(),false);
     let latestBatchId=null;
     let latestTime='';
     for(const x of allForOrder){
-      const t=x.createdAt||'';
+      const wd=x.effectiveDate||toTW(x.createdAt,false);
+      if(wd>_today)continue;
+      const t=wd+'|'+(x.createdAt||'');
       if(t>latestTime){latestTime=t;latestBatchId=x.batchId||x.id;}
     }
     // 同一 batchId 的所有 dispatch 都算最新批次
     // 若有多筆 createdAt 完全相同，只要屬於最新 batchId 就通過
     if(!latestBatchId)return true;
     // 找出最新的 batchId（可能有多筆 createdAt 相同，取出所有 batchId 後比 id 字串）
-    const maxTime=allForOrder.reduce((m,x)=>((x.createdAt||'')>m?(x.createdAt||''):m),'');
     const latestBatchIds=new Set(
-      allForOrder.filter(x=>(x.createdAt||'')===maxTime).map(x=>x.batchId||x.id)
+      allForOrder.filter(x=>{const wd=x.effectiveDate||toTW(x.createdAt,false);return wd<=_today&&wd+'|'+(x.createdAt||'')===latestTime;})
+        .map(x=>x.batchId||x.id)
     );
     return latestBatchIds.has(d.batchId||d.id);
   }
