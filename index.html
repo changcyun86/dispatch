@@ -1064,16 +1064,35 @@ const RS_RENDER={
 function rsTWDate(offsetDays){return toTW(new Date(Date.now()+(offsetDays||0)*864e5).toISOString(),false);}
 function rsAddDays(dateStr,n){const d=new Date(dateStr+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
 function rsTWStartISO(dateStr){return new Date(dateStr+'T00:00:00+08:00').toISOString();}
+// 監聽出錯（例如讀取額度用完、網路長時間中斷）時，Firestore 會永久停止這個監聽，不會自己恢復。
+// 舊寫法只把狀態設成錯誤，之後其他監聽一有資料又顯示「已同步」，這個監聽卻已停止 → 新回報不會出現。
+// 改成：出錯後自動重開（30 秒起、逐次加倍、最多 5 分鐘），重開成功前狀態維持「錯誤」。
+const RS_FAILED=new Set();
 function rsListen(col,key,query,onReady){
-  return query.onSnapshot({includeMetadataChanges:true},snap=>{
-    const firstReady=!snap.metadata.fromCache&&!RS.ready.get(key);
-    const changed=!RS.src[col].has(key)||snap.docChanges().length>0;
-    if(changed){const m=new Map();snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()}));RS.src[col].set(key,m);}
-    if(firstReady)RS.ready.set(key,true);
-    if(changed||firstReady)rsMark(col);
-    if(firstReady&&onReady)onReady();
-    if(!snap.metadata.fromCache)setSS('ok');
-  },err=>{console.warn('[讀取範圍]',key,err);setSS('err');});
+  let unsub=null,stopped=false,timer=null,tries=0;
+  const start=()=>{
+    unsub=query.onSnapshot({includeMetadataChanges:true},snap=>{
+      const firstReady=!snap.metadata.fromCache&&!RS.ready.get(key);
+      const changed=!RS.src[col].has(key)||snap.docChanges().length>0;
+      if(changed){const m=new Map();snap.docs.forEach(d=>m.set(d.id,{id:d.id,...d.data()}));RS.src[col].set(key,m);}
+      if(firstReady)RS.ready.set(key,true);
+      if(changed||firstReady)rsMark(col);
+      if(firstReady&&onReady)onReady();
+      if(!snap.metadata.fromCache){
+        if(RS_FAILED.delete(key))console.info('[讀取範圍] 已恢復',key);
+        tries=0;
+        setSS(RS_FAILED.size?'err':'ok');
+      }
+    },err=>{
+      console.warn('[讀取範圍]',key,err);
+      RS_FAILED.add(key);setSS('err');
+      if(stopped||(err&&err.code==='failed-precondition'))return; // 缺索引：重試也沒用
+      const wait=Math.min(300000,30000*Math.pow(2,tries++));
+      timer=setTimeout(()=>{timer=null;if(!stopped)start();},wait);
+    });
+  };
+  start();
+  return()=>{stopped=true;if(timer)clearTimeout(timer);if(unsub)unsub();};
 }
 function rsMark(col){RS.dirty.add(col);if(!RS.timer)RS.timer=setTimeout(rsFlush,30);}
 function rsFlush(){
@@ -3763,13 +3782,26 @@ function renderConfirmReports(){
     </div>
   </div>`;
 }
+// 確認者：這台電腦在「設定 → 各裝置讀取次數」設定的名稱（沒設定時用裝置代碼）
+function confirmerName(){
+  let n='';try{n=(localStorage.getItem('rc-label')||'').replace(/^管理端 /,'').trim();}catch(e){}
+  return n||('未命名 '+String((window.RC&&RC.dev)||'').slice(-4)).trim();
+}
+// 每日記錄顯示：已由誰、何時確認（舊資料沒有這兩個欄位就不顯示）
+function confirmedInfo(d){
+  if(!d.adminConfirmed||!d.confirmedBy)return'';
+  const t=d.confirmedAt?toTW(d.confirmedAt):'';
+  const today=toTW(new Date().toISOString(),false);
+  const when=t?(t.slice(0,10)===today?t.slice(11,16):t.slice(5,16)):'';
+  return`<div style="font-size:10px;color:#888;margin-top:2px;white-space:nowrap">✓ ${d.confirmedBy}${when?' '+when:''}</div>`;
+}
 window.confirmReport=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
   if(!rsGuard([d.orderId],false,()=>confirmReport(id)))return;
   setSS('syncing');
   try{
     const isAdj=d.adjustStatus==='待確認';
-    const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null};
+    const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null,confirmedBy:confirmerName(),confirmedAt:new Date().toISOString()};
     if(isAdj){
       // 調整申請確認：把 pending 數量寫入正式欄位
       updateData.doneQty=d.pendingDoneQty??d.doneQty;
@@ -3819,7 +3851,7 @@ window.confirmAllReports=async function(skipAsk){
   try{
     for(const d of pending){
       const isAdj=d.adjustStatus==='待確認';
-      const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null};
+      const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null,confirmedBy:confirmerName(),confirmedAt:new Date().toISOString()};
       if(isAdj){
         updateData.doneQty=d.pendingDoneQty??d.doneQty;
         updateData.defectQty=d.pendingDefectQty??d.defectQty;
@@ -3952,7 +3984,7 @@ window.renderDailyReport=function(){
         <td class="col-num" style="color:#2E7D32;font-weight:600">${d.doneQty||0}</td>
         <td class="col-num" style="color:#C62828">${d.defectQty||0}</td>
         <td class="col-num" style="color:#E65100">${d.shortageQty||0}</td>
-        <td><span class="badge ${sc}">${st}</span></td>
+        <td><span class="badge ${sc}">${st}</span>${confirmedInfo(d)}</td>
         <td><button class="btn btn-sm btn-warn" onclick="openAdjust('${d.id}')" style="font-size:11px;padding:3px 8px">調整</button></td>
       </tr>`;
     }).join('');
