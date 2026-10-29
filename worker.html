@@ -186,6 +186,7 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
       <div style="display:flex;justify-content:flex-end;margin-bottom:8px">
         <button class="btn btn-sm" onclick="manualRefresh()">🔄 重新整理 / Làm mới</button>
       </div>
+      <div id="wm-drink"></div>
       <div id="wm-tasks"><div style="text-align:center;color:#aaa;padding:2rem">載入中... / Đang tải...</div></div>
     </div>
 
@@ -1216,6 +1217,7 @@ function renderWorkerMain(){
     document.getElementById('wm-stats').innerHTML='';
     const tasks=document.getElementById('wm-tasks');
     if(tasks)tasks.innerHTML=NO_ACCESS_MSG;
+    const dn=document.getElementById('wm-drink');if(dn)dn.innerHTML='';
     return;
   }
   const myAll=dispatches.filter(d=>d.worker===currentWorker);
@@ -1283,7 +1285,8 @@ function renderWorkerMain(){
     if(effectiveDate>twToday)return false;
     // 生效日期是昨天或更早，且未回報 → 隱藏（隔天自動消失）
     const dispatchDate=d.effectiveDate||toTW(d.createdAt,false);
-    if(dispatchDate<twToday&&myReported===0)return false;
+    // 例外：多日工作，上一次有效的「今天還在做」之後到今天之前沒有其他上班打卡 → 繼續顯示
+    if(dispatchDate<twToday&&myReported===0&&!stillCarry(d,twToday))return false;
     // 工單順序判斷：有設定 sequence 時，前一張必須回報完才顯示
     if(d.sequence&&d.sequence>1){
       // 找同一 batchId 中 sequence-1 的工單
@@ -1317,6 +1320,7 @@ function renderWorkerMain(){
     <div class="metric"><div class="metric-label">本月加工費<br><span style="font-size:10px;color:#bbb">Tiền gia công tháng này</span></div><div class="metric-val">$${totalEarned.toFixed(0)}</div></div>
   `;
   if(currentTab!=='pending')return;
+  renderDrinkNotice(myPending.length);
   const tasks=document.getElementById('wm-tasks');
   if(!myPending.length){tasks.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單<br>Không có công việc chờ xử lý</div>';return;}
   // ── 待辦工單顯示 ──
@@ -1376,6 +1380,7 @@ function renderWorkerMain(){
             <div class="bilabel" style="margin-bottom:4px"><span class="zh">📝 備註</span><span class="vi">Ghi chú</span></div>
             <input type="text" id="rn-${d.id}" placeholder="可填寫備註說明 / Nhập ghi chú nếu cần" value="${d.workerNote||''}" style="width:100%;box-sizing:border-box">
           </div>
+          ${stillBlockHtml([d])}
           <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px" onclick="submitRpt('${d.id}')">
             回報完工 / Báo cáo hoàn thành
           </button>
@@ -1413,6 +1418,7 @@ function renderWorkerMain(){
             <div class="bilabel" style="margin-bottom:4px"><span class="zh">📝 備註</span><span class="vi">Ghi chú</span></div>
             <input type="text" id="gn-${gid}" placeholder="可填寫備註說明 / Nhập ghi chú nếu cần" style="width:100%;box-sizing:border-box">
           </div>
+          ${stillBlockHtml(list)}
           <button class="btn btn-primary" style="width:100%;margin-top:10px;padding:12px;font-size:14px"
             onclick="submitGroupRpt('${list.map(d=>d.id).join(',')}'.split(','),'${gid}')">
             回報完工 / Báo cáo hoàn thành
@@ -1424,7 +1430,7 @@ function renderWorkerMain(){
 
 
 // ── 同品名合併群組批次回報 ──
-async function autoClockOut(){
+async function autoClockOut(opt){
   // 回報完工後自動更新下班打卡時間
   if(!currentWorker)return;
   const twToday=toTW(new Date().toISOString(),false);
@@ -1436,9 +1442,132 @@ async function autoClockOut(){
     const ci=checkins.find(c=>c.worker===currentWorker&&c.date===twToday);
     if(ci&&ci.inTime){
       // 有上班卡才自動更新下班時間
-      await db.collection('checkins').doc(id).update({outTime:twTime});
+      // hasReport：當天有回報數量；stillIds：當天按了「今天還在做」的派工（之後「代訂飲料」判斷用）
+      // 只加欄位，與下班時間同一次寫入
+      const patch={outTime:twTime};
+      if(opt&&opt.still)patch.stillIds=firebase.firestore.FieldValue.arrayUnion(...opt.still);
+      else patch.hasReport=true;
+      await db.collection('checkins').doc(id).update(patch);
     }
   }catch(e){console.warn('autoClockOut failed',e);}
+}
+// ══ 多日工作 ══
+// 派工欄位：multiDay、maxDays（總共可做幾天）、stillDays:[{date,at,rejected}]
+// 天數上限 N → 「今天還在做」最多按 N-1 次，第 N 天必須回報數量；被駁回的不算次數
+function stillList(d){return Array.isArray(d.stillDays)?d.stillDays:[];}
+function stillUsed(d){return stillList(d).filter(s=>!s.rejected).length;}
+function stillMax(d){return Math.max(2,parseInt(d.maxDays)||2);}
+function stillTodayEntry(d,today){return stillList(d).find(s=>s.date===today)||null;}
+function stillCanPress(d,today){return!!d.multiDay&&!stillTodayEntry(d,today)&&stillUsed(d)<stillMax(d)-1;}
+// 卡片是否延續到今天：最後一次有效的「還在做」日期之後、今天之前，沒有其他上班打卡
+// （週末、假日沒打卡 → 下一個有打卡的日子仍顯示）
+function stillCarry(d,today){
+  if(!d.multiDay)return false;
+  const ok=stillList(d).filter(s=>!s.rejected&&s.date<today).map(s=>s.date).sort();
+  if(!ok.length)return false;
+  const p=ok[ok.length-1];
+  return!checkins.some(c=>c.worker===d.worker&&c.inTime&&c.date>p&&c.date<today);
+}
+function stillBlockHtml(list){
+  const d=list[0];
+  if(!d||!d.multiDay)return'';
+  const today=toTW(new Date().toISOString(),false);
+  const t=stillTodayEntry(d,today);
+  const used=stillUsed(d),max=stillMax(d);
+  const dayNo=stillList(d).filter(s=>!s.rejected&&s.date<today).length+1;
+  const head=`<div style="font-size:12px;color:#6A1B9A;margin-top:10px">🗓 多日工作 / Làm nhiều ngày：第 ${dayNo} 天，上限 ${max} 天 / Ngày ${dayNo}, tối đa ${max} ngày</div>`;
+  let body;
+  if(t&&!t.rejected)body=`<div style="background:#E8F5E9;color:#2E7D32;border-radius:8px;padding:8px 10px;font-size:12px;margin-top:6px">✓ 今天已登記「還在做」，做完仍可回報數量<br>Đã ghi nhận hôm nay vẫn đang làm, làm xong vẫn có thể báo cáo số lượng</div>`;
+  else if(t&&t.rejected)body=`<div style="background:#FFEBEE;color:#C62828;border-radius:8px;padding:8px 10px;font-size:12px;margin-top:6px">今天的「還在做」已被駁回，請回報數量<br>Đã bị từ chối, vui lòng báo cáo số lượng</div>`;
+  else if(stillCanPress(d,today))body=`<button class="btn" style="width:100%;margin-top:6px;padding:10px;font-size:14px;background:#F3E5F5;color:#6A1B9A;border:1px solid #CE93D8" onclick="pressStill('${list.map(x=>x.id).join(',')}'.split(','))">今天還在做 / Hôm nay vẫn đang làm</button>
+    <div style="font-size:11px;color:#888;margin-top:3px">今天沒做完才按，明天卡片會繼續顯示 / Chỉ bấm khi hôm nay chưa làm xong</div>`;
+  else body=`<div style="background:#FFF3E0;color:#E65100;border-radius:8px;padding:8px 10px;font-size:12px;margin-top:6px">今天是最後一天，請回報數量<br>Hôm nay là ngày cuối, vui lòng báo cáo số lượng</div>`;
+  return head+body;
+}
+// ══ 代訂飲料（與管理端判斷相同；只用已讀取的自己打卡與派工，不增加讀取）══
+const DRINK_START='2026-11-01';
+function stillCarryOn(d,date){
+  if(!d.multiDay)return false;
+  const ok=stillList(d).filter(s=>!s.rejected&&s.date<date).map(s=>s.date).sort();
+  if(!ok.length)return false;
+  const p=ok[ok.length-1];
+  if(checkins.some(c=>c.worker===d.worker&&c.inTime&&c.date>p&&c.date<date))return false;
+  const rep=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0||d.groupReportedAt;
+  const at=d.groupReportedAt||d.lastReportAt;
+  if(rep&&at&&toTW(at,false)<=p)return false;
+  return true;
+}
+function drinkDaysThisMonth(){
+  const today=toTW(new Date().toISOString(),false);
+  const from=today.slice(0,8)+'01';
+  const lo=from>DRINK_START?from:DRINK_START;
+  const mine=dispatches.filter(d=>d.worker===currentWorker);
+  return checkins.filter(c=>c.worker===currentWorker&&c.inTime&&c.date>=lo&&c.date<today)
+    .filter(c=>!(c.leave&&c.status==='核准'))
+    .filter(c=>!c.hasReport&&!((c.stillIds||[]).length)&&!c.drinkWaived)
+    .filter(c=>mine.some(d=>(d.effectiveDate||toTW(d.createdAt,false))===c.date||stillCarryOn(d,c.date)));
+}
+function renderDrinkNotice(pendingCount){
+  const el=document.getElementById('wm-drink');if(!el)return;
+  const today=toTW(new Date().toISOString(),false);
+  if(today<DRINK_START){el.innerHTML='';return;}
+  const ci=checkins.find(c=>c.worker===currentWorker&&c.date===today);
+  const reportedToday=ci&&(ci.hasReport||(ci.stillIds||[]).length);
+  const n=drinkDaysThisMonth().length;
+  let h='';
+  if(ci&&ci.inTime&&!reportedToday&&pendingCount>0)
+    h+=`<div style="background:#FFF8E1;border:1px solid #FFE082;color:#8D6E00;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:8px">🥤 今天還沒有回報數量。當天沒有回報（或按「還在做」）會扣一次代訂飲料。<br>Hôm nay chưa báo cáo số lượng. Ngày không báo cáo sẽ bị trừ một lần tiền nước uống.</div>`;
+  if(n>0)
+    h+=`<div style="font-size:12px;color:#C62828;margin-bottom:8px">🥤 本月代訂飲料：${n} 次 / Tháng này bị trừ tiền nước uống: ${n} lần</div>`;
+  el.innerHTML=h;
+}
+const _pressingStill=new Set();
+window.pressStill=async function(ids){
+  const key=ids.join(',');
+  if(_pressingStill.has(key))return;
+  const list=ids.map(id=>dispatches.find(x=>String(x.id)===String(id))).filter(Boolean);
+  if(!list.length)return;
+  if(!list.every(d=>scopeReadyFor(d))){toast(SCOPE_WAIT_MSG);return;}
+  const today=toTW(new Date().toISOString(),false);
+  if(!list.every(d=>stillCanPress(d,today))){toast('今天不能再登記，請回報數量 / Vui lòng báo cáo số lượng');return;}
+  if(!confirm('確定今天還沒做完？\nXác nhận hôm nay vẫn chưa làm xong?'))return;
+  _pressingStill.add(key);
+  const now=new Date().toISOString();
+  setSS('syncing');
+  try{
+    for(const d of list){
+      await db.collection('dispatches').doc(String(d.id)).update({
+        stillDays:firebase.firestore.FieldValue.arrayUnion({date:today,at:now,rejected:false})});
+    }
+    setSS('ok');toast('已登記 / Đã ghi nhận ✓');
+    logReportEvent(list,'still',{done:0,def:0,sho:0});
+    autoClockOut({still:list.map(d=>String(d.id))});
+  }catch(e){setSS('err');toast('登記失敗，請重試 / Thất bại, thử lại');}
+  finally{_pressingStill.delete(key);}
+};
+// ══ 回報事件紀錄（工時與產能分析用）══
+// 每次「第一次送出回報」寫一筆到 reportEvents（新集合），員工端只寫不讀，不增加讀取量。
+// 只記時間點與對應的派工；數量在分析時以派工紀錄的最終數量為準（修改、管理員核准調整都會自動反映），
+// 所以修改回報時不需要、也不會動到這筆紀錄。
+// kind：'report' 回報數量；之後多日工作的「今天還在做」為 'still'。
+function logReportEvent(list,kind,qty){
+  if(!currentWorker||!list||!list.length)return;
+  const now=new Date();
+  const f=list[0];
+  const ev={
+    worker:currentWorker,
+    date:toTW(now.toISOString(),false),     // 台灣日期
+    at:now.toISOString(),                   // 手機送出時間（與打卡時間同一個時鐘）
+    serverAt:firebase.firestore.FieldValue.serverTimestamp(), // 伺服器時間，供檢查手機時鐘是否偏差
+    kind:kind||'report',
+    orderName:f.groupName||f.orderName||'',
+    orderSpec:f.orderSpec||'',
+    dispatchIds:list.map(d=>String(d.id)),
+    batchId:f.batchId||null,
+    qty:qty||{done:0,def:0,sho:0}           // 送出當下的數量（僅供參考）
+  };
+  const id=`RE-${currentWorker}-${now.getTime().toString(36)}${Math.random().toString(36).slice(2,5)}`;
+  db.collection('reportEvents').doc(id).set(ev).catch(e=>console.warn('logReportEvent failed',e));
 }
 // ══ 同品名合併回報（同一次派工 batchId、同品名 → 一張卡片） ══
 // 後台結構不變：仍是每張訂單一筆派工紀錄。員工填總數，系統依接單日期（早的先補滿）分配回各筆派工。
@@ -1532,6 +1661,7 @@ window.submitGroupRpt=async function(dispIds,gid){
         status:a.done+a.def+a.sho>0?'回報中':'待完成',groupReportedAt:now,lastReportAt:now};});
     await grpWrite(updated);
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
+    logReportEvent(list,'report',{done:v.done,def:v.def,sho:v.sho});
     autoClockOut();
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
   finally{_submittingGroup.delete(key);}
@@ -1619,6 +1749,7 @@ window.submitRpt=async function(id){
       });
     }
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
+    logReportEvent([d],'report',{done,def,sho});
     autoClockOut();
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
   finally{_submitting.delete(id);}

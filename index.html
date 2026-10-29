@@ -318,6 +318,10 @@ textarea{resize:vertical;min-height:70px}
           <input type="number" id="d-sequence" min="1" placeholder="如：1、2、3" style="margin-top:4px">
         </div>
       </div>
+      <div style="display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap;font-size:13px">
+        <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" id="d-multiday" style="width:auto;margin:0" onchange="document.getElementById('d-maxdays-wrap').style.display=this.checked?'flex':'none'"> 多日工作</label>
+        <span id="d-maxdays-wrap" style="display:none;align-items:center;gap:6px">天數上限 <input type="number" id="d-maxdays" min="2" value="2" style="width:70px;margin:0"> 天 <span style="color:#aaa;font-size:11px">（最多可按「還在做」上限減 1 次，最後一天必須回報數量）</span></span>
+      </div>
       <label>備註 <span style="color:#aaa;font-weight:400">（選填）</span></label>
       <textarea id="d-note" placeholder="填寫備註說明...（可不填）" style="min-height:60px"></textarea>
       <div style="margin-top:14px"><button class="btn btn-primary btn-sm" onclick="createDispatch()">確認派工</button></div>
@@ -334,6 +338,14 @@ textarea{resize:vertical;min-height:70px}
       <div class="card-title" style="margin-top:0">最近派工記錄</div>
       <div id="dispatch-log" style="font-size:12px"></div>
     </div>
+  </div>
+  <div class="card" style="margin-top:0.75rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+      <div class="card-title" style="margin:0">🗓 今天還在做（多日工作）</div>
+      <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:#888">日期 <input type="date" id="still-date" style="width:auto;margin:0" onchange="renderStillList()"></div>
+    </div>
+    <div style="font-size:11px;color:#888;margin-bottom:6px">駁回等同員工當天未回報：卡片不再延續、不算次數。可駁回 7 天內的紀錄。</div>
+    <div id="still-list" style="font-size:12px"></div>
   </div>
 </div>
 
@@ -530,7 +542,7 @@ textarea{resize:vertical;min-height:70px}
         <div style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:6px;align-items:flex-end">
           <div><label>品名</label><input type="text" id="np-name" placeholder="品名"></div>
           <div><label>規格</label><input type="text" id="np-spec" placeholder="（可選）"></div>
-          <div><label>單價</label><input type="number" id="np-price" min="0" step="0.01" placeholder="0.00"></div>
+          <div><label>單價</label><input type="number" id="np-price" step="0.01" placeholder="0.00"></div>
           <div style="padding-bottom:1px"><button class="btn btn-primary btn-sm" onclick="addProduct()">新增</button></div>
         </div>
       </div>
@@ -784,6 +796,114 @@ function toTW(isoStr,showTime=true){
 }
 // 派工記錄的「歸屬日期」：優先用生效日（預約派工的實際回報日），沒有才退回建立時間換算台灣時間
 function dispWorkDate(d){return d.effectiveDate||toTW(d.createdAt,false);}
+// 工單順序標籤（只顯示，派工時有填才出現；與預約派工的樣式相同）
+function seqBadge(d){return d&&d.sequence?` <span style="background:#FFF3E0;color:#E65100;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:400;white-space:nowrap">第 ${d.sequence} 張</span>`:'';}
+// ══ 多日工作 ══
+// 派工欄位：multiDay、maxDays（總共可做幾天）、stillDays:[{date,at,rejected}]；打卡紀錄：stillIds
+function stillList(d){return Array.isArray(d.stillDays)?d.stillDays:[];}
+function stillUsed(d){return stillList(d).filter(s=>!s.rejected).length;}
+// 員工今天是否仍看得到這張多日卡片（判斷與 worker.html 相同）
+function multiActiveToday(d){
+  if(!d.multiDay)return false;
+  if((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0||d.groupReportedAt)return false;
+  const today=toTW(new Date().toISOString(),false);
+  if(dispWorkDate(d)>=today)return false; // 今天或未來的派工本來就照一般規則
+  const ok=stillList(d).filter(s=>!s.rejected&&s.date<today).map(s=>s.date).sort();
+  if(!ok.length)return false;
+  const p=ok[ok.length-1];
+  return!window.DB.checkins.some(c=>c.worker===d.worker&&c.inTime&&c.date>p&&c.date<today);
+}
+// 「今天還在做」清單：只用已載入的派工（未結案訂單的派工常駐），不額外讀取
+function renderStillList(){
+  const el=document.getElementById('still-list');if(!el)return;
+  const today=toTW(new Date().toISOString(),false);
+  const minDate=rsAddDays(today,-7);
+  const dateEl=document.getElementById('still-date');
+  if(dateEl){dateEl.min=minDate;dateEl.max=today;if(!dateEl.value||dateEl.value<minDate||dateEl.value>today)dateEl.value=today;}
+  const date=dateEl?dateEl.value:today;
+  const groups=new Map();
+  for(const d of window.DB.dispatches){
+    const s=stillList(d).find(x=>x.date===date);if(!s)continue;
+    const key=d.isMerged?`${d.worker}||${d.batchId}||${d.groupName||d.orderName}`:String(d.id);
+    if(!groups.has(key))groups.set(key,{ds:[],s});
+    groups.get(key).ds.push(d);
+  }
+  if(!groups.size){el.innerHTML='<div style="color:#aaa;padding:8px 0">這一天沒有「還在做」的紀錄</div>';return;}
+  const rows=[...groups.values()].sort((a,b)=>(a.ds[0].worker||'').localeCompare(b.ds[0].worker||'')||(a.s.at||'').localeCompare(b.s.at||''));
+  el.innerHTML=rows.map(g=>{
+    const d=g.ds[0],s=g.s;
+    const nth=stillList(d).filter(x=>!x.rejected&&x.date<=date).length;
+    const ids=g.ds.map(x=>String(x.id)).join(',');
+    const nos=g.ds.map(x=>x.orderNo||x.orderId).join('、');
+    const status=s.rejected
+      ?'<span style="padding:2px 8px;border-radius:20px;background:#eee;color:#888">已駁回</span>'
+      :`<button class="btn btn-sm" style="background:#FFEBEE;color:#C62828;border-color:#EF9A9A" onclick="rejectStill('${ids}','${date}')">駁回</button>`;
+    return`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:0.5px solid #f0f0f0">
+      <div>
+        <div><strong>${d.worker}</strong> <span style="color:#aaa">${s.at?toTW(s.at).slice(11,16):''}</span>　${d.groupName||d.orderName}${d.orderSpec?` <span style="color:#aaa">(${d.orderSpec})</span>`:''}</div>
+        <div style="color:#888;font-size:11px">${nos}　${s.rejected?'':`第 ${nth} 次／最多 ${Math.max(1,(d.maxDays||2)-1)} 次（上限 ${d.maxDays||2} 天）`}</div>
+      </div>
+      <div style="flex-shrink:0">${status}</div>
+    </div>`;
+  }).join('');
+}
+window.renderStillList=renderStillList;
+// 指定日期是否為多日工作的延續日（卡片仍顯示）：該日之前最後一次有效的「還在做」之後沒有其他上班打卡，
+// 且沒有在那天（含）以前回報數量
+function stillCarryOn(d,date,cis){
+  if(!d.multiDay)return false;
+  const ok=stillList(d).filter(s=>!s.rejected&&s.date<date).map(s=>s.date).sort();
+  if(!ok.length)return false;
+  const p=ok[ok.length-1];
+  if(cis.some(c=>c.worker===d.worker&&c.inTime&&c.date>p&&c.date<date))return false;
+  const rep=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0||d.groupReportedAt;
+  const at=d.groupReportedAt||d.lastReportAt;
+  if(rep&&at&&toTW(at,false)<=p)return false;
+  return true;
+}
+// ══ 代訂飲料 ══
+// 有上班打卡、當天沒有回報數量也沒按「還在做」→ 扣一次（單價取自品名單價資料庫「代訂飲料」，預設 -50）
+// 排除：請假已核准的日子、當天沒有派工（沒有當天生效的派工，也沒有延續中的多日工作）、今天（還沒結束）、啟用日以前
+// 取消：打卡紀錄加上 drinkWaived:true（員工端看得到）
+const DRINK_NAME='代訂飲料',DRINK_START='2026-11-01';
+function drinkPrice(){const p=(window.DB.products||[]).find(x=>x.name===DRINK_NAME);return p?Number(p.price)||0:-50;}
+function drinkHasProduct(){return(window.DB.products||[]).some(x=>x.name===DRINK_NAME);}
+function hadDispatchOn(worker,date,disps,cis){
+  return disps.some(d=>d.worker===worker&&(dispWorkDate(d)===date||stillCarryOn(d,date,cis)));
+}
+function drinkDays(worker,from,to,disps,cis,waiveLocal){
+  const today=toTW(new Date().toISOString(),false);
+  const lo=from>DRINK_START?from:DRINK_START;
+  return cis.filter(c=>c.worker===worker&&c.inTime&&c.date>=lo&&c.date<=to&&c.date<today)
+    .filter(c=>!(c.leave&&c.status==='核准'))
+    .filter(c=>!c.hasReport&&!((c.stillIds||[]).length))
+    .filter(c=>hadDispatchOn(worker,c.date,disps,cis))
+    .map(c=>{const k=worker+'|'+c.date;
+      return{date:c.date,waived:waiveLocal&&k in waiveLocal?!!waiveLocal[k]:!!c.drinkWaived};})
+    .sort((a,b)=>a.date.localeCompare(b.date));
+}
+window.rejectStill=async function(idsStr,date){
+  const ids=idsStr.split(',');
+  const list=ids.map(id=>window.DB.dispatches.find(x=>String(x.id)===id)).filter(Boolean);
+  if(!list.length)return;
+  const today=toTW(new Date().toISOString(),false);
+  if(date<rsAddDays(today,-7))return alert('只能駁回 7 天內的紀錄');
+  const w=list[0].worker;
+  if(!confirm(`駁回 ${w} ${date} 的「今天還在做」？\n\n駁回後等同當天未回報：卡片不再延續，也不算次數。`))return;
+  const now=new Date().toISOString();
+  setSS('syncing');
+  try{
+    for(const d of list){
+      const arr=stillList(d).map(s=>s.date===date&&!s.rejected?{...s,rejected:true,rejectedAt:now}:s);
+      await db.collection('dispatches').doc(String(d.id)).update({stillDays:arr});
+    }
+    // 打卡紀錄：移除當天的「還在做」標記（當天若另有回報數量，hasReport 不受影響）
+    await db.collection('checkins').doc(`CI-${w}-${date}`)
+      .update({stillIds:firebase.firestore.FieldValue.arrayRemove(...ids)})
+      .catch(e=>console.warn('打卡紀錄更新失敗',e));
+    setSS('ok');toast('已駁回');
+  }catch(e){setSS('err');toast('駁回失敗，請重試：'+e.message);}
+};
 let _genIdCounter=0;
 function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCounter++)%1000).toString(36).toUpperCase();}
 
@@ -937,8 +1057,8 @@ const RS={mode:'loading',HOT_DAYS:7,NEW_DAYS:7,CHUNK:30,
   dirty:new Set(),timer:null,writing:new Set(),hotFrom:''};
 const RS_RENDER={
   orders:()=>{renderOrders();renderDispatchOrders();updateSysInfo();},
-  dispatches:()=>{renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();renderNoteAlerts();renderConfirmReports();},
-  checkins:()=>{renderCheckins();renderLeaveApproval();},
+  dispatches:()=>{renderOrders();renderDispatchLog();renderDispatchOrders();updateSysInfo();renderNoteAlerts();renderConfirmReports();renderStillList();},
+  checkins:()=>{renderCheckins();renderLeaveApproval();renderOrders();renderDispatchOrders();}, // 打卡會影響多日工作是否延續
   shipments:()=>{renderShipping();}
 };
 function rsTWDate(offsetDays){return toTW(new Date(Date.now()+(offsetDays||0)*864e5).toISOString(),false);}
@@ -1269,7 +1389,7 @@ window.onNameInput=function(){
   const val=document.getElementById('m-name').value.trim();
   const sl=document.getElementById('m-suggest'),hint=document.getElementById('m-price-hint');
   if(!val){sl.style.display='none';hint.style.display='none';return;}
-  const matched=window.DB.products.filter(p=>p.name.toLowerCase().includes(val.toLowerCase()));
+  const matched=window.DB.products.filter(p=>p.name!==DRINK_NAME&&p.name.toLowerCase().includes(val.toLowerCase())); // 代訂飲料不是加工品，不出現在訂單輸入
   if(matched.length){sl.innerHTML=matched.map(p=>`<div class="suggest-item" onclick="selectProduct('${p.name.replace(/'/g,"\\'")}',${p.price})"><span>${p.name}${p.spec?' ('+p.spec+')':''}</span><span style="color:#888;font-size:11px">$${p.price}</span></div>`).join('');sl.style.display='block';}
   else sl.style.display='none';
   const exact=lookupProduct(val);
@@ -1588,7 +1708,7 @@ window.openOrderDetail=function(orderId){
     ${relatedDisp.length?relatedDisp.map(d=>`
       <div style="padding:8px;background:#fafafa;border-radius:6px;margin-bottom:6px;font-size:12px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-          <span style="font-weight:600;font-size:13px">${d.worker}</span>
+          <span style="font-weight:600;font-size:13px">${d.worker}${seqBadge(d)}</span>
           <span class="badge ${d.status==='已完成'?'bd':d.status==='回報中'?'ba':'bp'}" style="font-size:10px">${d.status}</span>
         </div>
         <div style="color:#666;display:flex;gap:12px;flex-wrap:wrap">
@@ -1736,6 +1856,8 @@ function getOrderStatus(o){
     const dt=dispWorkDate(d);return dt>m?dt:m;
   },'');
   const twToday=toTW(new Date().toISOString(),false);
+  // 多日工作：員工今天仍看得到卡片 → 加工中，不算需補派
+  if(latestDate<twToday&&dispatches.some(multiActiveToday))return'加工中';
   // 昨天或更早的派工，進度未達100% → 需補派
   if(latestDate<twToday)return'需補派';
   return'加工中';
@@ -1780,6 +1902,8 @@ function isOrderAllReportedButIncomplete(o){
   // 最新批次派工日期（台灣時間）
   const latestDispatchDate=toTW(maxTime,false);
   const twToday=toTW(new Date().toISOString(),false);
+  // 多日工作：員工今天仍看得到卡片 → 不回到待派工
+  if(latestDispatchDate<twToday&&latestBatch.some(multiActiveToday))return false;
   // 昨天或更早的派工，不管是否回報 → 回到待派工（需補派）
   if(latestDispatchDate<twToday)return true;
   // 今天的派工：所有員工都已回報且未完成 → 回到待派工
@@ -1874,6 +1998,7 @@ window.createDispatch=async function(){
   const selectedWorkers=Array.from(document.querySelectorAll('#d-worker-checks input:checked')).map(c=>c.value);
   if(!ids.length)return alert('請勾選至少一筆訂單');
   if(!rsGuard(ids,false,()=>createDispatch()))return;
+  if(window.DB.orders.some(o=>ids.includes(o.id)&&(o.name||'').trim()===DRINK_NAME))return alert('「代訂飲料」是薪資扣款項目，不能派工');
   if(!selectedWorkers.length)return alert('請選擇至少一名員工');
   const note=document.getElementById('d-note').value;
   const effectiveDate=document.getElementById('d-effective-date').value||toTW(new Date().toISOString(),false);
@@ -1881,6 +2006,10 @@ window.createDispatch=async function(){
   const sequence=sequenceVal?parseInt(sequenceVal):null;
   const assignQtyInput=document.getElementById('d-assign-qty').value;
   const customAssignQty=assignQtyInput?parseInt(assignQtyInput):null;
+  const multiDay=!!document.getElementById('d-multiday')?.checked;
+  const maxDays=parseInt(document.getElementById('d-maxdays')?.value)||0;
+  if(multiDay&&maxDays<2)return alert('多日工作的天數上限至少 2 天');
+  const multiFields=multiDay?{multiDay:true,maxDays}:{}; // 沒勾多日：不新增任何欄位，與原本相同
   const batchId=genId('B');
   const now=new Date().toISOString();
   // 依品名+規格+單價分組
@@ -1913,7 +2042,8 @@ window.createDispatch=async function(){
           batchId,
           groupName:isSameNameGroup?g.name:'', // 群組品名，供 worker.html grouped 顯示用
           doneQty:0,defectQty:0,shortageQty:0,
-          note,effectiveDate,sequence,status:'待完成',createdAt:now
+          note,effectiveDate,sequence,status:'待完成',createdAt:now,
+          ...multiFields
         });
       }
     }
@@ -1922,6 +2052,7 @@ window.createDispatch=async function(){
   document.getElementById('d-note').value='';
   document.getElementById('d-sequence').value='';
   document.getElementById('d-assign-qty').value='';
+  {const md=document.getElementById('d-multiday');if(md){md.checked=false;document.getElementById('d-maxdays-wrap').style.display='none';document.getElementById('d-maxdays').value='2';}}
   const today=toTW(new Date().toISOString(),false);
   document.getElementById('d-effective-date').value=today;
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
@@ -1990,7 +2121,7 @@ function renderPendingDispatch(){
   el.innerHTML=inProgress.map(o=>{
     const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
     const remaining=o.qty-reported;
-    const activeWorkers=window.DB.dispatches.filter(d=>d.orderId===o.id).map(d=>d.worker).join('、');
+    const activeWorkers=window.DB.dispatches.filter(d=>d.orderId===o.id).map(d=>d.worker+(d.sequence?`（第 ${d.sequence} 張）`:'')).join('、');
     return`<div style="padding:7px 0;border-bottom:1px solid #f0f0f0">
       <div style="display:flex;justify-content:space-between;align-items:center">
         <span style="font-weight:600">${highlight(o.name)}${o.spec?' <span style="color:#aaa;font-size:11px">('+highlight(o.spec)+')</span>':''}</span>
@@ -2048,7 +2179,7 @@ function renderDispatchLog(){
       ${g.dispatches.map(d=>`
         <div style="padding:7px 10px;border-bottom:1px solid #f5f5f5;display:flex;justify-content:space-between;align-items:center">
           <div>
-            <span style="font-weight:600;font-size:13px">${d.worker}</span>
+            <span style="font-weight:600;font-size:13px">${d.worker}</span>${seqBadge(d)}
             <span style="color:#888;font-size:11px;margin-left:8px">完 ${d.doneQty||0} ／ 不良 ${d.defectQty||0} ／ 來料不足 ${d.shortageQty||0}</span>
             ${d.workerNote?`<div style="font-size:11px;color:#1565C0;margin-top:2px">💬 ${d.workerNote}</div>`:''}
           </div>
@@ -2125,9 +2256,11 @@ window.openDispatchDetail=function(id){
       <div><span style="color:#888">品名：</span>${d.orderName} ${d.orderSpec||''}</div>
       <div><span style="color:#888">訂單號：</span>${d.orderNo||'-'}</div>
       <div><span style="color:#888">指派數量：</span>${d.assignQty}</div>
+      ${d.sequence?`<div><span style="color:#888">工單順序：</span>第 ${d.sequence} 張（前一張回報後才顯示給員工）</div>`:''}
       <div><span style="color:#888">完工：</span><span style="color:#2E7D32;font-weight:600">${d.doneQty||0}</span> ／ 不良品：<span style="color:#C62828">${d.defectQty||0}</span> ／ 來料不足：<span style="color:#E65100">${d.shortageQty||0}</span></div>
       ${d.note?`<div><span style="color:#888">派工備註：</span>${d.note}</div>`:''}
       ${d.workerNote?`<div><span style="color:#888">員工備註：</span><strong style="color:#1565C0">${d.workerNote}</strong></div>`:''}
+      ${d.multiDay?`<div><span style="color:#888">多日工作：</span>上限 ${d.maxDays||2} 天，已按「還在做」${stillUsed(d)} 次${stillList(d).some(s=>s.rejected)?`（另有 ${stillList(d).filter(s=>s.rejected).length} 次被駁回）`:''}</div>`:''}
       <div><span style="color:#888">派工時間：</span>${toTW(d.createdAt)}</div>
       ${d.lastReportAt?`<div><span style="color:#888">最後回報：</span>${toTW(d.lastReportAt)}</div>`:''}
     </div>
@@ -2154,6 +2287,12 @@ window.openAdjust=function(id){
         <label>工單順序 <span style="color:#aaa;font-weight:400">（選填）</span></label>
         <input type="number" id="adj-sequence" min="1" value="${d.sequence||''}" placeholder="不填同時顯示">
       </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;font-size:13px">
+      <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" id="adj-multiday" style="width:auto;margin:0" ${d.multiDay?'checked':''}> 多日工作</label>
+      <span style="display:flex;align-items:center;gap:6px">天數上限 <input type="number" id="adj-maxdays" min="2" value="${d.maxDays||2}" style="width:70px;margin:0"> 天</span>
+      ${d.multiDay?`<span style="font-size:11px;color:#6A1B9A">已按「還在做」${stillUsed(d)} 次</span>`:''}
+      ${d.isMerged?`<span style="font-size:11px;color:#888">（同一張合併卡片的其他訂單一起套用）</span>`:''}
     </div>
     <label>加工完成數量</label>
     <input type="number" id="adj-done" value="${d.doneQty||0}" min="0" max="${remain}">
@@ -2187,6 +2326,21 @@ window.submitAdjust=async function(id){
   const newSeqVal=document.getElementById('adj-sequence')?.value;
   const newSequence=newSeqVal?parseInt(newSeqVal):null;
   d.doneQty=done;d.defectQty=def;d.shortageQty=sho;
+  const adjMulti=!!document.getElementById('adj-multiday')?.checked;
+  const adjMax=parseInt(document.getElementById('adj-maxdays')?.value)||0;
+  if(adjMulti&&adjMax<2)return alert('多日工作的天數上限至少 2 天');
+  // 多日設定有變更才寫入（沒勾、原本也不是多日 → 不新增欄位）
+  let multiPatch=null;
+  if(adjMulti)multiPatch={multiDay:true,maxDays:adjMax};
+  else if(d.multiDay)multiPatch={multiDay:false};
+  if(multiPatch&&!(multiPatch.multiDay===!!d.multiDay&&(!adjMulti||multiPatch.maxDays===d.maxDays))){
+    Object.assign(d,multiPatch);
+    // 合併卡片：同一批、同品名、同員工的其他派工一起套用（只更新這兩個欄位）
+    if(d.isMerged){
+      const mates=window.DB.dispatches.filter(x=>x.id!==d.id&&x.isMerged&&x.batchId===d.batchId&&x.worker===d.worker&&(x.groupName||x.orderName)===(d.groupName||d.orderName));
+      for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update(multiPatch).catch(e=>console.warn('多日設定同步失敗',m.id,e));
+    }
+  }
   d.effectiveDate=newEffectiveDate;
   d.sequence=newSequence;
   d.status=myTotal>0?'回報中':'待完成';
@@ -2600,7 +2754,7 @@ window.doFullBackup=async function(){
   try{
     // ── 0. 備份一律向資料庫讀取完整資料（管理端平常只載入未結案資料，畫面上的資料不完整）──
     toast('備份：讀取完整資料中...');
-    const cols=['orders','dispatches','checkins','shipments','materialRequests','payslips','system'];
+    const cols=['orders','dispatches','checkins','shipments','materialRequests','payslips','system','reportEvents']; // reportEvents：回報事件紀錄（工時分析用，遺失無法補回）
     const snaps=await Promise.all(cols.map(c=>db.collection(c).get()));
     const ALL={};cols.forEach((c,i)=>ALL[c]=snaps[i].docs.map(d=>({id:d.id,...d.data()})));
     // ── 1. JSON 完整備份 ──
@@ -2905,7 +3059,7 @@ window.matUnlock=async function(m){
 //   鎖定：再加上 slips:{員工:薪資單快照（含材料領取與加工完成明細）}, lockedAt
 // 計算：系統能算的自動帶入，overrides 是手動修改；鎖定後一律顯示快照，不再重算
 // ══════════════════════════════════════════════════════════════
-const PS={month:'',doc:null,unsub:null,mats:[],matsMonth:'',open:null,saveTimer:null,pendingSave:{},
+const PS={month:'',doc:null,unsub:null,mats:[],matsMonth:'',open:null,saveTimer:null,pendingSave:{},waive:{},
   MEAL:35,FULL:2000,ON_TIME:'08:10'};
 function psMonthRange(m){const[y,mm]=m.split('-').map(Number);const last=new Date(y,mm,0).getDate();return{from:`${m}-01`,to:`${m}-${String(last).padStart(2,'0')}`};}
 const psROCMonth=m=>`${Number(m.slice(0,4))-1911}.${m.slice(5,7)}`;
@@ -2954,6 +3108,8 @@ function psCompute(worker){
   const temp=(ov.temp||[]).map(i=>({label:i.label||'',amount:Number(i.amount)||0}));
   const bonus=seniorityBonus(info.hireDate,m);
   const meal=present*PS.MEAL;
+  const drinks=drinkDays(worker,from,to,window.DB.dispatches||[],window.DB.checkins||[],PS.waive);
+  const drinkCnt=drinks.filter(x=>!x.waived).length;
   const lines=[];
   lines.push({label:'加工金額',amount:workAmt});
   lines.push({label:'年資獎金',amount:bonus});
@@ -2962,6 +3118,7 @@ function psCompute(worker){
   lines.push({label:'耗材費用',amount:-matAmt});
   fixed.filter(i=>i.amount<0).forEach(i=>lines.push({label:i.label,amount:i.amount}));
   lines.push({label:'伙食費用',amount:-meal});
+  if(drinkCnt)lines.push({label:`${DRINK_NAME}（${drinkCnt}次）`,amount:drinkCnt*drinkPrice()});
   temp.filter(i=>i.amount).forEach(i=>lines.push({label:i.label,amount:i.amount}));
   const gross=lines.reduce((a,l)=>a+l.amount,0);
   const net=Math.ceil(gross/100)*100;
@@ -2969,6 +3126,7 @@ function psCompute(worker){
   return{worker,month:m,hireDate:info.hireDate||'',punctual,present,late,leaves:att.leaves,
     autoPunctual:att.punctual,autoPresent:att.present,requiredDays:req,fullAuto,fullReason,
     showLate:!!ov.showLate,lines,gross,net,bank,cash:net-bank,fixed,temp,
+    drinks,drinkCnt,
     work,mats,workTotal:work.reduce((a,r)=>a+r.amount,0),matTotal:mats.reduce((a,r)=>a+r.amount,0),
     overridden:{punctual:ov.punctual!=null,present:ov.present!=null,full:ov.full!=null,fixed:!!ov.fixed,bank:ov.bank!=null&&ov.bank!==''}};
 }
@@ -2988,7 +3146,7 @@ window.psLoad=async function(){
   const m=document.getElementById('ps-month').value;
   if(!m)return;
   if(PS.unsub){PS.unsub();PS.unsub=null;}
-  PS.month=m;PS.doc=null;PS.open=null;PS.mats=[];
+  PS.month=m;PS.doc=null;PS.open=null;PS.mats=[];PS.waive={};
   document.getElementById('ps-body').innerHTML='<div class="card" style="color:#aaa">載入中...</div>';
   PS.unsub=db.collection('payslips').doc(m).onSnapshot(s=>{if(PS.month!==m)return;PS.doc=s.exists?s.data():null;psRender();},e=>console.warn(e));
   try{PS.mats=await MAT.fetchMonths([m]);PS.matsMonth=m;}catch(e){toast('耗材資料載入失敗');}
@@ -3089,10 +3247,28 @@ function psEditor(s,locked){
         <input type="number" min="0" step="1" value="${s.bank}" ${dis} onchange="psSetNum('${w}','bank',this.value)" style="width:90px">
         <span style="font-size:12px">現金 ${psFmt(s.cash)}</span></div>
     </div>
-    <div>${list('fixed','固定加扣項目（來自員工薪資資料，可只改本月）')}${list('temp','本月臨時加扣（借支等）')}</div>
+    <div>${list('fixed','固定加扣項目（來自員工薪資資料，可只改本月）')}${list('temp','本月臨時加扣（借支等）')}${psDrinkHtml(s,locked)}</div>
     <div>${psSlipHtml(s)}</div>
   </div>`;
 }
+// 代訂飲料：逐筆取消／恢復（寫在當天打卡紀錄的 drinkWaived）
+function psDrinkHtml(s,locked){
+  const list=s.drinks||[];
+  const w=MAT.esc(s.worker);
+  const warn=drinkHasProduct()?'':'<div style="font-size:11px;color:#E65100">品名單價資料庫還沒有「代訂飲料」，暫以 -50 計算</div>';
+  return`<div style="margin:12px 0 4px;font-size:12px;color:#555">代訂飲料（有打卡、有派工，但當天沒有回報也沒按「還在做」）</div>${warn}
+    ${list.length?list.map(x=>`<div style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:3px">
+      <span style="width:90px;${x.waived?'text-decoration:line-through;color:#aaa':''}">${x.date}</span>
+      <span style="color:${x.waived?'#aaa':'#C62828'}">${x.waived?'已取消':psFmt(drinkPrice())}</span>
+      ${locked?'':`<button class="btn btn-sm" onclick="psDrinkWaive('${w}','${x.date}',${x.waived?'false':'true'})">${x.waived?'恢復':'取消'}</button>`}
+    </div>`).join(''):'<div style="font-size:12px;color:#aaa">無</div>'}`;
+}
+window.psDrinkWaive=async function(w,date,waive){
+  if(PS.doc&&PS.doc.status==='locked')return;
+  PS.waive[w+'|'+date]=!!waive;psRender();
+  try{await db.collection('checkins').doc(`CI-${w}-${date}`).update({drinkWaived:!!waive});}
+  catch(e){delete PS.waive[w+'|'+date];psRender();toast('更新失敗，請重試');}
+};
 // 薪資單本體（畫面預覽與列印共用）
 function psSlipHtml(s){
   let run=0;
@@ -3237,7 +3413,7 @@ window.openEditProd=function(i){
     </div>
     <div style="margin-bottom:14px">
       <label>加工單價</label>
-      <input type="number" id="edit-prod-price" value="${p.price||0}" min="0" step="0.01">
+      <input type="number" id="edit-prod-price" value="${p.price||0}" ${p.name===DRINK_NAME?'':'min="0"'} step="0.01">
     </div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-primary" style="flex:1" onclick="saveEditProd(${i})">儲存</button>
@@ -3247,7 +3423,9 @@ window.openEditProd=function(i){
 }
 window.saveEditProd=async function(i){
   const price=parseFloat(document.getElementById('edit-prod-price').value)||0;
-  if(price<0)return alert('單價不能為負數');
+  const isDrink=(window.DB.products[i]||{}).name===DRINK_NAME;
+  if(isDrink){if(price>=0)return alert('「代訂飲料」是扣款，單價請填負數（例如 -50）');}
+  else if(price<0)return alert('單價不能為負數');
   const prods=[...window.DB.products];
   prods[i]={...prods[i],price};
   setSS('syncing');
@@ -3321,7 +3499,7 @@ window.parseProdPaste=async function(){
     alert(`儲存失敗：${e.message||e}\n\n請檢查網路連線後重試`);
   }
 }
-window.addProduct=async function(){const name=document.getElementById('np-name').value.trim(),spec=document.getElementById('np-spec').value.trim(),price=parseFloat(document.getElementById('np-price').value)||0;if(!name)return alert('請輸入品名');if(price<=0)return alert('請輸入有效單價');const ei=window.DB.products.findIndex(p=>p.name===name&&(p.spec||'')===spec);if(ei>=0){if(!confirm(`「${name}」已存在，覆蓋單價嗎？`))return;window.DB.products[ei].price=price;}else window.DB.products.push({name,spec,price});document.getElementById('np-name').value='';document.getElementById('np-spec').value='';document.getElementById('np-price').value='';await saveProducts();toast('品名已儲存');}
+window.addProduct=async function(){const name=document.getElementById('np-name').value.trim(),spec=document.getElementById('np-spec').value.trim(),price=parseFloat(document.getElementById('np-price').value)||0;if(!name)return alert('請輸入品名');if(name===DRINK_NAME){if(price>=0)return alert('「代訂飲料」是扣款，單價請填負數（例如 -50）');}else if(price<=0)return alert('請輸入有效單價');const ei=window.DB.products.findIndex(p=>p.name===name&&(p.spec||'')===spec);if(ei>=0){if(!confirm(`「${name}」已存在，覆蓋單價嗎？`))return;window.DB.products[ei].price=price;}else window.DB.products.push({name,spec,price});document.getElementById('np-name').value='';document.getElementById('np-spec').value='';document.getElementById('np-price').value='';await saveProducts();toast('品名已儲存');}
 window.removeProd=async function(i){if(!confirm('確定移除？'))return;window.DB.products.splice(i,1);await saveProducts();}
 window.clearCompleted=async function(){
   const completed=window.DB.orders.filter(o=>{
