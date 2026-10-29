@@ -1274,7 +1274,7 @@ function renderWorkerMain(){
   }
   // 台灣時間今天日期
   const twToday=toTW(new Date().toISOString(),false);
-  const myPending=myAll.filter(d=>{
+  const basePending=myAll.filter(d=>{
     const myReported=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
     if(myReported>0)return false;
     // 合併卡片已回報過（分配為 0 的訂單也一起從待辦消失）
@@ -1287,12 +1287,6 @@ function renderWorkerMain(){
     const dispatchDate=d.effectiveDate||toTW(d.createdAt,false);
     // 例外：多日工作，上一次有效的「今天還在做」之後到今天之前沒有其他上班打卡 → 繼續顯示
     if(dispatchDate<twToday&&myReported===0&&!stillCarry(d,twToday))return false;
-    // 工單順序判斷：有設定 sequence 時，前一張必須回報完才顯示
-    if(d.sequence&&d.sequence>1){
-      // 找同一 batchId 中 sequence-1 的工單
-      const prevDisp=myAll.find(x=>x.batchId===d.batchId&&x.sequence===d.sequence-1);
-      if(prevDisp&&(prevDisp.doneQty||0)<1)return false;
-    }
     // 判斷合併群組整體是否已完成：用 calcOrderRemain 判斷每張訂單剩餘
     if(d.isMerged&&d.mergedOrderIds){
       const totalRemain=d.mergedOrderIds.reduce((t,oid)=>{
@@ -1305,6 +1299,13 @@ function renderWorkerMain(){
       if(o&&calcOrderRemain(o,d.id)<=0)return false;
     }
     return isLatestBatch(d);
+  });
+  // 工單順序：有設定 sequence 的工單，只要還有「順序更前面」的工單留在待辦（尚未回報），就先不顯示。
+  // （舊寫法只在同一個 batchId 裡找前一張，但每次派工都會產生新的 batchId，
+  //   第 1 張和第 2 張分兩次派工時永遠找不到前一張，導致第 2 張提前出現）
+  const myPending=basePending.filter(d=>{
+    if(!d.sequence)return true;
+    return!basePending.some(x=>x.sequence&&x.sequence<d.sequence);
   });
   // 當月累計（台灣時間本月1日～今天，日期判斷與加工記錄「本月」相同）
   const{from:monthFrom,to:monthTo}=getPayPeriod(0);
