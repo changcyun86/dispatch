@@ -364,8 +364,19 @@ let _ownDocs=[];               // 自己的派工
 let _relChunks=[];             // {ids:[], unsub, docs:[], ready:false}（同訂單所有人的派工）
 let _ordChunks=[];             // {ids:[], unsub, docs:[], ready:false}（相關訂單）
 let _ciReady=false;
+// 2026/10/29 讀取量修正：打開 App 只讀「待辦需要的資料」
+//   - 自己的派工：最近 14 天內建立的（涵蓋今天、預約、多日工作延續、工單順序）
+//   - 相關訂單＝自己「尚未回報」的派工所屬訂單（＋正在修改的歷史紀錄的訂單），以及這些訂單上所有人的派工
+//   - 自己的打卡與請假：最近 40 天
+//   加工紀錄改成點開才讀（get，不監聽），每天最多 3 次；修改歷史紀錄時才補讀那張訂單
+const OWN_DAYS=14,CI_DAYS=40,HIST_MAX=3;
+let _histDocs=new Map();        // 加工紀錄查詢結果（最低優先，會被即時監聽的資料覆蓋）
+let _histLoaded={};             // offset -> 載入時間（本次登入）
+let _histLoading=false;
+let _extraOrderIds=new Set();   // 修改歷史紀錄時補讀的訂單
 function _rebuildDispatches(){
   const map=new Map();
+  for(const d of _histDocs.values())map.set(d.id,d);
   for(const c of _relChunks)for(const d of c.docs)map.set(d.id,d);
   for(const d of _ownDocs)map.set(d.id,d);
   dispatches=[...map.values()];
@@ -380,11 +391,10 @@ function _renderScope(){
 }
 // 自己上上月 1 日以後的派工所涉及的訂單 id（保留原本的型別，查詢比對與舊版的 === 一致）
 function _relatedOrderIds(){
-  const from=getPayPeriod(-2).from;
-  const ids=new Set();
+  const ids=new Set(_extraOrderIds);
   for(const d of _ownDocs){
-    const dt=d.effectiveDate||toTW(d.createdAt,false);
-    if(dt&&dt<from)continue;
+    // 已回報的派工不會再出現在待辦；要修改時再由 ensureScopeFor 補讀
+    if((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0||d.groupReportedAt)continue;
     if(d.orderId!=null&&d.orderId!=='')ids.add(d.orderId);
     if(Array.isArray(d.mergedOrderIds))for(const x of d.mergedOrderIds)if(x!=null&&x!=='')ids.add(x);
   }
@@ -445,15 +455,71 @@ function stopScope(){
   for(const c of _relChunks)c.unsub&&c.unsub();
   for(const c of _ordChunks)c.unsub&&c.unsub();
   _relChunks=[];_ordChunks=[];_ownDocs=[];_ciReady=false;_scopeWorker=null;
+  _histDocs=new Map();_histLoaded={};_histLoading=false;_extraOrderIds=new Set();
   dispatches=[];orders=[];checkins=[];
 }
+function _twToday(){return toTW(new Date().toISOString(),false);}
+function _addDays(date,n){const d=new Date(date+'T00:00:00Z');d.setUTCDate(d.getUTCDate()+n);return d.toISOString().slice(0,10);}
+function _refreshWanted(){
+  const wanted=_relatedOrderIds();
+  _syncChunks(_relChunks,wanted,_subRelChunk);
+  _syncChunks(_ordChunks,wanted,_subOrdChunk);
+}
+// 修改歷史紀錄前：補讀這些派工的訂單與同訂單所有人的派工，同步完成後才執行 then
+function ensureScopeFor(list,then){
+  list=list.filter(Boolean);
+  if(!list.length)return;
+  if(list.every(d=>scopeReadyFor(d))){then();return;}
+  for(const d of list){
+    if(d.orderId!=null&&d.orderId!=='')_extraOrderIds.add(d.orderId);
+    if(Array.isArray(d.mergedOrderIds))d.mergedOrderIds.forEach(x=>{if(x!=null&&x!=='')_extraOrderIds.add(x);});
+  }
+  _refreshWanted();
+  toast(SCOPE_WAIT_MSG);
+  const ids=list.map(d=>d.id),t0=Date.now();
+  const timer=setInterval(()=>{
+    const cur=ids.map(id=>dispatches.find(x=>x.id===id));
+    if(cur.every(d=>scopeReadyFor(d))){clearInterval(timer);then();}
+    else if(Date.now()-t0>20000){clearInterval(timer);toast('同步逾時，請重新整理 / Hết thời gian, vui lòng làm mới');}
+  },300);
+}
+// ── 加工紀錄：點開才讀，每天最多 3 次 ──
+function _histKey(){return`hist-cnt-${currentWorker}-${_twToday()}`;}
+function histUsed(){try{return parseInt(localStorage.getItem(_histKey()))||0;}catch(e){return 0;}}
+function histLeft(){return Math.max(0,HIST_MAX-histUsed());}
+async function loadHistory(offset,force){
+  if(!currentWorker||_histLoading)return;
+  if(_histLoaded[offset]&&!force)return;
+  if(histLeft()<=0){renderHistory();return;}
+  const name=currentWorker;
+  const{from,to}=getPayPeriod(offset);
+  // 依建立時間查（沿用既有索引 worker+createdAt）；往前多抓 7 天涵蓋預約派工，再用工作日期篩選
+  const fromISO=new Date(new Date(from+'T00:00:00+08:00').getTime()-7*864e5).toISOString();
+  const toISO=new Date(to+'T23:59:59.999+08:00').toISOString();
+  _histLoading=true;renderHistory();
+  try{
+    const snap=await db.collection('dispatches').where('worker','==',name)
+      .where('createdAt','>=',fromISO).where('createdAt','<=',toISO).get();
+    if(currentWorker!==name)return;
+    try{localStorage.setItem(_histKey(),String(histUsed()+1));}catch(e){}
+    snap.docs.forEach(d=>_histDocs.set(d.id,{id:d.id,...d.data()}));
+    _histLoaded[offset]=new Date().toISOString();
+    _rebuildDispatches();
+  }catch(e){toast('讀取失敗，請重試 / Lỗi tải dữ liệu');}
+  finally{_histLoading=false;if(currentWorker===name&&currentTab==='history')renderHistory();}
+}
+window.reloadHistory=function(){
+  if(histLeft()<=0){toast('今天的查詢次數已用完 / Hôm nay đã hết lượt xem');return;}
+  if(!confirm(`重新查詢會用掉今天 1 次查詢（剩 ${histLeft()} 次）\nTải lại sẽ dùng 1 lượt (còn ${histLeft()} lượt)`))return;
+  loadHistory(historyOffset,true);
+};
 function startScope(name){
   if(_scopeWorker===name)return;
   stopScope();
   _scopeWorker=name;
   // 自己的派工：只讀「上上上月 1 日」以後建立的（畫面最多用到上上月，多留一個月緩衝給預約生效日）
   // 需要 Firebase 複合索引（dispatches：worker + createdAt）；索引尚未建立時自動改讀全部，功能不受影響
-  const ownFromISO=new Date(getPayPeriod(-3).from+'T00:00:00+08:00').toISOString();
+  const ownFromISO=new Date(new Date(_twToday()+'T00:00:00+08:00').getTime()-OWN_DAYS*864e5).toISOString();
   const ownHandler=snap=>{
       if(_scopeWorker!==name)return;
       if(snap.metadata.fromCache){
@@ -463,9 +529,7 @@ function startScope(name){
         if(resyncTimer){clearTimeout(resyncTimer);resyncTimer=null;}
       }
       _ownDocs=snap.docs.map(d=>({id:d.id,...d.data()}));
-      const wanted=_relatedOrderIds();
-      _syncChunks(_relChunks,wanted,_subRelChunk);
-      _syncChunks(_ordChunks,wanted,_subOrdChunk);
+      _refreshWanted();
       _rebuildDispatches();_rebuildOrders();
       _renderScope();
     };
@@ -475,7 +539,7 @@ function startScope(name){
     ownHandler,()=>_scopeWorker===name,u=>{_unsubOwn=u;});
   // 自己的打卡與請假：只讀上上月 1 日以後（含之後的請假申請）
   // 需要 Firebase 複合索引（checkins：worker + date）；索引尚未建立時自動改讀全部
-  const ciFrom=getPayPeriod(-2).from;
+  const ciFrom=_addDays(_twToday(),-CI_DAYS);
   const ciHandler=snap=>{
       if(_scopeWorker!==name)return;
       if(!snap.metadata.fromCache)_ciReady=true;
@@ -904,7 +968,26 @@ function renderHistory(){
     return;
   }
   const{from,to}=getPayPeriod(historyOffset);
-  document.getElementById('history-period-label').textContent=`${from} ～ ${to}`;
+  const lbl=document.getElementById('history-period-label');
+  const el0=document.getElementById('history-list');
+  if(!_histLoaded[historyOffset]){
+    lbl.textContent=`${from} ～ ${to}`;
+    if(_histLoading){el0.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">載入中... / Đang tải...</div>';return;}
+    if(histLeft()<=0){el0.innerHTML=`<div class="card" style="text-align:center;color:#888;padding:2rem">今天的查詢次數已用完（每天 ${HIST_MAX} 次），明天再查詢<br>Hôm nay đã hết lượt xem (${HIST_MAX} lần/ngày), vui lòng xem lại vào ngày mai</div>`;return;}
+    el0.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">載入中... / Đang tải...</div>';
+    loadHistory(historyOffset);
+    return;
+  }
+  {
+    const at=toTW(_histLoaded[historyOffset]).slice(11,16);
+    let drink='';
+    if(historyOffset===0&&_twToday()>=DRINK_START){
+      const n=drinkDaysThisMonth().length;
+      if(n>0)drink=`<div style="color:#C62828;margin-top:4px">🥤 本月代訂飲料：${n} 次 / Tháng này bị trừ tiền nước uống: ${n} lần</div>`;
+    }
+    lbl.innerHTML=`${from} ～ ${to}　<span style="color:#aaa">${at} 載入</span>
+      <button class="btn btn-sm" style="margin-left:6px;padding:2px 8px;font-size:11px" onclick="reloadHistory()">重新查詢（今天剩 ${histLeft()} 次）</button>${drink}`;
+  }
   const myAll=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{
     const dt=d.effectiveDate||toTW(d.createdAt,false);
     return dt>=from&&dt<=to;
@@ -1106,7 +1189,9 @@ function renderHistory(){
 }
 
 let editingId=null;
-window.startEdit=function(id){editingId=id;editingGroup=null;renderHistory();}
+window.startEdit=function(id){
+  ensureScopeFor([dispatches.find(x=>x.id===id)],()=>{editingId=id;editingGroup=null;renderHistory();});
+}
 window.cancelEdit=function(){editingId=null;renderHistory();}
 window.validateEdit=function(id){
   const d=dispatches.find(x=>x.id===id);if(!d)return true;
@@ -1307,18 +1392,12 @@ function renderWorkerMain(){
     if(!d.sequence)return true;
     return!basePending.some(x=>x.sequence&&x.sequence<d.sequence);
   });
-  // 當月累計（台灣時間本月1日～今天，日期判斷與加工記錄「本月」相同）
-  const{from:monthFrom,to:monthTo}=getPayPeriod(0);
-  const myMonth=myAll.filter(d=>{
-    const dt=d.effectiveDate||toTW(d.createdAt,false);
-    return dt>=monthFrom&&dt<=monthTo;
-  });
-  const totalDone=myMonth.reduce((a,d)=>a+(d.doneQty||0),0);
-  const totalEarned=myMonth.reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
-  document.getElementById('wm-stats').innerHTML=`
-    <div class="metric"><div class="metric-label">待辦工單<br><span style="font-size:10px;color:#bbb">Việc cần làm</span></div><div class="metric-val">${myPending.length}</div></div>
-    <div class="metric"><div class="metric-label">本月完工<br><span style="font-size:10px;color:#bbb">Hoàn thành tháng này</span></div><div class="metric-val">${totalDone}</div></div>
-    <div class="metric"><div class="metric-label">本月加工費<br><span style="font-size:10px;color:#bbb">Tiền gia công tháng này</span></div><div class="metric-val">$${totalEarned.toFixed(0)}</div></div>
+  // 本月完工、本月加工費、代訂飲料次數改到「加工紀錄」頁（那裡才讀整個月的資料）
+  const st=document.getElementById('wm-stats');
+  st.style.gridTemplateColumns='1fr';
+  st.innerHTML=`
+    <div class="metric"><div class="metric-label">待辦工單 / Việc cần làm</div><div class="metric-val">${myPending.length}</div>
+      <div style="font-size:11px;color:#aaa;margin-top:2px">本月完工、加工費請看「加工紀錄」/ Xem tổng tháng ở mục lịch sử</div></div>
   `;
   if(currentTab!=='pending')return;
   renderDrinkNotice(myPending.length);
@@ -1514,12 +1593,9 @@ function renderDrinkNotice(pendingCount){
   if(today<DRINK_START){el.innerHTML='';return;}
   const ci=checkins.find(c=>c.worker===currentWorker&&c.date===today);
   const reportedToday=ci&&(ci.hasReport||(ci.stillIds||[]).length);
-  const n=drinkDaysThisMonth().length;
   let h='';
   if(ci&&ci.inTime&&!reportedToday&&pendingCount>0)
     h+=`<div style="background:#FFF8E1;border:1px solid #FFE082;color:#8D6E00;border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:8px">🥤 今天還沒有回報數量。當天沒有回報（或按「還在做」）會扣一次代訂飲料。<br>Hôm nay chưa báo cáo số lượng. Ngày không báo cáo sẽ bị trừ một lần tiền nước uống.</div>`;
-  if(n>0)
-    h+=`<div style="font-size:12px;color:#C62828;margin-bottom:8px">🥤 本月代訂飲料：${n} 次 / Tháng này bị trừ tiền nước uống: ${n} lần</div>`;
   el.innerHTML=h;
 }
 const _pressingStill=new Set();
@@ -1669,7 +1745,10 @@ window.submitGroupRpt=async function(dispIds,gid){
 };
 // ── 歷史：合併群組的修改 ──
 let editingGroup=null; // 群組第一筆派工 id
-window.startGroupEdit=function(id){editingGroup=id;editingId=null;renderHistory();};
+window.startGroupEdit=function(id){
+  const first=dispatches.find(x=>x.id===id);
+  ensureScopeFor(first?grpMembers(first):[],()=>{editingGroup=id;editingId=null;renderHistory();});
+};
 window.cancelGroupEdit=function(){editingGroup=null;renderHistory();};
 function grpMembers(first){const k=grpKeyOf(first);return k?dispatches.filter(x=>grpKeyOf(x)===k):[first];}
 window.saveGroupEdit=async function(gid){
