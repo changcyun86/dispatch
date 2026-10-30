@@ -2029,13 +2029,14 @@ function isOrderAllReportedButIncomplete(o){
   const twToday=toTW(new Date().toISOString(),false);
   // 已經預派（生效日在未來）→ 已安排，不回到待派工
   if(relatedDisp.some(d=>dispWorkDate(d)>twToday))return false;
-  // 最新一批：依「生效日期，再比建立時間」決定（原本只看建立時間，預約派工的單會被誤判成昨天的派工）
-  const key=d=>dispWorkDate(d)+'|'+(d.createdAt||'');
-  const maxKey=relatedDisp.reduce((m,x)=>key(x)>m?key(x):m,'');
-  const latestBatchIds=new Set(relatedDisp.filter(x=>key(x)===maxKey).map(x=>x.batchId||x.id));
-  const latestBatch=relatedDisp.filter(d=>latestBatchIds.has(d.batchId||d.id));
-  // 最新批次的工作日期（生效日）
-  const latestDispatchDate=maxKey.split('|')[0];
+  // 最近的工作日期（生效日）
+  const latestDispatchDate=relatedDisp.reduce((m,x)=>dispWorkDate(x)>m?dispWorkDate(x):m,'');
+  // 那一天派到這張單的「所有員工」：同一天分好幾次派（例如每人工單順序不同）都算，
+  // 同一位員工同一天被派了不只一次，只看他最後那一次（與員工端「最新批次」規則一致）
+  const dayDisp=relatedDisp.filter(d=>dispWorkDate(d)===latestDispatchDate);
+  const lastKeyByWorker={};
+  for(const d of dayDisp){const k=d.createdAt||'';if(!(d.worker in lastKeyByWorker)||k>lastKeyByWorker[d.worker])lastKeyByWorker[d.worker]=k;}
+  const latestBatch=dayDisp.filter(d=>(d.createdAt||'')===lastKeyByWorker[d.worker]);
   // 多日工作：員工今天仍看得到卡片 → 不回到待派工
   if(latestDispatchDate<twToday&&latestBatch.some(multiActiveToday))return false;
   // 昨天或更早的派工，不管是否回報 → 回到待派工（需補派）
@@ -2391,7 +2392,8 @@ window.confirmAddWorkers=async function(orderId){
       orderNo:o.orderno||'',itemPrice:o.price,worker,
       assignQty:o.qty,batchId,
       doneQty:0,defectQty:0,shortageQty:0,
-      note:'',status:'待完成',createdAt:now
+      note:'',status:'待完成',createdAt:now,
+      effectiveDate:toTW(now,false) // 明確寫入台灣日期（之後在「調整」改日期、順序都以它為準）
     });
   }
   ldRecord([o.name],toTW(now,false),selected,batchId,now);
@@ -2448,7 +2450,7 @@ window.openAdjust=function(id){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
       <div>
         <label>生效日期</label>
-        <input type="date" id="adj-effective-date" value="${d.effectiveDate||d.createdAt.slice(0,10)}">
+        <input type="date" id="adj-effective-date" value="${dispWorkDate(d)}">
       </div>
       <div>
         <label>工單順序 <span style="color:#aaa;font-weight:400">（選填）</span></label>
@@ -2459,7 +2461,7 @@ window.openAdjust=function(id){
       <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" id="adj-multiday" style="width:auto;margin:0" ${d.multiDay?'checked':''}> 多日工作</label>
       <span style="display:flex;align-items:center;gap:6px">天數上限 <input type="number" id="adj-maxdays" min="2" value="${d.maxDays||2}" style="width:70px;margin:0"> 天</span>
       ${d.multiDay?`<span style="font-size:11px;color:#6A1B9A">已按「還在做」${stillUsed(d)} 次</span>`:''}
-      ${d.isMerged?`<span style="font-size:11px;color:#888">（同一張合併卡片的其他訂單一起套用）</span>`:''}
+      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定會套用到同一張合併卡片的其他訂單）</span>`:''}
     </div>
     <label>加工完成數量</label>
     <input type="number" id="adj-done" value="${d.doneQty||0}" min="0" max="${remain}">
@@ -2507,6 +2509,11 @@ window.submitAdjust=async function(id){
       const mates=window.DB.dispatches.filter(x=>x.id!==d.id&&x.isMerged&&x.batchId===d.batchId&&x.worker===d.worker&&(x.groupName||x.orderName)===(d.groupName||d.orderName));
       for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update(multiPatch).catch(e=>console.warn('多日設定同步失敗',m.id,e));
     }
+  }
+  // 合併卡片：生效日期、工單順序也要整張卡一起改，否則員工端同一張卡會被拆開（只改到其中一筆）
+  if(d.isMerged&&((d.effectiveDate||'')!==(newEffectiveDate||'')||(d.sequence??null)!==newSequence)){
+    const mates=window.DB.dispatches.filter(x=>x.id!==d.id&&x.isMerged&&x.batchId===d.batchId&&x.worker===d.worker&&(x.groupName||x.orderName)===(d.groupName||d.orderName));
+    for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update({effectiveDate:newEffectiveDate,sequence:newSequence}).catch(e=>console.warn('合併卡片同步失敗',m.id,e));
   }
   d.effectiveDate=newEffectiveDate;
   d.sequence=newSequence;
