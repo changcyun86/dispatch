@@ -1452,7 +1452,7 @@ function renderWorkerMain(){
             <div>總量 / <span style="color:#aaa">Tổng</span>：<strong>${d.assignQty}</strong></div>
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
             <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5">${remain}</strong></div>
-            ${d.note?`<div>備註：${d.note}</div>`:''}
+            ${dispNoteBox([d])}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
             <div>
@@ -1503,7 +1503,7 @@ function renderWorkerMain(){
           <div style="font-size:13px;color:#666;margin-bottom:10px;line-height:2">
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>${prices.map(p=>'$'+p).join('、')}</strong>／件</div>
             <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5">${totalRemain}</strong></div>
-            ${first.note?`<div>備註：${first.note}</div>`:''}
+            ${dispNoteBox(list)}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px">
             ${inp('d','✓ 完成 / Hoàn thành','#2E7D32')}${inp('f','✗ 不良 / Lỗi','#C62828')}${inp('s','✗ 來料不足 / Thiếu NVL','#E65100')}
@@ -1549,6 +1549,12 @@ async function autoClockOut(opt){
       await db.collection('checkins').doc(id).update(patch);
     }
   }catch(e){console.warn('autoClockOut failed',e);}
+}
+// 派工備註：橘色框醒目顯示（合併卡片：各張不同的備註都列出）
+function dispNoteBox(list){
+  const notes=[...new Set(list.map(x=>(x.note||'').trim()).filter(Boolean))];
+  if(!notes.length)return'';
+  return`<div style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:8px;padding:6px 10px;margin-top:6px;line-height:1.6;color:#E65100;font-weight:600;white-space:pre-wrap">📌 備註 / Ghi chú：${notes.join('\n')}</div>`;
 }
 // ══ 多日工作 ══
 // 派工欄位：multiDay、maxDays（總共可做幾天）、stillDays:[{date,at,rejected}]

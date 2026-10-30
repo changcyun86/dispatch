@@ -2230,7 +2230,9 @@ function renderDispatchLog(){
         <div style="padding:7px 10px;border-bottom:1px solid #f5f5f5;display:flex;justify-content:space-between;align-items:center">
           <div>
             <span style="font-weight:600;font-size:13px">${d.worker}</span>${seqBadge(d)}
+            <span style="font-size:11px;color:#185FA5;margin-left:6px;white-space:nowrap">${dispDateLabel(d)}</span>
             <span style="color:#888;font-size:11px;margin-left:8px">完 ${d.doneQty||0} ／ 不良 ${d.defectQty||0} ／ 來料不足 ${d.shortageQty||0}</span>
+            ${d.note&&String(d.note).trim()?`<div style="font-size:11px;color:#E65100;font-weight:600;margin-top:2px;white-space:pre-wrap">📌 派工備註：${d.note}</div>`:''}
             ${d.workerNote?`<div style="font-size:11px;color:#1565C0;margin-top:2px">💬 ${d.workerNote}</div>`:''}
           </div>
           <div style="display:flex;gap:4px;align-items:center">
@@ -2241,6 +2243,12 @@ function renderDispatchLog(){
           </div>
         </div>`).join('')}
     </div>`).join('');
+}
+// 派工日期＝員工實際做的那天（生效日期）；前一天以前就建立的標示「預派」
+function dispDateLabel(d){
+  const wd=dispWorkDate(d);
+  const cd=d.createdAt?toTW(d.createdAt,false):wd;
+  return`📅 ${wd.slice(5)}${cd<wd?`（${cd.slice(5)} 預派）`:''}`;
 }
 window.addWorkerToOrder=function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
