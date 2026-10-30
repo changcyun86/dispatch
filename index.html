@@ -501,6 +501,15 @@ textarea{resize:vertical;min-height:70px}
 
 <!-- 設定 -->
 <div id="pg-settings" class="page">
+  <div class="card" style="margin-bottom:0.75rem">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div class="card-title" style="margin:0">📢 公告</div>
+      <button class="btn btn-sm btn-primary" onclick="annEdit(null)">＋ 新增公告</button>
+    </div>
+    <div style="font-size:11px;color:#888;margin:4px 0 8px">員工登入後會跳出公告，按「我知道了」後不再跳出；公告期間會一直顯示在員工 App 最上方。</div>
+    <div id="ann-form" style="display:none"></div>
+    <div id="ann-list" style="font-size:13px"></div>
+  </div>
   <div class="grid2">
     <div class="card">
       <div class="card-title">員工管理</div>
@@ -911,6 +920,105 @@ let _genIdCounter=0;
 function genId(p){return p+'-'+Date.now().toString(36).toUpperCase()+((_genIdCounter++)%1000).toString(36).toUpperCase();}
 
 db.collection('system').doc('employees').onSnapshot(snap=>{setSS('ok');window.DB.employees=snap.exists?snap.data().list||[]:[];renderDispatchWorkers();renderSalaryWorkers();renderCIWorkers();renderSettingsEmps();},()=>setSS('err'));
+// ══ 公告 ══ system/announcements：{list:[{id,text,textVi,start,end,target:'all'|[員工]，createdAt}]}
+window.DB.announcements=[];
+let _annEditing=null;
+db.collection('system').doc('announcements').onSnapshot(s=>{window.DB.announcements=s.exists?s.data().list||[]:[];renderAnnList();},()=>setSS('err'));
+function annEsc(t){return String(t||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function annStatus(a){
+  const today=toTW(new Date().toISOString(),false);
+  if(a.start&&a.start>today)return['未開始','#FFF3E0','#E65100'];
+  if(a.end&&a.end<today)return['已結束','#eee','#888'];
+  return['公告中','#E8F5E9','#2E7D32'];
+}
+function renderAnnList(){
+  const el=document.getElementById('ann-list');if(!el)return;
+  const list=[...(window.DB.announcements||[])].sort((a,b)=>(b.start||'').localeCompare(a.start||'')||(b.createdAt||'').localeCompare(a.createdAt||''));
+  if(!list.length){el.innerHTML='<div style="color:#aaa">目前沒有公告</div>';return;}
+  el.innerHTML=list.map(a=>{
+    const [st,bg,c]=annStatus(a);
+    const who=a.target==='all'||!Array.isArray(a.target)?'全部員工':a.target.join('、');
+    return`<div style="padding:8px 0;border-bottom:0.5px solid #f0f0f0;display:flex;gap:10px;align-items:flex-start;justify-content:space-between">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px;color:#888;margin-bottom:3px">
+          <span style="padding:1px 8px;border-radius:10px;background:${bg};color:${c}">${st}</span>
+          <span>${a.start||'—'} ～ ${a.end||'不限'}</span><span>｜${annEsc(who)}</span></div>
+        <div style="white-space:pre-wrap">${annEsc(a.text)}</div>
+        ${a.textVi?`<div style="white-space:pre-wrap;color:#888;font-size:12px;margin-top:2px">${annEsc(a.textVi)}</div>`:''}
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0">
+        <button class="btn btn-sm btn-warn" style="font-size:11px;padding:3px 8px" onclick="annEdit('${a.id}')">修改</button>
+        <button class="btn btn-sm btn-danger" style="font-size:11px;padding:3px 8px" onclick="annDelete('${a.id}')">刪除</button>
+      </div></div>`;
+  }).join('');
+}
+window.annEdit=function(id){
+  const a=id?(window.DB.announcements||[]).find(x=>x.id===id):null;
+  _annEditing=id||null;
+  const today=toTW(new Date().toISOString(),false);
+  const tgt=a&&Array.isArray(a.target)?a.target:[];
+  const isAll=!a||a.target==='all'||!Array.isArray(a.target);
+  const el=document.getElementById('ann-form');
+  el.style.display='block';
+  el.innerHTML=`<div style="background:#fafafa;border:1px solid #eee;border-radius:8px;padding:10px;margin-bottom:10px;font-size:13px">
+    <label>公告內容（中文）</label>
+    <textarea id="ann-text" style="min-height:70px">${annEsc(a?a.text:'')}</textarea>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
+      <label style="margin:0">越南文（選填）</label>
+      <button class="btn btn-sm" style="font-size:11px;padding:3px 8px" onclick="annTranslate()">用 Google 翻譯 ↗</button>
+    </div>
+    <textarea id="ann-text-vi" style="min-height:60px" placeholder="按「用 Google 翻譯」，把翻譯結果複製貼到這裡">${annEsc(a?a.textVi:'')}</textarea>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">
+      <div><label>開始日期</label><input type="date" id="ann-start" value="${a?a.start||'':today}" style="width:auto"></div>
+      <div><label>結束日期 <span style="color:#aaa;font-weight:400">（可不填＝不限）</span></label><input type="date" id="ann-end" value="${a?a.end||'':''}" style="width:auto"></div>
+    </div>
+    <label style="margin-top:6px">對象</label>
+    <div style="display:flex;gap:14px;align-items:center;margin-bottom:4px">
+      <label style="display:flex;align-items:center;gap:4px;margin:0;font-weight:400"><input type="radio" name="ann-target" value="all" style="width:auto;margin:0" ${isAll?'checked':''} onchange="document.getElementById('ann-workers').style.display='none'"> 全部員工</label>
+      <label style="display:flex;align-items:center;gap:4px;margin:0;font-weight:400"><input type="radio" name="ann-target" value="some" style="width:auto;margin:0" ${isAll?'':'checked'} onchange="document.getElementById('ann-workers').style.display='flex'"> 指定員工</label>
+    </div>
+    <div id="ann-workers" style="display:${isAll?'none':'flex'};flex-wrap:wrap;gap:10px;margin-bottom:6px">
+      ${(window.DB.employees||[]).map(w=>`<label style="display:flex;align-items:center;gap:4px;margin:0;font-weight:400"><input type="checkbox" class="ann-w" value="${annEsc(w)}" style="width:auto;margin:0" ${tgt.includes(w)?'checked':''}> ${annEsc(w)}</label>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn btn-primary" onclick="annSave()">${a?'儲存修改':'發佈公告'}</button>
+      <button class="btn" onclick="annCancel()">取消</button>
+    </div></div>`;
+};
+window.annCancel=function(){_annEditing=null;const el=document.getElementById('ann-form');el.style.display='none';el.innerHTML='';};
+window.annTranslate=function(){
+  const t=document.getElementById('ann-text').value.trim();
+  if(!t)return alert('請先填寫中文公告內容');
+  window.open('https://translate.google.com/?sl=zh-TW&tl=vi&op=translate&text='+encodeURIComponent(t),'_blank');
+};
+window.annSave=async function(){
+  const text=document.getElementById('ann-text').value.trim();
+  const textVi=document.getElementById('ann-text-vi').value.trim();
+  const start=document.getElementById('ann-start').value;
+  const end=document.getElementById('ann-end').value;
+  const all=document.querySelector('input[name="ann-target"]:checked')?.value!=='some';
+  const ws=[...document.querySelectorAll('.ann-w:checked')].map(x=>x.value);
+  if(!text)return alert('請填寫公告內容');
+  if(!start)return alert('請選擇開始日期');
+  if(end&&end<start)return alert('結束日期不能早於開始日期');
+  if(!all&&!ws.length)return alert('請勾選要公告的員工');
+  const list=[...(window.DB.announcements||[])];
+  const item={text,textVi,start,end:end||'',target:all?'all':ws};
+  if(_annEditing){
+    const i=list.findIndex(x=>x.id===_annEditing);if(i<0)return alert('找不到這則公告，可能已被刪除');
+    list[i]={...list[i],...item,updatedAt:new Date().toISOString()};
+  }else list.push({id:genId('ANN'),...item,createdAt:new Date().toISOString()});
+  setSS('syncing');
+  try{await db.collection('system').doc('announcements').set({list});setSS('ok');toast(_annEditing?'公告已修改':'公告已發佈');annCancel();}
+  catch(e){setSS('err');alert('儲存失敗：'+e.message);}
+};
+window.annDelete=async function(id){
+  const a=(window.DB.announcements||[]).find(x=>x.id===id);if(!a)return;
+  if(!confirm(`刪除這則公告？\n\n${a.text.slice(0,60)}`))return;
+  setSS('syncing');
+  try{await db.collection('system').doc('announcements').set({list:(window.DB.announcements||[]).filter(x=>x.id!==id)});setSS('ok');toast('公告已刪除');}
+  catch(e){setSS('err');alert('刪除失敗：'+e.message);}
+};
 db.collection('system').doc('products').onSnapshot(snap=>{window.DB.products=snap.exists?snap.data().list||[]:[];renderProducts();});
 // ══ 上次派工 ══════════════════════════════════════════════════════
 // 本單上次：用已讀進來的派工計算（未完成訂單的派工本來就常駐，不增加讀取）
@@ -1383,6 +1491,7 @@ async function rsStart(){
     rsListen('dispatches','d:report',db.collection('dispatches').where('lastReportAt','>=',new Date(Date.now()-RS.HOT_DAYS*864e5).toISOString()));
     rsListen('dispatches','d:scheduled',db.collection('dispatches').where('effectiveDate','>=',rsTWDate(0)));
     rsListen('dispatches','d:adjust',db.collection('dispatches').where('adjustStatus','==','待確認')); // 員工申請調整：不管多久以前都要顯示
+    rsListen('dispatches','d:needConfirm',db.collection('dispatches').where('needConfirm','==',true)); // 員工回報／修改後還沒確認：不管多久以前都要顯示
     rsListen('checkins','c:hot',db.collection('checkins').where('date','>=',RS.hotFrom));
     rsListen('checkins','c:leave',db.collection('checkins').where('status','==','待審核')); // 待審核的請假：不管日期都要顯示
     rsListen('shipments','s:hot',db.collection('shipments').where('date','>=',RS.hotFrom));
@@ -3782,12 +3891,13 @@ function renderConfirmReports(){
     ((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0))>0&&
     (!d.adminConfirmed||d.adjustStatus==='待確認')
   ).sort((a,b)=>(b.lastReportAt||b.createdAt||'').localeCompare(a.lastReportAt||a.createdAt||''));
-  if(!pending.length){el.innerHTML='';return;}
+  const scanBtn=`<button class="btn btn-sm" style="font-size:11px;padding:3px 8px" onclick="scanOldUnconfirmed()">檢查舊的未確認紀錄</button>`;
+  if(!pending.length){el.innerHTML=`<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;font-size:12px;color:#aaa;margin-bottom:8px">目前沒有待確認回報 ${scanBtn}</div>`;return;}
   const isAdjust=d=>d.adjustStatus==='待確認';
   el.innerHTML=`<div class="card" style="border-left:4px solid #185FA5;padding:0;overflow:hidden">
     <div style="padding:10px 16px;background:#E3F2FD;display:flex;align-items:center;justify-content:space-between">
       <span style="font-size:14px;font-weight:600;color:#185FA5">⏳ 待確認回報（${pending.length} 筆）</span>
-      <button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32;font-size:12px" onclick="confirmAllReports()">✓ 全部確認</button>
+      <div style="display:flex;gap:6px;align-items:center">${scanBtn}<button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32;font-size:12px" onclick="confirmAllReports()">✓ 全部確認</button></div>
     </div>
     <div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:500px">
@@ -3834,13 +3944,34 @@ function confirmedInfo(d){
   const when=t?(t.slice(0,10)===today?t.slice(11,16):t.slice(5,16)):'';
   return`<div style="font-size:10px;color:#888;margin-top:2px;white-space:nowrap">✓ ${d.confirmedBy}${when?' '+when:''}</div>`;
 }
+// 檢查舊的未確認紀錄：一次讀取上線以來全部派工，找出有回報但沒確認的，改用監聽加入「待確認回報」
+// （「需要確認」標記上線以前的舊紀錄沒有這個標記，平常的監聽抓不到，用這個按鈕補查）
+let _scanSeq=0;
+window.scanOldUnconfirmed=async function(){
+  if(!confirm('會讀取 9/1 上線以來的全部派工（可能數千次讀取），找出有回報但還沒確認的紀錄。\n建議只在結算薪資前按一次。要繼續嗎？'))return;
+  setSS('syncing');toast('檢查中，請稍候…');
+  try{
+    const snap=await db.collection('dispatches').where('createdAt','>=','2026-09-01').get();
+    const ids=snap.docs.map(d=>({id:d.id,...d.data()}))
+      .filter(d=>(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0&&(!d.adminConfirmed||d.adjustStatus==='待確認'))
+      .map(d=>d.id);
+    const known=new Set(window.DB.dispatches.filter(d=>(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0&&(!d.adminConfirmed||d.adjustStatus==='待確認')).map(d=>d.id));
+    const missing=ids.filter(id=>!known.has(id));
+    for(let i=0;i<missing.length;i+=30){
+      const part=missing.slice(i,i+30);
+      rsListen('dispatches','d:scan'+(++_scanSeq),db.collection('dispatches').where(firebase.firestore.FieldPath.documentId(),'in',part));
+    }
+    setSS('ok');
+    alert(`檢查完成：共 ${snap.size} 筆派工，未確認 ${ids.length} 筆${missing.length?`，其中 ${missing.length} 筆原本沒顯示，已加入「待確認回報」`:'，全部都已顯示在「待確認回報」'}。`);
+  }catch(e){setSS('err');alert('檢查失敗：'+e.message);}
+};
 window.confirmReport=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
   if(!rsGuard([d.orderId],false,()=>confirmReport(id)))return;
   setSS('syncing');
   try{
     const isAdj=d.adjustStatus==='待確認';
-    const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null,confirmedBy:confirmerName(),confirmedAt:new Date().toISOString()};
+    const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null,confirmedBy:confirmerName(),confirmedAt:new Date().toISOString(),needConfirm:false};
     if(isAdj){
       // 調整申請確認：把 pending 數量寫入正式欄位
       updateData.doneQty=d.pendingDoneQty??d.doneQty;
@@ -3890,7 +4021,7 @@ window.confirmAllReports=async function(skipAsk){
   try{
     for(const d of pending){
       const isAdj=d.adjustStatus==='待確認';
-      const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null,confirmedBy:confirmerName(),confirmedAt:new Date().toISOString()};
+      const updateData={adminConfirmed:true,adjustStatus:null,adjustRejectReason:null,confirmedBy:confirmerName(),confirmedAt:new Date().toISOString(),needConfirm:false};
       if(isAdj){
         updateData.doneQty=d.pendingDoneQty??d.doneQty;
         updateData.defectQty=d.pendingDefectQty??d.defectQty;

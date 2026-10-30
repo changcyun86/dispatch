@@ -165,6 +165,8 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
       <div id="checkin-msg" style="font-size:12px;color:#888;margin-top:8px;text-align:center"></div>
     </div>
 
+    <!-- 公告 -->
+    <div id="wm-ann"></div>
     <!-- 分頁 -->
     <div class="tab-bar">
       <button class="tab-btn active" id="tab-pending" onclick="switchTab('pending')">
@@ -346,6 +348,50 @@ function setSS(s){
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',2500);}
 
+// ══ 公告 ══（system/announcements，一份文件；每次打開多讀 1 次）
+let announcements=[];
+db.collection('system').doc('announcements').onSnapshot(s=>{announcements=s.exists?s.data().list||[]:[];renderAnnouncements();},()=>{});
+function annEsc(t){return String(t||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function myAnnouncements(){
+  if(!currentWorker)return[];
+  const today=toTW(new Date().toISOString(),false);
+  return announcements.filter(a=>(!a.start||a.start<=today)&&(!a.end||a.end>=today)&&
+    (a.target==='all'||!Array.isArray(a.target)||a.target.includes(currentWorker)))
+    .sort((a,b)=>(b.start||'').localeCompare(a.start||'')||(b.createdAt||'').localeCompare(a.createdAt||''));
+}
+// 已看過的公告記在手機上（每則公告、每次修改各算一次），不寫入資料庫
+function _annSeenKey(){return'ann-seen-'+currentWorker;}
+function _annSig(a){return a.id+'@'+(a.updatedAt||a.createdAt||'');}
+function _annSeen(){try{return JSON.parse(localStorage.getItem(_annSeenKey())||'[]');}catch(e){return[];}}
+function annBlock(a){
+  return`<div style="white-space:pre-wrap;font-size:14px;color:#333">${annEsc(a.text)}</div>${a.textVi?`<div style="white-space:pre-wrap;font-size:13px;color:#666;margin-top:4px">${annEsc(a.textVi)}</div>`:''}`;
+}
+function renderAnnouncements(){
+  const el=document.getElementById('wm-ann');if(!el)return;
+  const list=myAnnouncements();
+  el.innerHTML=list.length?`<div style="background:#FFFDE7;border:1px solid #FFE082;border-radius:10px;padding:10px 12px;margin-bottom:10px">
+    <div style="font-size:12px;font-weight:600;color:#8D6E00;margin-bottom:6px">📢 公告 / Thông báo</div>
+    ${list.map(a=>`<div style="padding:4px 0;border-top:0.5px dashed #FFE082">${annBlock(a)}</div>`).join('')}</div>`:'';
+  // 還沒看過的 → 跳出視窗
+  const seen=new Set(_annSeen());
+  const unseen=list.filter(a=>!seen.has(_annSig(a)));
+  let m=document.getElementById('ann-modal');
+  if(!unseen.length){if(m)m.remove();return;}
+  if(!m){m=document.createElement('div');m.id='ann-modal';document.body.appendChild(m);}
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px';
+  m.innerHTML=`<div style="background:#fff;border-radius:12px;max-width:440px;width:100%;max-height:80vh;overflow:auto;padding:16px">
+    <div style="font-size:16px;font-weight:600;margin-bottom:10px">📢 公告 / Thông báo</div>
+    ${unseen.map(a=>`<div style="padding:8px 0;border-top:0.5px solid #eee">${annBlock(a)}</div>`).join('')}
+    <button class="btn btn-primary" style="width:100%;margin-top:12px;padding:12px;font-size:15px" onclick="annAck()">我知道了 / Tôi đã biết</button></div>`;
+}
+window.annAck=function(){
+  const sigs=new Set(_annSeen());
+  myAnnouncements().forEach(a=>sigs.add(_annSig(a)));
+  // 只保留目前還存在的公告，避免越存越多
+  const alive=new Set(announcements.map(_annSig));
+  try{localStorage.setItem(_annSeenKey(),JSON.stringify([...sigs].filter(x=>alive.has(x))));}catch(e){}
+  const m=document.getElementById('ann-modal');if(m)m.remove();
+};
 db.collection('system').doc('employees').onSnapshot(snap=>{employees=snap.exists?snap.data().list||[]:[];if(!currentWorker)renderSelectScreen();},()=>setSS('err'));
 // ══ 讀取範圍：只讀「目前登入員工」相關的資料（降低 Firestore 讀取量）══
 // 以前：一打開就讀全部派工／訂單／打卡（每次約 1,400 筆）。
@@ -669,7 +715,7 @@ window.pinCancel=function(){
   pinBuffer='';pinPending='';
   document.getElementById('pin-screen').style.display='none';
   stopScope();
-  currentWorker=null;localStorage.removeItem('worker_name');
+  currentWorker=null;localStorage.removeItem('worker_name');renderAnnouncements();
   document.getElementById('select-screen').style.display='flex';
 }
 
@@ -721,11 +767,12 @@ function showMain(name){
   startScope(name);
   renderWorkerMain();renderCheckinStatus();
   updateMatTab();
+  renderAnnouncements();
 }
 
 window.logoutWorker=function(){
   stopScope();unmountMat();unmountReq();if(currentTab==='mat'||currentTab==='req')switchTab('pending');
-  currentWorker=null;localStorage.removeItem('worker_name');
+  currentWorker=null;localStorage.removeItem('worker_name');renderAnnouncements();
   document.getElementById('main-screen').style.display='none';
   document.getElementById('select-screen').style.display='flex';
 }
@@ -1240,7 +1287,7 @@ window.saveEdit=async function(id){
     if(d.adminConfirmed){
       await db.collection('dispatches').doc(String(id)).update({
         pendingDoneQty:done,pendingDefectQty:def,pendingShortageQty:sho,
-        adjustStatus:'待確認',adjustRejectReason:null,
+        adjustStatus:'待確認',adjustRejectReason:null,needConfirm:true,
         lastReportAt:new Date().toISOString()
       });
       editingId=null;setSS('ok');toast('調整申請已送出，等待管理員確認 / Đã gửi yêu cầu ✓');
@@ -1248,7 +1295,7 @@ window.saveEdit=async function(id){
     }
     // 待確認或已拒絕 → 直接更新
     const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
-      adminConfirmed:false,adjustStatus:null,adjustRejectReason:null,
+      adminConfirmed:false,adjustStatus:null,adjustRejectReason:null,needConfirm:done+def+sho>0,
       status:done+def+sho>0?'回報中':'待完成',
       lastReportAt:new Date().toISOString()};
     await db.collection('dispatches').doc(String(id)).set(updated);
@@ -1760,7 +1807,7 @@ window.submitGroupRpt=async function(dispIds,gid){
   try{
     const updated=list.map(d=>{const a=res.alloc[d.id];
       return{...d,doneQty:a.done,defectQty:a.def,shortageQty:a.sho,workerNote,
-        status:a.done+a.def+a.sho>0?'回報中':'待完成',groupReportedAt:now,lastReportAt:now};});
+        status:a.done+a.def+a.sho>0?'回報中':'待完成',needConfirm:a.done+a.def+a.sho>0,groupReportedAt:now,lastReportAt:now};});
     await grpWrite(updated);
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
     logReportEvent(list,'report',{done:v.done,def:v.def,sho:v.sho});
@@ -1793,12 +1840,12 @@ window.saveGroupEdit=async function(gid){
       for(const d of list){const a=res.alloc[d.id];
         await db.collection('dispatches').doc(String(d.id)).update({
           pendingDoneQty:a.done,pendingDefectQty:a.def,pendingShortageQty:a.sho,
-          adjustStatus:'待確認',adjustRejectReason:null,lastReportAt:now});}
+          adjustStatus:'待確認',adjustRejectReason:null,needConfirm:true,lastReportAt:now});}
       editingGroup=null;setSS('ok');toast('調整申請已送出，等待管理員確認 / Đã gửi yêu cầu ✓');return;
     }
     const updated=list.map(d=>{const a=res.alloc[d.id];
       return{...d,doneQty:a.done,defectQty:a.def,shortageQty:a.sho,workerNote,
-        adminConfirmed:false,adjustStatus:null,adjustRejectReason:null,
+        adminConfirmed:false,adjustStatus:null,adjustRejectReason:null,needConfirm:a.done+a.def+a.sho>0,
         status:a.done+a.def+a.sho>0?'回報中':'待完成',lastReportAt:now};});
     await grpWrite(updated);
     editingGroup=null;setSS('ok');toast('已儲存 / Đã lưu ✓');
@@ -1842,7 +1889,7 @@ window.submitRpt=async function(id){
   try{
     const o=orders.find(x=>x.id===d.orderId);
     const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
-      workerNote,status:done+def+sho>0?'回報中':'待完成',
+      workerNote,status:done+def+sho>0?'回報中':'待完成',needConfirm:done+def+sho>0,
       lastReportAt:new Date().toISOString()};
     await db.collection('dispatches').doc(String(id)).set(updated);
     if(o){
