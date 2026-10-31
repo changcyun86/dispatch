@@ -43,6 +43,7 @@ textarea{resize:vertical;min-height:70px}
 @media(max-width:700px){.grid4{grid-template-columns:repeat(2,1fr)}.grid3{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
 .warn-box{background:#FFF8E1;border:1px solid #FFD54F;color:#E65100;border-radius:8px;padding:8px 12px;font-size:12px;margin-top:8px;display:none}
 .err-box{background:#FFEBEE;border:1px solid #EF9A9A;color:#C62828;border-radius:8px;padding:8px 12px;font-size:12px;margin-top:8px;display:none}
+.prod-tbl th,.prod-tbl td{border:1px solid #eee;padding:5px 8px;text-align:left;vertical-align:top}
 .info-box{background:#E3F2FD;border:1px solid #90CAF9;color:#1565C0;border-radius:8px;padding:8px 12px;font-size:12px;margin-bottom:10px}
 .progress-bar{height:5px;background:#e0e0e0;border-radius:3px;overflow:hidden;margin-top:3px}
 .progress-fill{height:100%;background:#43A047;border-radius:3px}
@@ -107,6 +108,7 @@ textarea{resize:vertical;min-height:70px}
     <button class="nav-tab" onclick="sw('salary')">薪資計算</button>
     <button class="nav-tab" onclick="sw('payslip')">薪資單</button>
     <button class="nav-tab" onclick="sw('materials')">耗材</button>
+    <button class="nav-tab" onclick="sw('prod')">產能分析</button>
     <button class="nav-tab" onclick="sw('settings')">設定</button>
   </div>
   <div class="sync-indicator"><div class="sync-dot" id="sync-dot"></div><span id="sync-txt">連線中</span></div>
@@ -189,13 +191,15 @@ textarea{resize:vertical;min-height:70px}
         <div class="price-hint" id="m-price-hint"></div>
       </div>
       <div>
-        <label>規格</label><input type="text" id="m-spec" placeholder="例：M3×10">
+        <label>規格</label><input type="text" id="m-spec" placeholder="例：M3×10" oninput="prodManualEst()">
         <label>數量</label><input type="number" id="m-qty" min="1" placeholder="0" oninput="calcManualAmt()">
       </div>
       <div>
         <label>加工單價</label><input type="number" id="m-price" min="0" step="0.01" placeholder="0.00" oninput="calcManualAmt()">
         <label>加工金額（自動）</label>
         <div style="height:38px;display:flex;align-items:center;font-weight:600;color:#185FA5;font-size:16px" id="m-amount">—</div>
+        <label>預估工時</label>
+        <div id="m-est" style="min-height:38px;display:flex;align-items:center;font-size:13px;color:#5F6B7A">—</div>
       </div>
     </div>
     <div style="display:flex;gap:8px;margin-top:12px">
@@ -306,7 +310,8 @@ textarea{resize:vertical;min-height:70px}
       <div id="d-order-list" style="max-height:280px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;margin-top:4px"></div>
       <div id="d-order-info" style="font-size:12px;color:#888;margin-top:8px;line-height:1.8;background:#E3F2FD;border:1px solid #90CAF9;border-radius:8px;padding:8px 10px;display:none"></div>
       <label style="margin-top:12px">指派員工（可多選）</label>
-      <div id="d-worker-checks" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px;margin-top:4px;max-height:150px;overflow-y:auto;padding:4px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa"></div>
+      <div id="d-worker-checks" onchange="prodDispatchEst()" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;margin-top:4px;max-height:150px;overflow-y:auto;padding:4px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa"></div>
+      <div id="d-est-combo" style="display:none;font-size:12px;color:#1565C0;margin-top:6px"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px">
         <div>
           <label>生效日期 <span style="color:#aaa;font-weight:400">（預設今天）</span></label>
@@ -314,7 +319,7 @@ textarea{resize:vertical;min-height:70px}
         </div>
         <div>
           <label>派工數量 <span style="color:#aaa;font-weight:400">（選填）</span></label>
-          <input type="number" id="d-assign-qty" min="1" placeholder="不填預設訂單剩餘" style="margin-top:4px">
+          <input type="number" id="d-assign-qty" min="1" placeholder="不填預設訂單剩餘" style="margin-top:4px" oninput="prodDispatchEst()">
         </div>
         <div>
           <label>工單順序 <span style="color:#aaa;font-weight:400">（選填）</span></label>
@@ -499,6 +504,65 @@ textarea{resize:vertical;min-height:70px}
   <div id="mat-admin-root"></div>
 </div>
 
+<!-- 產能分析 -->
+<div id="pg-prod" class="page">
+  <div class="section-hdr"><strong style="font-size:15px">產能分析</strong></div>
+  <div class="card">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+      <div id="prod-status" style="font-size:13px;color:#555;line-height:1.8">載入中...</div>
+      <button class="btn btn-sm" onclick="prodRecalc()">立即重新計算</button>
+    </div>
+    <div class="info-box" style="margin:10px 0 0">ℹ️ 每天按「備份」時會自動重新計算（不增加讀取量）。「立即重新計算」會讀取回報事件、打卡與派工資料，讀取量較大，平常不需要按。</div>
+  </div>
+  <div class="card">
+    <div class="card-title">品名產能（個人與平均）</div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+      <button class="filter-btn prod-per-btn active" data-per="3m" onclick="prodSetPeriod('3m')">最近 3 個月</button>
+      <button class="filter-btn prod-per-btn" data-per="this" onclick="prodSetPeriod('this')">本月</button>
+      <button class="filter-btn prod-per-btn" data-per="last" onclick="prodSetPeriod('last')">上月</button>
+      <button class="filter-btn prod-per-btn" data-per="all" onclick="prodSetPeriod('all')">全部</button>
+      <span style="font-size:12px;color:#888;margin-left:6px">自訂</span>
+      <input type="month" id="prod-m-from" style="width:auto" onchange="prodSetPeriod('custom')">
+      <span style="color:#888">～</span>
+      <input type="month" id="prod-m-to" style="width:auto" onchange="prodSetPeriod('custom')">
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <button class="filter-btn prod-view-btn active" data-view="prod" onclick="prodSetView('prod')">依品名</button>
+      <button class="filter-btn prod-view-btn" data-view="emp" onclick="prodSetView('emp')">依員工</button>
+      <input type="text" id="prod-kw" placeholder="搜尋品名或規格..." style="width:180px" oninput="prodRenderStats()">
+      <select id="prod-emp" style="width:auto;display:none" onchange="prodRenderStats()"></select>
+    </div>
+    <div id="prod-stats"></div>
+    <div style="font-size:11px;color:#888;margin-top:8px;line-height:1.7">
+      平均為加權平均（全部完成量 ÷ 全部工時）。效率 = 平均每件秒數 ÷ 個人每件秒數，100% 表示和平均一樣，越高越快。<br>
+      累積工時不到 2 小時的個人數據以灰色顯示，預估工時時改用平均。
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-title">每日明細（核對切分結果）</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <button class="btn btn-sm" onclick="prodShiftDate(-1)">‹ 前一天</button>
+      <input type="date" id="prod-date" style="width:auto" onchange="prodRenderDays()">
+      <button class="btn btn-sm" onclick="prodShiftDate(1)">後一天 ›</button>
+      <select id="prod-worker" style="width:auto" onchange="prodRenderDays()"><option value="">全部員工</option></select>
+    </div>
+    <div id="prod-days"></div>
+  </div>
+  <details class="card" style="font-size:12px;color:#555;line-height:1.8">
+    <summary style="cursor:pointer;font-weight:600;color:#333">計算規則</summary>
+    <div style="margin-top:8px">
+      ・以每位員工每一天為單位，依回報時間切段：上班打卡（早於 08:00 以 08:00 計）到第一次回報為第一段，之後每兩次回報之間算後一筆的工時；最後一次回報為當天結束。<br>
+      ・跨過 12:00–13:00 的段落扣除午休。<br>
+      ・多日工作：「今天還在做」之前的時段記在那張派工上，跨日累加，最後一天回報數量時才計入。<br>
+      ・5 分鐘內連續回報：同品名＋規格合併成一段；不同品名整串不列入。<br>
+      ・一筆工作只要有一段不可靠，整筆不列入（數量無法拆開）。<br>
+      ・不列入的情況：沒有上班打卡、回報時間早於起算時間、距上班不到 5 分鐘、當天有管理端代填數量、手動排除這天、「今天還在做」被駁回、完成量為 0。<br>
+      ・產能 = 完成量 ÷ 工時，品名＋規格分開計算；數量以派工紀錄目前的數量為準（修改、調整都會反映）。<br>
+      ・時間使用員工手機送出的時間；與伺服器時間相差超過 2 分鐘會顯示提醒。
+    </div>
+  </details>
+</div>
+
 <!-- 設定 -->
 <div id="pg-settings" class="page">
   <div class="card" style="margin-bottom:0.75rem">
@@ -680,6 +744,7 @@ if(sessionStorage.getItem('admin_auth')==='1')showAdminApp();
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="materials.js?v=2"></script>
+<script src="productivity.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
 
@@ -1602,7 +1667,7 @@ window.parseOrderPaste=async function(){
     if(count%5===0)toast(`匯入中 ${count}/${toImport.length}...`);
   }
   closePanel('order-paste-panel');document.getElementById('order-paste-input').value='';
-  toast(`成功匯入 ${toImport.length} 筆${skipped?`，跳過${skipped}列`:''}${duplicates.length?`，處理重複 ${duplicates.length} 筆`:''}`)
+  toast(`成功匯入 ${toImport.length} 筆${skipped?`，跳過${skipped}列`:''}${duplicates.length?`，處理重複 ${duplicates.length} 筆`:''}${prodImportEstText(toImport)}`)
 }
 window.saveManual=async function(){
   const name=document.getElementById('m-name').value.trim(),qty=parseFloat(document.getElementById('m-qty').value)||0;
@@ -1733,7 +1798,8 @@ function renderOrders(){
     const isSel=window._selectedOrderForDel.has(o.id);
     const dbP=lookupProductBySpec(o.name,o.spec);
     const priceMismatchHint=(dbP&&((o.price||0)!==dbP.price))?`<div class="price-mismatch-hint" title="品名單價資料庫目前為 $${dbP.price}，此訂單為 $${o.price||0}" onclick="applyDbPrice('${o.id}')">⚠ 資料庫 $${dbP.price} <u>套用</u></div>`:'';
-    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}</td>`:`<td style="font-weight:600">${hl(o.name)}</td>`;
+    const estH=(st!=='已完成'&&undone>0)?prodEstLine(o.name,o.spec,undone,'剩 '+undone+' 件'):'';
+    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${estH}</td>`;
     return`<tr style="background:${isSel?'#FFF8E1':''}">
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
       <td style="white-space:nowrap">${o.date||'-'}</td>
@@ -1793,7 +1859,7 @@ function renderOrders(){
     html.push(`<tr style="background:#F5F7FA;cursor:pointer" onclick="toggleOrderGroup('${key.replace(/'/g,"\\'")}')">
       <td></td>
       <td colspan="2" style="color:#888;font-size:12px">${isOpen?'▼':'▶'} 共 ${g.orders.length} 筆訂單</td>
-      <td style="font-weight:700">${hl(g.name)}</td><td style="color:#888">${g.spec||'-'}</td>
+      <td style="font-weight:700">${hl(g.name)}${totalUndone>0?prodEstLine(g.name,g.spec,totalUndone,'剩 '+totalUndone+' 件'):''}</td><td style="color:#888">${g.spec||'-'}</td>
       <td class="col-num" style="font-weight:700">${totalQty}</td>
       <td></td>
       <td class="col-num" style="font-weight:700;color:#1565C0">${totalAmt>0?'$'+totalAmt.toLocaleString():'—'}</td>
@@ -2090,6 +2156,7 @@ function renderDispatchOrders(){
         </div>
         <div style="font-size:11px;color:#5F6B7A;margin-top:2px">本單上次：${ldFmt(ldForOrder(o))} ｜ 同品名上次：${ldFmt(ldForName(o.name))}</div>
         <div style="font-size:11px;color:#5F6B7A">加工過：${ldFmtWorkers(ldWorkersForName(o.name))}</div>
+        ${prodEstLine(o.name,o.spec,remaining,'剩 '+remaining+' 件')}
       </div>
     </div>`;
   }).join('');
@@ -2124,12 +2191,13 @@ window.toggleDispatchOrder=function(id){
 }
 function renderDispatchWorkers(){
   const cont=document.getElementById('d-worker-checks');if(!cont)return;
-  cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0"> ${e}</label>`).join('');
+  cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0"><span>${e}<span class="prod-wk-est" data-w="${e}" style="display:block;font-size:10px;color:#888;line-height:1.3"></span></span></label>`).join('');
+  prodDispatchEst();
 }
 function updateSelectedInfo(){
   const info=document.getElementById('d-order-info');
   const ids=[...window._selectedOrderIds];
-  if(!ids.length){info.style.display='none';return;}
+  if(!ids.length){info.style.display='none';prodDispatchEst();return;}
   const selected=window.DB.orders.filter(o=>ids.includes(o.id));
   // 群組：同品名+規格+單價 合併顯示
   const groups={};
@@ -2146,7 +2214,9 @@ function updateSelectedInfo(){
     gList.map(g=>`<div style="background:#fff;border-radius:6px;padding:5px 8px;margin-bottom:4px;font-size:11px;color:#555">
       <span style="font-weight:600;color:#1a1a1a">${g.name}</span>${g.spec?` <span style="color:#aaa">(${g.spec})</span>`:''} ／ $${g.price} ／ 合計剩餘 <strong style="color:#185FA5">${g.totalQty}</strong> 件
       <span style="color:#aaa;font-size:10px">（${g.orders.length} 張訂單：${g.orders.map(o=>o.orderno||o.id).join('、')}）</span>
+      ${prodEstLine(g.name,g.spec,g.totalQty,'合計')}
     </div>`).join('');
+  prodDispatchEst();
 }
 window.createDispatch=async function(){
   const ids=[...window._selectedOrderIds];
@@ -2971,11 +3041,16 @@ window.doFullBackup=async function(){
     ]);
     downloadXlsx(`薪資計算-${salMonth}.xlsx`,[{name:'薪資明細',data:[salHeader,...salData]}]);
 
+    // ── 4. 產能分析：用備份已讀入的資料重新計算（不增加讀取量；失敗不影響備份）──
+    let prodMsg='';
+    try{await prodComputeAndSave(ALL);prodMsg='，產能資料已更新';}
+    catch(pe){console.warn('產能計算失敗',pe);prodMsg='（產能計算失敗，備份不受影響）';}
+
     // 記錄備份日期
     localStorage.setItem('lastBackupDate',today);
     document.getElementById('backup-reminder').style.display='none';
     setSS('ok');
-    toast('備份完成 ✓ 共下載 3 個檔案：JSON、打卡記錄、薪資計算');
+    toast('備份完成 ✓ 共下載 3 個檔案：JSON、打卡記錄、薪資計算'+prodMsg);
     return true;
   }catch(e){console.error(e);setSS('err');toast('備份失敗，請重試：'+e.message);throw e;}
 }
@@ -4237,11 +4312,337 @@ window.exportDailyXlsx=function(){
   ]);
   toast(`已匯出 每日記錄-${date}.xlsx`);
 }
+// ══ 產能分析（計算核心在 productivity.js）══
+// 資料：system/productivity（月份彙總，小文件）、system/productivityDays（最近 31 天切分明細，只有看明細才讀）、
+//       system/prodExclude（手動排除的日子）。全部是新文件，不動既有資料。
+const PROD_DAYS_KEEP=31;
+var PROD_UI={summary:null,days:null,excl:null,loaded:false}; // var：讓前面的畫面函式在初始化前呼叫也不會出錯
+function prodClock(sec){if(sec===null||sec===undefined)return'--:--';const m=Math.round(sec/60);return`${String(Math.floor(m/60)).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;}
+function prodDur(sec){const m=Math.round((sec||0)/60);return`${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`;}
+function prodEsc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+// 計算並寫入兩份文件（備份時傳入完整資料 ALL；手動重算時傳入部分資料）
+async function prodComputeAndSave(ALL){
+  if(!window.PROD)throw new Error('productivity.js 未載入');
+  const sysEx=(ALL.system||[]).find(x=>x.id==='prodExclude');
+  const res=PROD.compute({events:ALL.reportEvents||[],checkins:ALL.checkins||[],dispatches:ALL.dispatches||[],excludes:(sysEx&&sysEx.list)||[]});
+  const at=new Date().toISOString();
+  const summary=PROD.buildSummaryDoc(res,at);
+  let from=rsAddDays(twToday(),-PROD_DAYS_KEEP);
+  let daysDoc=PROD.buildDaysDoc(res,at,from);
+  // 文件上限 1MB：保險起見超過 900KB 就從最舊的日子刪
+  const size=o=>new TextEncoder().encode(JSON.stringify(o)).length;
+  while(size(daysDoc)>900000&&daysDoc.days.length){from=rsAddDays(from,1);daysDoc=PROD.buildDaysDoc(res,at,from);}
+  await db.collection('system').doc('productivity').set(summary);
+  await db.collection('system').doc('productivityDays').set(daysDoc);
+  PROD_UI.summary=summary;PROD_UI.days=daysDoc;prodEstCache=null;
+  if(document.getElementById('pg-prod')?.classList.contains('active'))prodRender();
+  return summary;
+}
+window.prodOpen=async function(){
+  if(!document.getElementById('prod-date').value)document.getElementById('prod-date').value=twToday();
+  if(PROD_UI.loaded){prodRender();return;}
+  setSS('syncing');
+  try{
+    // 彙總文件平常就在監聽（預估工時用）；明細與手動排除打開頁面才讀：2 次讀取（同一次登入只讀一次）
+    const [b,c]=await Promise.all(['productivityDays','prodExclude'].map(id=>db.collection('system').doc(id).get()));
+    PROD_UI.days=b.exists?b.data():null;
+    PROD_UI.excl=c.exists?(c.data().list||[]):[];
+    PROD_UI.loaded=true;setSS('ok');
+    // 預設顯示有資料的最近一天
+    const ds=(PROD_UI.days&&PROD_UI.days.days)||[];
+    if(ds.length&&!ds.some(d=>d.d===document.getElementById('prod-date').value))
+      document.getElementById('prod-date').value=ds.map(d=>d.d).sort().pop();
+  }catch(e){console.error(e);setSS('err');toast('產能資料讀取失敗');}
+  prodRender();
+};
+function prodRender(){
+  const st=document.getElementById('prod-status');
+  const s=PROD_UI.summary;
+  if(!s){st.innerHTML='尚未計算。請按「備份」或「立即重新計算」。<br><span style="color:#888">（回報事件從員工端更新後開始記錄，之前的資料不回補）</span>';}
+  else{
+    const c=s.jobCount||{};
+    st.innerHTML=`資料起算日：<b>${s.startDate||'-'}</b>　最後計算：<b>${toTW(s.computedAt)}</b><br>
+      工作筆數：列入 <b style="color:#2E7D32">${c['列入']||0}</b>、不列入 <b style="color:#C62828">${c['不列入']||0}</b>、多日進行中 <b>${c['進行中']||0}</b>`;
+  }
+  const sel=document.getElementById('prod-worker');const cur=sel.value;
+  sel.innerHTML='<option value="">全部員工</option>'+(window.DB.employees||[]).map(e=>`<option value="${prodEsc(e)}"${e===cur?' selected':''}>${prodEsc(e)}</option>`).join('');
+  prodRenderStats();
+  prodRenderDays();
+}
+window.prodShiftDate=function(n){const el=document.getElementById('prod-date');el.value=rsAddDays(el.value||twToday(),n);prodRenderDays();};
+window.prodRenderDays=function(){
+  const box=document.getElementById('prod-days');if(!box)return;
+  const date=document.getElementById('prod-date').value;
+  const wf=document.getElementById('prod-worker').value;
+  const D=PROD_UI.days;
+  if(!D){box.innerHTML='<div style="color:#888;font-size:13px">尚無明細資料。</div>';return;}
+  if(date<D.from){box.innerHTML=`<div style="color:#888;font-size:13px">明細只保留最近 ${PROD_DAYS_KEEP} 天（${D.from} 起）。</div>`;return;}
+  const list=(D.days||[]).filter(d=>d.d===date&&(!wf||d.w===wf)).sort((a,b)=>a.w.localeCompare(b.w));
+  const exList=PROD_UI.excl||[];
+  if(!list.length){box.innerHTML=`<div style="color:#888;font-size:13px">${date} 沒有回報事件${toTW(D.computedAt,false)<date?'（這天在最後計算之後，請先備份或重新計算）':''}。</div>`;return;}
+  const kindLbl=k=>k.split(',').map(x=>x==='still'?'今天還在做':'回報').join('＋');
+  box.innerHTML=list.map(d=>{
+    const manual=exList.some(x=>x.w===d.w&&x.d===d.d);
+    const manualInDoc=(d.flags||[]).some(f=>f.startsWith('手動排除'));
+    const pending=manual!==manualInDoc?`<span style="color:#E65100;font-size:11px;margin-left:6px">（${manual?'已排除':'已取消排除'}，下次計算生效）</span>`:'';
+    const startTxt=d.in?`上班 ${prodEsc(d.in)}${d.st!==null&&prodClock(d.st)!==d.in?`（從 ${prodClock(d.st)} 起算）`:''}`:'<span style="color:#C62828">沒有上班打卡</span>';
+    const flags=(d.flags||[]).map(f=>`<div style="color:#C62828;font-size:12px">⛔ 整天不列入：${prodEsc(f)}</div>`).join('');
+    const warns=(d.warns||[]).map(f=>`<div style="color:#E65100;font-size:12px">⚠️ ${prodEsc(f)}</div>`).join('');
+    const rows=d.segs.map(g=>{
+      let stat;
+      if(g.js==='列入'){const per=g.jq>0?Math.round(g.jt/g.jq):0;
+        stat=`<span style="color:#2E7D32">✓ 列入</span><div style="color:#888;font-size:11px">這筆${g.jd>1?`（${g.jd} 天）`:''}共 ${g.jq} 件／${prodDur(g.jt)} → 每件 ${per} 秒、每小時 ${g.jt>0?(g.jq/g.jt*3600).toFixed(1):'-'} 件</div>`;}
+      else if(g.js==='進行中')stat='<span style="color:#888">多日工作進行中</span>';
+      else stat=`<span style="color:#C62828">✗ 不列入</span><div style="color:#C62828;font-size:11px">${prodEsc(g.jw)}</div>`;
+      return`<tr${g.ex?' style="background:#FFF5F5"':''}>
+        <td style="white-space:nowrap">${prodClock(g.s)}–${prodClock(g.e)}${g.ex?`<div style="color:#C62828;font-size:11px">${prodEsc(g.ex)}</div>`:''}</td>
+        <td>${prodEsc(g.n)}${g.sp?` <span style="color:#888">${prodEsc(g.sp)}</span>`:''}</td>
+        <td style="white-space:nowrap">${kindLbl(g.k)}${g.c>1?`<div style="color:#888;font-size:11px">合併 ${g.c} 次回報</div>`:''}</td>
+        <td style="white-space:nowrap">${prodDur(g.sec)}${g.l>0?`<div style="color:#888;font-size:11px">已扣午休 ${prodDur(g.l)}</div>`:''}</td>
+        <td>${stat}</td></tr>`;
+    }).join('');
+    return`<div style="border:1px solid #e8e8e8;border-radius:10px;padding:10px 12px;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+        <div><b>${prodEsc(d.w)}</b>　<span style="font-size:12px;color:#555">${startTxt}</span>${pending}</div>
+        <button class="btn btn-sm" onclick="prodToggleExclude('${prodEsc(d.w)}','${d.d}')">${manual?'取消排除':'排除這一天'}</button>
+      </div>${flags}${warns}
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px" class="prod-tbl">
+        <thead><tr style="background:#f7f7f7;color:#666"><th>時段</th><th>品名</th><th>類型</th><th>工時</th><th>狀態</th></tr></thead>
+        <tbody>${rows}</tbody></table></div></div>`;
+  }).join('');
+};
+window.prodToggleExclude=async function(w,d){
+  const list=(PROD_UI.excl||[]).slice();
+  const i=list.findIndex(x=>x.w===w&&x.d===d);
+  if(i>=0){if(!confirm(`取消排除 ${w} ${d}？`))return;list.splice(i,1);}
+  else{const note=prompt(`排除 ${w} ${d} 的產能資料（例如中途外出）。\n原因（可留空）：`,'');if(note===null)return;list.push({w,d,note:note.trim(),at:new Date().toISOString()});}
+  setSS('syncing');
+  try{await db.collection('system').doc('prodExclude').set({list});PROD_UI.excl=list;setSS('ok');toast('已儲存，下次計算時生效');prodRenderDays();}
+  catch(e){console.error(e);setSS('err');toast('儲存失敗');}
+};
+// 手動重新計算：只讀需要的資料（回報事件全部、起算日後的打卡、起算日前 40 天起建立的派工）
+window.prodRecalc=async function(){
+  if(!confirm('立即重新計算會讀取：全部回報事件、起算日之後的打卡紀錄與派工紀錄。\n讀取量約等於幾天份的正常使用，平常每天備份時就會自動計算。\n\n確定要現在計算？'))return;
+  setSS('syncing');toast('產能計算中...');
+  try{
+    const evSnap=await db.collection('reportEvents').get();
+    const events=evSnap.docs.map(x=>({id:x.id,...x.data()}));
+    if(!events.length){setSS('ok');toast('還沒有回報事件');return;}
+    const start=events.reduce((m,e)=>e.date&&e.date<m?e.date:m,'9999');
+    const [ciSnap,dSnap,exSnap]=await Promise.all([
+      db.collection('checkins').where('date','>=',start).get(),
+      db.collection('dispatches').where('createdAt','>=',new Date(Date.parse(rsAddDays(start,-40)+'T00:00:00+08:00')).toISOString()).get(),
+      db.collection('system').doc('prodExclude').get()]);
+    const ALL={reportEvents:events,checkins:ciSnap.docs.map(x=>({id:x.id,...x.data()})),dispatches:dSnap.docs.map(x=>({id:x.id,...x.data()})),
+      system:exSnap.exists?[{id:'prodExclude',...exSnap.data()}]:[]};
+    await prodComputeAndSave(ALL);
+    PROD_UI.excl=exSnap.exists?(exSnap.data().list||[]):[];PROD_UI.loaded=true;
+    setSS('ok');toast(`計算完成（讀取 ${events.length+ciSnap.size+dSnap.size+1} 筆）`);
+  }catch(e){console.error(e);setSS('err');toast('計算失敗：'+e.message);}
+};
+
+// ══ 第二階段：品名產能（個人與平均）══
+const PROD_MIN_PERSONAL=7200; // 個人累積滿 2 小時才用個人數據
+let prodPeriod='3m',prodView='prod';
+const prodOpenKeys=new Set();
+function prodMonthAdd(ym,n){const [y,m]=ym.split('-').map(Number);const d=new Date(Date.UTC(y,m-1+n,1));return d.toISOString().slice(0,7);}
+function prodPeriodRange(per){
+  const cur=twToday().slice(0,7);
+  if(per==='this')return[cur,cur];
+  if(per==='last'){const l=prodMonthAdd(cur,-1);return[l,l];}
+  if(per==='all')return[null,null];
+  if(per==='custom'){const f=document.getElementById('prod-m-from').value||null,t=document.getElementById('prod-m-to').value||null;return[f,t];}
+  return[prodMonthAdd(cur,-2),cur]; // 最近 3 個月：本月與前兩個月
+}
+window.prodSetPeriod=function(per){
+  prodPeriod=per;
+  document.querySelectorAll('.prod-per-btn').forEach(b=>b.classList.toggle('active',b.dataset.per===per));
+  if(per!=='custom'){document.getElementById('prod-m-from').value='';document.getElementById('prod-m-to').value='';}
+  prodRenderStats();
+};
+window.prodSetView=function(v){
+  prodView=v;
+  document.querySelectorAll('.prod-view-btn').forEach(b=>b.classList.toggle('active',b.dataset.view===v));
+  document.getElementById('prod-emp').style.display=v==='emp'?'':'none';
+  prodRenderStats();
+};
+window.prodToggleKey=function(k){prodOpenKeys.has(k)?prodOpenKeys.delete(k):prodOpenKeys.add(k);prodRenderStats();};
+function prodSecPer(x){return x&&x.q>0&&x.t>0?x.t/x.q:null;}
+function prodHr(sec){return(sec/3600).toFixed(1);}
+function prodEffCell(avgSec,mySec){
+  if(!avgSec||!mySec)return'<td>-</td>';
+  const pct=Math.round(avgSec/mySec*100);
+  return`<td class="col-num" style="font-weight:600;color:${pct>=100?'#2E7D32':'#555'}">${pct}%</td>`;
+}
+window.prodRenderStats=function(){
+  const box=document.getElementById('prod-stats');if(!box)return;
+  const s=PROD_UI.summary;
+  if(!s){box.innerHTML='<div style="color:#888;font-size:13px">尚無資料。</div>';return;}
+  const [f,t]=prodPeriodRange(prodPeriod);
+  const agg=PROD.aggregate(s,f,t);
+  const kw=(document.getElementById('prod-kw').value||'').trim().toLowerCase();
+  let keys=Object.keys(agg).filter(k=>!kw||(agg[k].n+' '+agg[k].sp).toLowerCase().includes(kw));
+  keys.sort((a,b)=>(agg[a].n+agg[a].sp).localeCompare(agg[b].n+agg[b].sp,'zh-Hant'));
+  const rng=`<div style="font-size:12px;color:#888;margin-bottom:6px">期間：${f||'最早'} ～ ${t||'最新'}</div>`;
+  // 員工下拉
+  const empSel=document.getElementById('prod-emp');
+  const emps=[...new Set([...(window.DB.employees||[]),...keys.flatMap(k=>Object.keys(agg[k].w))])];
+  const curEmp=empSel.value||emps[0]||'';
+  empSel.innerHTML=emps.map(e=>`<option value="${prodEsc(e)}"${e===curEmp?' selected':''}>${prodEsc(e)}</option>`).join('');
+  if(!keys.length){box.innerHTML=rng+'<div style="color:#888;font-size:13px">這段期間沒有列入的資料。</div>';return;}
+  const th='style="background:#f7f7f7;color:#666;white-space:nowrap"';
+  if(prodView==='emp'){
+    const rows=keys.filter(k=>agg[k].w[curEmp]).map(k=>{
+      const p=agg[k],x=p.w[curEmp],avg=prodSecPer(p),my=prodSecPer(x),low=x.t<PROD_MIN_PERSONAL;
+      return`<tr style="${low?'color:#aaa':''}"><td>${prodEsc(p.n)}</td><td>${prodEsc(p.sp)||'-'}</td>
+        <td class="col-num">${my?Math.round(my):'-'}</td><td class="col-num">${avg?Math.round(avg):'-'}</td>${low?'<td class="col-num">樣本不足</td>':prodEffCell(avg,my)}
+        <td class="col-num">${my?(3600/my).toFixed(1):'-'}</td><td class="col-num">${x.q}</td><td class="col-num">${prodHr(x.t)}</td><td class="col-num">${x.j}</td></tr>`;
+    }).join('');
+    box.innerHTML=rng+(rows?`<div style="overflow-x:auto"><table class="prod-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr><th ${th}>品名</th><th ${th}>規格</th><th ${th}>個人每件秒</th><th ${th}>平均每件秒</th><th ${th}>效率</th><th ${th}>個人每小時件數</th><th ${th}>完成量</th><th ${th}>工時</th><th ${th}>筆數</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`:`<div style="color:#888;font-size:13px">${prodEsc(curEmp)} 在這段期間沒有列入的資料。</div>`);
+    return;
+  }
+  const rows=keys.map(k=>{
+    const p=agg[k],avg=prodSecPer(p),open=prodOpenKeys.has(k),n=Object.keys(p.w).length;
+    const ke=prodEsc(k).replace(/'/g,"\\'");
+    let h=`<tr style="cursor:pointer;background:${open?'#F5F7FA':''}" onclick="prodToggleKey('${ke}')">
+      <td>${open?'▼':'▶'} <b>${prodEsc(p.n)}</b></td><td>${prodEsc(p.sp)||'-'}</td>
+      <td class="col-num"><b>${avg?Math.round(avg):'-'}</b></td><td class="col-num">${avg?(3600/avg).toFixed(1):'-'}</td>
+      <td class="col-num">${p.q}</td><td class="col-num">${prodHr(p.t)}${p.t<PROD_MIN_PERSONAL?' <span style="color:#E65100">樣本少</span>':''}</td><td class="col-num">${p.j}</td><td class="col-num">${n}</td></tr>`;
+    if(open){
+      h+=Object.keys(p.w).sort((a,b)=>(prodSecPer(p.w[a])||1e9)-(prodSecPer(p.w[b])||1e9)).map(w=>{
+        const x=p.w[w],my=prodSecPer(x),low=x.t<PROD_MIN_PERSONAL;
+        return`<tr style="font-size:11px;${low?'color:#aaa':''}"><td style="padding-left:24px">${prodEsc(w)}</td><td>${low?'樣本不足':''}</td>
+          <td class="col-num">${my?Math.round(my):'-'}</td><td class="col-num">${my?(3600/my).toFixed(1):'-'}</td>
+          <td class="col-num">${x.q}</td><td class="col-num">${prodHr(x.t)}</td><td class="col-num">${x.j}</td>${low?'<td></td>':prodEffCell(avg,my)}</tr>`;
+      }).join('');
+    }
+    return h;
+  }).join('');
+  box.innerHTML=rng+`<div style="overflow-x:auto"><table class="prod-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
+    <thead><tr><th ${th}>品名（點開看個人）</th><th ${th}>規格</th><th ${th}>平均每件秒</th><th ${th}>每小時件數</th><th ${th}>完成量</th><th ${th}>工時</th><th ${th}>筆數</th><th ${th}>人數／效率</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+};
+
+// ══ 第三階段：預估工時（訂單、派工）══
+// 依據：最近 3 個月（本月與前兩個月）；品名＋規格；個人累積滿 2 小時用個人，否則用平均；
+// 這個規格沒有資料 → 用同品名其他規格的平均，標示「參考」；1 天 = 8 工時。
+var prodEstCache=null;
+function prodEstAgg(){
+  const s=PROD_UI.summary;if(!s)return null;
+  const cur=twToday().slice(0,7);
+  const ck=(s.computedAt||'')+'|'+cur;
+  if(prodEstCache&&prodEstCache.ck===ck)return prodEstCache;
+  const agg=PROD.aggregate(s,prodMonthAdd(cur,-2),cur);
+  const byKey={},byName={};
+  Object.values(agg).forEach(p=>{
+    const k=PROD.keyOf((p.n||'').trim(),(p.sp||'').trim());
+    byKey[k]=p;
+    const nm=(p.n||'').trim();const b=byName[nm]=byName[nm]||{q:0,t:0};b.q+=p.q;b.t+=p.t;
+  });
+  prodEstCache={ck,byKey,byName};
+  return prodEstCache;
+}
+// 回傳 {sec:每件秒數, src:'個人'|'平均'|'參考'} 或 null
+function prodRate(name,spec,worker){
+  const A=prodEstAgg();if(!A)return null;
+  const p=A.byKey[PROD.keyOf((name||'').trim(),(spec||'').trim())];
+  if(p&&p.q>0&&p.t>0){
+    const x=worker&&p.w[worker];
+    if(x&&x.t>=PROD_MIN_PERSONAL&&x.q>0)return{sec:x.t/x.q,src:'個人'};
+    return{sec:p.t/p.q,src:'平均'};
+  }
+  const b=A.byName[(name||'').trim()];
+  if(b&&b.q>0&&b.t>0)return{sec:b.t/b.q,src:'參考'};
+  return null;
+}
+function prodHoursTxt(sec){const h=sec/3600;return h<0.1?'不到 0.1':h.toFixed(1);}
+function prodDaysTxt(sec){const d=sec/3600/8;return d<0.1?'':`（約 ${d.toFixed(1)} 天）`;}
+// 品名下方的一行預估；label：數量說明。沒有摘要資料時不顯示
+function prodEstLine(name,spec,qty,label){
+  if(!PROD_UI||!PROD_UI.summary||!(qty>0))return'';
+  const r=prodRate(name,spec,null);
+  if(!r)return`<div style="font-size:11px;color:#aaa;font-weight:400">⏱ 預估工時：無資料</div>`;
+  const sec=qty*r.sec;
+  const tag=r.src==='參考'?'<span style="color:#E65100">參考同品名其他規格</span>':'平均';
+  return`<div style="font-size:11px;color:#5F6B7A;font-weight:400">⏱ ${prodEsc(label)}預估 <b>${prodHoursTxt(sec)}</b> 工時${prodDaysTxt(sec)}・${tag}</div>`;
+}
+window.prodManualEst=function(){
+  const el=document.getElementById('m-est');if(!el)return;
+  const name=document.getElementById('m-name').value.trim(),spec=document.getElementById('m-spec').value.trim();
+  const qty=parseFloat(document.getElementById('m-qty').value)||0;
+  if(!name||!qty){el.textContent='—';return;}
+  if(!PROD_UI.summary){el.textContent='尚無產能資料';return;}
+  const r=prodRate(name,spec,null);
+  if(!r){el.textContent='無資料';return;}
+  const sec=qty*r.sec;
+  el.innerHTML=`<span><b style="color:#185FA5">${prodHoursTxt(sec)}</b> 工時${prodDaysTxt(sec)}<br><span style="font-size:11px;color:${r.src==='參考'?'#E65100':'#888'}">${r.src==='參考'?'參考同品名其他規格':'平均'}・每件 ${Math.round(r.sec)} 秒</span></span>`;
+};
+{const c0=window.calcManualAmt,n0=window.onNameInput;
+ window.calcManualAmt=function(){c0.apply(this,arguments);prodManualEst();};
+ window.onNameInput=function(){n0.apply(this,arguments);prodManualEst();};}
+function prodImportEstText(list){
+  if(!PROD_UI||!PROD_UI.summary||!list||!list.length)return'';
+  let sec=0,miss=0;
+  list.forEach(o=>{const r=prodRate(o.name,o.spec,null);if(r)sec+=o.qty*r.sec;else miss++;});
+  if(!sec)return'';
+  return`，預估共 ${prodHoursTxt(sec)} 工時${miss?`（${miss} 筆無資料未計）`:''}`;
+}
+// 派工畫面：每位員工做這批要多久、勾選多人合做要多久
+window.prodDispatchEst=prodDispatchEst;
+function prodDispatchEst(){
+  const spans=document.querySelectorAll('#d-worker-checks .prod-wk-est');
+  const combo=document.getElementById('d-est-combo');
+  const ids=[...(window._selectedOrderIds||[])];
+  const clear=()=>{spans.forEach(sp=>sp.textContent='');if(combo)combo.style.display='none';};
+  if(!PROD_UI||!PROD_UI.summary||!ids.length){clear();return;}
+  const custom=parseInt(document.getElementById('d-assign-qty')?.value)||0;
+  // 同品名＋規格合併數量（派工數量有填時，每張訂單以填的數量計，不超過剩餘）
+  const groups={};
+  window.DB.orders.filter(o=>ids.includes(o.id)).forEach(o=>{
+    const rem=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
+    const q=custom>0?Math.min(custom,rem):rem;
+    const k=PROD.keyOf((o.name||'').trim(),(o.spec||'').trim());
+    (groups[k]=groups[k]||{name:o.name,spec:o.spec||'',qty:0}).qty+=q;
+  });
+  const gl=Object.values(groups).filter(g=>g.qty>0);
+  if(!gl.length){clear();return;}
+  const per={};
+  spans.forEach(sp=>{
+    const w=sp.dataset.w;let sec=0,miss=0,srcs=new Set();
+    gl.forEach(g=>{const r=prodRate(g.name,g.spec,w);if(r){sec+=g.qty*r.sec;srcs.add(r.src);}else miss++;});
+    per[w]={sec,miss,srcs};
+    if(!sec){sp.textContent='無資料';sp.style.color='#aaa';return;}
+    const src=['個人','平均','參考'].filter(x=>srcs.has(x)).join('＋');
+    sp.textContent=`${prodHoursTxt(sec)} 工時・${src}${miss?'・部分無資料':''}`;
+    sp.style.color=src==='個人'?'#1565C0':src==='參考'?'#E65100':'#888';
+  });
+  const checked=[...document.querySelectorAll('#d-worker-checks input:checked')].map(c=>c.value);
+  if(!combo)return;
+  if(checked.length<2){combo.style.display='none';return;}
+  // 合做：每組數量 ÷ 這幾個人的速度總和
+  let sec=0,miss=0;
+  gl.forEach(g=>{
+    const speed=checked.reduce((a,w)=>{const r=prodRate(g.name,g.spec,w);return a+(r?1/r.sec:0);},0);
+    if(speed>0)sec+=g.qty/speed;else miss++;
+  });
+  combo.style.display='block';
+  combo.innerHTML=sec?`⏱ ${checked.length} 人合做預估 <b>${prodHoursTxt(sec)}</b> 工時${prodDaysTxt(sec)}${miss?'（部分品名無資料未計）':''}`:'⏱ 合做預估：無資料';
+}
+// 彙總文件：平常就監聽（1 次讀取），更新時重畫訂單與派工的預估
+db.collection('system').doc('productivity').onSnapshot(snap=>{
+  PROD_UI.summary=snap.exists?snap.data():null;prodEstCache=null;
+  try{renderOrders();}catch(e){}
+  try{if(document.getElementById('pg-dispatch')?.classList.contains('active'))renderDispatchOrders();}catch(e){}
+  try{if(document.getElementById('pg-prod')?.classList.contains('active'))prodRender();}catch(e){}
+},e=>console.warn('產能彙總監聽失敗',e));
+
 window.sw=function(p){
   document.querySelectorAll('.page').forEach(x=>x.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(x=>x.classList.remove('active'));
   document.getElementById('pg-'+p).classList.add('active');
-  ['orders','dispatch','daily','shipping','checkin','salary','payslip','materials','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
+  ['orders','dispatch','daily','shipping','checkin','salary','payslip','materials','prod','settings'].forEach((t,i)=>document.querySelectorAll('.nav-tab')[i].classList[t===p?'add':'remove']('active'));
   if(p==='dispatch'){renderDispatchOrders();renderDispatchWorkers();initDispatchForm();}
   if(p==='salary'){initSalDates();renderSalaryWorkers();}
   if(p==='checkin'){renderCIWorkers();setCIDateRange('today');renderLeaveApproval();}
@@ -4252,6 +4653,7 @@ window.sw=function(p){
   }
   if(p==='daily'){initDailyReport();renderNoteAlerts();renderConfirmReports();}
   if(p==='shipping'){renderShipping();}
+  if(p==='prod')prodOpen();
 }
 </script>
 </body>
