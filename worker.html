@@ -822,6 +822,10 @@ function renderCheckinStatus(){
     box.className='checkin-status in';box.style.background='';box.style.borderColor='';
     box.innerHTML=`<div style="font-size:13px;color:#2E7D32;font-weight:600">✓ 已上班打卡 / Đã vào ca</div><div style="font-size:12px;color:#666;margin-top:4px">上班時間 / Giờ vào: ${ci.inTime}</div>`;
     msg.textContent='';
+  }else if(!_ciReady){
+    box.className='checkin-status out';box.style.background='';box.style.borderColor='';
+    box.innerHTML=`<div style="font-size:13px;color:#888">打卡資料載入中… / Đang tải…</div>`;
+    return;
   }else{
     box.className='checkin-status out';box.style.background='';box.style.borderColor='';
     box.innerHTML=`<div style="font-size:13px;color:#888">今日尚未上班 / Chưa chấm công hôm nay</div>`;
@@ -952,6 +956,13 @@ window.doCheckin=async function(type){
   try{
     const id=`CI-${currentWorker}-${today}`;
     if(type==='in'){
+      // 寫入前直接向伺服器確認今天是否已打過上班卡（多 1 次讀取），避免手機上的資料不完整時覆蓋原本的上班時間
+      let srv=null;
+      try{srv=await db.collection('checkins').doc(id).get({source:'server'});}catch(e){srv=null;}
+      if(srv&&srv.exists&&srv.data().inTime){
+        setSS('ok');
+        return alert(`今天已經打過上班卡了（${srv.data().inTime}），不需要再打。\nHôm nay bạn đã vào ca lúc ${srv.data().inTime}.\n\n請按「🔄 重新整理」更新畫面。`);
+      }
       await db.collection('checkins').doc(id).set({worker:currentWorker,date:today,inTime:timeStr,inLat:lat,inLng:lng,inDist:distRound,outTime:null,outLat:null,outLng:null,outDist:null});
       setSS('ok');toast('上班打卡成功 / Vào ca thành công ✓');
     }else{
@@ -1026,7 +1037,7 @@ function renderHistory(){
   if(!currentWorker)return;
   if(!hasTodayAccess()){
     const hist=document.getElementById('wm-history');
-    if(hist)hist.innerHTML=NO_ACCESS_MSG;
+    if(hist)hist.innerHTML=_ciReady?NO_ACCESS_MSG:CI_LOADING_MSG;
     return;
   }
   const{from,to}=getPayPeriod(historyOffset);
@@ -1349,6 +1360,8 @@ function getYesterdayMissingOut(){
   const yi=checkins.find(c=>c.worker===currentWorker&&c.date===twYesterday);
   return yi&&yi.inTime&&!yi.outTime&&!yi.leave;
 }
+// 打卡資料還在向伺服器確認時顯示（避免重新整理後誤以為還沒打卡）
+const CI_LOADING_MSG=`<div class="card" style="text-align:center;color:#888;padding:2rem">打卡資料載入中，請稍候…<br>Đang tải dữ liệu chấm công…</div>`;
 const NO_ACCESS_MSG=`<div class="card" style="text-align:center;padding:2.5rem;border:2px solid #C62828">
   <div style="font-size:3rem;margin-bottom:12px">🔒</div>
   <div style="font-size:16px;font-weight:600;color:#C62828;margin-bottom:6px">請先打上班卡才能查看工單</div>
@@ -1378,7 +1391,7 @@ function renderWorkerMain(){
   if(!hasTodayAccess()){
     document.getElementById('wm-stats').innerHTML='';
     const tasks=document.getElementById('wm-tasks');
-    if(tasks)tasks.innerHTML=NO_ACCESS_MSG;
+    if(tasks)tasks.innerHTML=_ciReady?NO_ACCESS_MSG:CI_LOADING_MSG;
     const dn=document.getElementById('wm-drink');if(dn)dn.innerHTML='';
     return;
   }
