@@ -1050,9 +1050,15 @@ function renderHistory(){
     lbl.innerHTML=`${from} ～ ${to}　<span style="color:#aaa">${at} 載入</span>
       <button class="btn btn-sm" style="margin-left:6px;padding:2px 8px;font-size:11px" onclick="reloadHistory()">重新查詢（今天剩 ${histLeft()} 次）</button>${drink}`;
   }
+  const _today=toTW(new Date().toISOString(),false);
   const myAll=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{
     const dt=d.effectiveDate||toTW(d.createdAt,false);
-    return dt>=from&&dt<=to;
+    if(!(dt>=from&&dt<=to))return false;
+    // 今天（含多日工作延續中）還沒回報的工單屬於「待辦」，不列在加工紀錄
+    //（包括工單順序還在排隊、待辦裡暫時看不到的）；過去沒回報的仍顯示「未回報」
+    const rep=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0||d.groupReportedAt;
+    if(!rep&&(dt>=_today||stillCarry(d,_today)))return false;
+    return true;
   }).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
   const el=document.getElementById('history-list');
   if(!myAll.length){el.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">此週期無加工記錄<br>Không có ghi chép trong kỳ này</div>';return;}
@@ -1232,7 +1238,16 @@ function renderHistory(){
     <td colspan="2"></td>
   </tr>`;
 
-  el.innerHTML=`<div style="background:#fff;border:0.5px solid #e0e0e0;border-radius:12px;overflow:hidden;overflow-x:auto">
+  // 期間累計（原本在首頁上方的「本月完工、本月加工費」移到這裡，放在最上面）
+  const pLabel=historyOffset===0?'本月':historyOffset===-1?'上月':'該月';
+  const pLabelVi=historyOffset===0?'tháng này':historyOffset===-1?'tháng trước':'tháng đó';
+  const summary=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+    <div class="metric"><div class="metric-label">${pLabel}完工<br><span style="font-size:10px;color:#bbb">Hoàn thành ${pLabelVi}</span></div><div class="metric-val">${totalDone}</div></div>
+    <div class="metric"><div class="metric-label">${pLabel}加工累計<br><span style="font-size:10px;color:#bbb">Tổng tiền gia công ${pLabelVi}</span></div>
+      <div class="metric-val">$${(confirmedEarn+pendingEarn).toFixed(0)}</div>
+      <div style="font-size:11px;color:#888;margin-top:2px">已確認 $${confirmedEarn.toFixed(0)}${pendingEarn>0?`／待確認 $${pendingEarn.toFixed(0)}`:''}</div></div>
+  </div>`;
+  el.innerHTML=summary+`<div style="background:#fff;border:0.5px solid #e0e0e0;border-radius:12px;overflow:hidden;overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;min-width:380px">
       <thead>
         <tr style="background:#f5f5f5;border-bottom:0.5px solid #e0e0e0">
