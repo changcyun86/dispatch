@@ -415,7 +415,7 @@ let _ciReady=false;
 //   - 相關訂單＝自己「尚未回報」的派工所屬訂單（＋正在修改的歷史紀錄的訂單），以及這些訂單上所有人的派工
 //   - 自己的打卡與請假：最近 40 天
 //   加工紀錄改成點開才讀（get，不監聽），每天最多 3 次；修改歷史紀錄時才補讀那張訂單
-const OWN_DAYS=14,CI_DAYS=40,HIST_MAX=3;
+const OWN_DAYS=14,CI_DAYS=40,HIST_MAX=5;
 let _histDocs=new Map();        // 加工紀錄查詢結果（最低優先，會被即時監聽的資料覆蓋）
 let _histLoaded={};             // offset -> 載入時間（本次登入）
 let _histLoading=false;
@@ -548,9 +548,44 @@ function ensureScopeFor(list,then){
 function _histKey(){return`hist-cnt-${currentWorker}-${_twToday()}`;}
 function histUsed(){try{return parseInt(localStorage.getItem(_histKey()))||0;}catch(e){return 0;}}
 function histLeft(){return Math.max(0,HIST_MAX-histUsed());}
+// ── 加工紀錄存在手機上（localStorage），重新打開 App 不用再查；不增加讀取 ──
+// 判斷某個月份是否「完整」：
+//   - 即時監聽涵蓋整個月份（最近 14 天建立的派工）→ 不用查
+//   - 或手機上有那個月份的查詢結果，且查詢時間晚於即時監聽範圍的起點（或晚於月份結束）
+//     → 查詢之後新建的派工都在即時監聽範圍內，合併後就是完整的
+function _ownFromISO(){return new Date(new Date(_twToday()+'T00:00:00+08:00').getTime()-OWN_DAYS*864e5).toISOString();}
+function _periodFromISO(offset){const{from}=getPayPeriod(offset);return new Date(new Date(from+'T00:00:00+08:00').getTime()-7*864e5).toISOString();}
+function _periodToISO(offset){const{to}=getPayPeriod(offset);return new Date(to+'T23:59:59.999+08:00').toISOString();}
+function _liveCovers(offset){const{from}=getPayPeriod(offset);return new Date(from+'T00:00:00+08:00').toISOString()>=_ownFromISO();} // 每月 1～14 日：最近 14 天已涵蓋整個月
+function _histCacheKey(offset){return`hist-cache-${currentWorker}-${getPayPeriod(offset).from}`;}
+function _histCacheGet(offset){try{return JSON.parse(localStorage.getItem(_histCacheKey(offset))||'null');}catch(e){return null;}}
+function _histCacheOK(offset,c){return!!c&&(c.at>=_ownFromISO()||c.at>_periodToISO(offset));}
+function _histCacheSave(offset,docs,at){
+  try{
+    localStorage.setItem(_histCacheKey(offset),JSON.stringify({at,docs}));
+    // 只保留畫面用得到的三個月份
+    const keep=new Set([0,-1,-2].map(o=>_histCacheKey(o)));
+    const pre=`hist-cache-${currentWorker}-`;
+    for(let i=localStorage.length-1;i>=0;i--){const k=localStorage.key(i);if(k&&k.startsWith(pre)&&!keep.has(k))localStorage.removeItem(k);}
+  }catch(e){}
+}
+// 不用讀資料庫就能完整顯示的月份：即時資料已涵蓋，或手機上有可用的查詢結果
+function histUseLocal(offset){
+  if(_histLoaded[offset])return true;
+  if(_liveCovers(offset)){_histLoaded[offset]={live:true};return true;}
+  const c=_histCacheGet(offset);
+  if(c&&Array.isArray(c.docs)){
+    c.docs.forEach(d=>{if(!_histDocs.has(d.id))_histDocs.set(d.id,d);});
+    _histLoaded[offset]={at:c.at,cached:true,complete:_histCacheOK(offset,c)};
+    _rebuildDispatches();
+    return true;
+  }
+  return false;
+}
+function histComplete(offset){const h=_histLoaded[offset];return!!h&&(h.live||h.complete!==false);}
 async function loadHistory(offset,force){
   if(!currentWorker||_histLoading)return;
-  if(_histLoaded[offset]&&!force)return;
+  if(_histLoaded[offset]&&histComplete(offset)&&!force)return;
   if(histLeft()<=0){renderHistory();return;}
   const name=currentWorker;
   const{from,to}=getPayPeriod(offset);
@@ -563,9 +598,13 @@ async function loadHistory(offset,force){
       .where('createdAt','>=',fromISO).where('createdAt','<=',toISO).get();
     if(currentWorker!==name)return;
     try{localStorage.setItem(_histKey(),String(histUsed()+1));}catch(e){}
-    snap.docs.forEach(d=>_histDocs.set(d.id,{id:d.id,...d.data()}));
-    _histLoaded[offset]=new Date().toISOString();
+    const docs=snap.docs.map(d=>({id:d.id,...d.data()}));
+    docs.forEach(d=>_histDocs.set(d.id,d));
+    const at=new Date().toISOString();
+    _histLoaded[offset]={at,complete:true};
+    _histCacheSave(offset,docs,at);
     _rebuildDispatches();
+    renderWorkerMain(); // 更新首頁「本月完工／本月加工累計」
   }catch(e){toast('讀取失敗，請重試 / Lỗi tải dữ liệu');}
   finally{_histLoading=false;if(currentWorker===name&&currentTab==='history')renderHistory();}
 }
@@ -1043,6 +1082,9 @@ function renderHistory(){
   const{from,to}=getPayPeriod(historyOffset);
   const lbl=document.getElementById('history-period-label');
   const el0=document.getElementById('history-list');
+  histUseLocal(historyOffset);
+  // 手機上的資料太舊（中間有一段既不在查詢結果、也不在即時範圍內）且還有次數 → 自動補查
+  if(_histLoaded[historyOffset]&&!histComplete(historyOffset)&&histLeft()>0&&!_histLoading){loadHistory(historyOffset);}
   if(!_histLoaded[historyOffset]){
     lbl.textContent=`${from} ～ ${to}`;
     if(_histLoading){el0.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">載入中... / Đang tải...</div>';return;}
@@ -1052,14 +1094,17 @@ function renderHistory(){
     return;
   }
   {
-    const at=toTW(_histLoaded[historyOffset]).slice(11,16);
+    const h=_histLoaded[historyOffset];
+    const atTW=h.at?toTW(h.at):'';
+    const atTxt=h.live?'即時資料 / Dữ liệu trực tiếp'
+      :`${atTW.slice(0,10)===_twToday()?atTW.slice(11,16):atTW.slice(5,16)} 查詢${h.complete===false?'（資料不完整，請重新查詢）':'＋即時更新'}`;
     let drink='';
     if(historyOffset===0&&_twToday()>=DRINK_START){
       const n=drinkDaysThisMonth().length;
       if(n>0)drink=`<div style="color:#C62828;margin-top:4px">🥤 本月代訂飲料：${n} 次 / Tháng này bị trừ tiền nước uống: ${n} lần</div>`;
     }
-    lbl.innerHTML=`${from} ～ ${to}　<span style="color:#aaa">${at} 載入</span>
-      <button class="btn btn-sm" style="margin-left:6px;padding:2px 8px;font-size:11px" onclick="reloadHistory()">重新查詢（今天剩 ${histLeft()} 次）</button>${drink}`;
+    lbl.innerHTML=`${from} ～ ${to}　<span style="color:${h.complete===false?'#C62828':'#aaa'}">${atTxt}</span>
+      ${h.live?'':`<button class="btn btn-sm" style="margin-left:6px;padding:2px 8px;font-size:11px" onclick="reloadHistory()">重新查詢（今天剩 ${histLeft()} 次）</button>`}${drink}`;
   }
   const _today=toTW(new Date().toISOString(),false);
   const myAll=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{
@@ -1486,12 +1531,24 @@ function renderWorkerMain(){
     if(!d.sequence)return true;
     return!basePending.some(x=>x.sequence&&x.sequence<d.sequence);
   });
-  // 本月完工、本月加工費、代訂飲料次數改到「加工紀錄」頁（那裡才讀整個月的資料）
+  // 本月累計：手機上的查詢結果＋即時監聽的最近 14 天派工合併計算，不額外讀取
   const st=document.getElementById('wm-stats');
-  st.style.gridTemplateColumns='1fr';
+  st.style.gridTemplateColumns='';
+  const mOK=histUseLocal(0)&&histComplete(0);
+  let mDone='—',mEarn='—',mSub=`<div style="font-size:10px;color:#C62828;margin-top:2px">點「加工紀錄」查詢一次<br>Mở lịch sử 1 lần</div>`;
+  if(mOK){
+    const{from:mf,to:mt}=getPayPeriod(0);
+    const mine=dispatches.filter(d=>d.worker===currentWorker).filter(d=>{const dt=d.effectiveDate||toTW(d.createdAt,false);return dt>=mf&&dt<=mt;});
+    const ce=mine.filter(d=>d.adminConfirmed).reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+    const pe=mine.filter(d=>!d.adminConfirmed&&(d.doneQty||0)>0).reduce((a,d)=>a+(d.doneQty||0)*(d.itemPrice||0),0);
+    mDone=mine.reduce((a,d)=>a+(d.doneQty||0),0);
+    mEarn='$'+(ce+pe).toFixed(0);
+    mSub=pe>0?`<div style="font-size:10px;color:#888;margin-top:2px">待確認 $${pe.toFixed(0)}</div>`:'';
+  }
   st.innerHTML=`
-    <div class="metric"><div class="metric-label">待辦工單 / Việc cần làm</div><div class="metric-val">${myPending.length}</div>
-      <div style="font-size:11px;color:#aaa;margin-top:2px">本月完工、加工費請看「加工紀錄」/ Xem tổng tháng ở mục lịch sử</div></div>
+    <div class="metric"><div class="metric-label">待辦工單<br><span style="font-size:10px;color:#bbb">Việc cần làm</span></div><div class="metric-val">${myPending.length}</div></div>
+    <div class="metric"><div class="metric-label">本月完工<br><span style="font-size:10px;color:#bbb">Hoàn thành tháng này</span></div><div class="metric-val">${mDone}</div></div>
+    <div class="metric"><div class="metric-label">本月加工累計<br><span style="font-size:10px;color:#bbb">Tổng tiền gia công tháng này</span></div><div class="metric-val">${mEarn}</div>${mSub}</div>
   `;
   if(currentTab!=='pending')return;
   renderDrinkNotice(myPending.length);
