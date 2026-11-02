@@ -253,6 +253,14 @@ textarea{resize:vertical;min-height:70px}
       </div>
     </div>
   </div>
+  <!-- 備料準備 -->
+  <div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem">
+    <div style="padding:0.75rem 1.25rem;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:600;color:#555;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      📦 備料準備 <span id="prep-sub" style="font-size:11px;font-weight:400;color:#aaa"></span>
+      <button class="btn btn-sm" style="margin-left:auto" onclick="printPrepList()">🖨 列印</button>
+    </div>
+    <div id="prep-list" style="padding:0.5rem 1.25rem 0.75rem;font-size:13px"></div>
+  </div>
   <!-- 派工記錄 -->
   <div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem">
     <div style="padding:0.75rem 1.25rem;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:600;color:#555;display:flex;align-items:center;gap:8px">
@@ -329,6 +337,7 @@ textarea{resize:vertical;min-height:70px}
       <div style="display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap;font-size:13px">
         <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" id="d-multiday" style="width:auto;margin:0" onchange="document.getElementById('d-maxdays-wrap').style.display=this.checked?'flex':'none'"> 多日工作</label>
         <span id="d-maxdays-wrap" style="display:none;align-items:center;gap:6px">天數上限 <input type="number" id="d-maxdays" min="2" value="2" style="width:70px;margin:0"> 天 <span style="color:#aaa;font-size:11px">（最多可按「還在做」上限減 1 次，最後一天必須回報數量）</span></span>
+        <span style="display:flex;align-items:center;gap:6px">⏰ 做到幾點 <input type="time" id="d-until-time" style="width:auto;margin:0"> <span style="color:#aaa;font-size:11px">（選填，多日工作不適用）</span></span>
       </div>
       <label>備註 <span style="color:#aaa;font-weight:400">（選填）</span></label>
       <textarea id="d-note" placeholder="填寫備註說明...（可不填）" style="min-height:60px"></textarea>
@@ -874,7 +883,10 @@ function toTW(isoStr,showTime=true){
 // 派工記錄的「歸屬日期」：優先用生效日（預約派工的實際回報日），沒有才退回建立時間換算台灣時間
 function dispWorkDate(d){return d.effectiveDate||toTW(d.createdAt,false);}
 // 工單順序標籤（只顯示，派工時有填才出現；與預約派工的樣式相同）
-function seqBadge(d){return d&&d.sequence?` <span style="background:#FFF3E0;color:#E65100;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:400;white-space:nowrap">第 ${d.sequence} 張</span>`:'';}
+function untilBadge(d){return d&&d.untilTime?` <span style="background:#FFEBEE;color:#C62828;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap">⏰ 做到 ${d.untilTime}</span>`:'';}
+// 工單順序標示（同時帶出「做到幾點」，所有顯示工單順序的地方都會看到）
+function seqBadge(d){return seqOnlyBadge(d)+untilBadge(d);}
+function seqOnlyBadge(d){return d&&d.sequence?` <span style="background:#FFF3E0;color:#E65100;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:400;white-space:nowrap">第 ${d.sequence} 張</span>`:'';}
 // ══ 多日工作 ══
 // 派工欄位：multiDay、maxDays（總共可做幾天）、stillDays:[{date,at,rejected}]；打卡紀錄：stillIds
 function stillList(d){return Array.isArray(d.stillDays)?d.stillDays:[];}
@@ -2262,6 +2274,10 @@ window.createDispatch=async function(){
   const maxDays=parseInt(document.getElementById('d-maxdays')?.value)||0;
   if(multiDay&&maxDays<2)return alert('多日工作的天數上限至少 2 天');
   const multiFields=multiDay?{multiDay:true,maxDays}:{}; // 沒勾多日：不新增任何欄位，與原本相同
+  // 做到幾點（untilTime，"HH:MM"）：只有填寫才新增欄位；多日工作不開放
+  const untilTime=(document.getElementById('d-until-time')?.value||'').slice(0,5);
+  if(untilTime&&multiDay)return alert('多日工作不能設定「做到幾點」，請取消其中一項');
+  if(untilTime)multiFields.untilTime=untilTime;
   const batchId=genId('B');
   const now=new Date().toISOString();
   // 依品名+規格+單價分組
@@ -2304,6 +2320,7 @@ window.createDispatch=async function(){
   document.getElementById('d-note').value='';
   document.getElementById('d-sequence').value='';
   document.getElementById('d-assign-qty').value='';
+  {const ut=document.getElementById('d-until-time');if(ut)ut.value='';}
   {const md=document.getElementById('d-multiday');if(md){md.checked=false;document.getElementById('d-maxdays-wrap').style.display='none';document.getElementById('d-maxdays').value='2';}}
   const today=toTW(new Date().toISOString(),false);
   document.getElementById('d-effective-date').value=today;
@@ -2453,6 +2470,81 @@ function renderDispatchLog(){
         </div>`).join('')}
     </div>`).join('');
 }
+// ══ 備料準備（每日記錄）══
+// 依派工日期列出當天要加工的貨，依品名＋規格彙總。每張訂單只算一次（多人同做一張單不重複）：
+// 準備量 = min(當天派工的指派量最大值, 目前剩餘 + 當天派工已回報量)，回報後數字不會變少。
+// 多日工作延續中的另外列出、不計入。只用已載入的資料。
+let _prepData=null;
+function buildPrepList(date,worker,kw){
+  const allDay=window.DB.dispatches.filter(d=>dispWorkDate(d)===date);
+  let ds=allDay;
+  if(worker)ds=ds.filter(d=>d.worker===worker);
+  if(kw)ds=ds.filter(d=>matchDispatch(d,kw));
+  const byOrder={};
+  ds.forEach(d=>{(byOrder[d.orderId]=byOrder[d.orderId]||[]).push(d);});
+  const groups={};
+  Object.keys(byOrder).forEach(oid=>{
+    const list=byOrder[oid],o=window.DB.orders.find(x=>x.id===oid),f=list[0];
+    const name=o?o.name:f.orderName,spec=o?(o.spec||''):(f.orderSpec||'');
+    let need;
+    if(o){
+      const rem=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
+      // 數量用當天這張訂單的全部派工計算（不受員工／品名篩選影響）
+      const full=allDay.filter(d=>d.orderId===oid);
+      const repToday=full.reduce((a,d)=>a+(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0),0);
+      const maxAssign=Math.max(...full.map(d=>d.assignQty||0));
+      need=Math.min(maxAssign||Infinity,rem+repToday);
+      if(!isFinite(need))need=rem+repToday;
+    }else need=Math.max(...list.map(d=>d.assignQty||0));
+    const k=name+'||'+spec;
+    const g=groups[k]=groups[k]||{name,spec,total:0,orders:[]};
+    g.total+=need;
+    const workers=list.slice().sort((a,b)=>(a.sequence||99)-(b.sequence||99)||(a.worker||'').localeCompare(b.worker||''))
+      .map(d=>d.worker+(d.sequence?`（第 ${d.sequence} 張）`:''));
+    g.orders.push({no:(o&&o.orderno)||f.orderNo||oid,date:o?o.date:'',need,workers:[...new Set(workers)]});
+  });
+  const gl=Object.values(groups).sort((a,b)=>(a.name+a.spec).localeCompare(b.name+b.spec,'zh-Hant'));
+  gl.forEach(g=>g.orders.sort((a,b)=>(a.date||'').localeCompare(b.date||'')));
+  // 多日工作延續中（只有今天看得到）
+  let cont=[];
+  if(date===twToday()){
+    cont=window.DB.dispatches.filter(d=>multiActiveToday(d)&&(!worker||d.worker===worker)&&(!kw||matchDispatch(d,kw)))
+      .map(d=>({name:d.orderName,spec:d.orderSpec||'',no:d.orderNo||d.orderId,worker:d.worker,from:dispWorkDate(d)}));
+  }
+  return{date,gl,cont,worker,kw};
+}
+function renderPrepList(date,worker,kw){
+  const el=document.getElementById('prep-list');if(!el)return;
+  const P=_prepData=buildPrepList(date,worker,kw);
+  const sub=document.getElementById('prep-sub');
+  if(sub)sub.textContent=`${dispWdLabel(date)}${P.gl.length?`　共 ${P.gl.length} 項`:''}${worker||kw?'（已套用上方篩選）':''}`;
+  if(!P.gl.length&&!P.cont.length){el.innerHTML='<div style="color:#aaa;padding:0.75rem 0">這天沒有派工，不需備料</div>';return;}
+  el.innerHTML=P.gl.map(g=>`<div style="padding:8px 0;border-bottom:1px solid #f5f5f5">
+      <div><b>${g.name}</b>${g.spec?` <span style="color:#888">${g.spec}</span>`:''}　需準備 <b style="color:#185FA5;font-size:15px">${g.total}</b> 件</div>
+      ${g.orders.map(x=>`<div style="font-size:12px;color:#666;padding-left:14px">${x.no}${x.date?`（${x.date.slice(5).replace('-','/')} 收單）`:''} ${x.need} 件　→ ${x.workers.join('、')}</div>`).join('')}
+    </div>`).join('')+
+    (P.cont.length?`<div style="margin-top:8px;font-size:12px;color:#1565C0"><b>多日工作延續中</b>（物料應已備妥，不計入）</div>`+
+      P.cont.map(c=>`<div style="font-size:12px;color:#666;padding-left:14px">${c.name}${c.spec?' '+c.spec:''}　${c.no}　→ ${c.worker}（${c.from.slice(5).replace('-','/')} 開始）</div>`).join(''):'');
+}
+window.printPrepList=function(){
+  const P=_prepData;
+  if(!P||(!P.gl.length&&!P.cont.length))return alert('這天沒有需要備料的派工');
+  const esc=x=>String(x??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const rows=P.gl.map(g=>`<tr><td class="ck">☐</td><td><b>${esc(g.name)}</b></td><td>${esc(g.spec)||'-'}</td><td class="num"><b>${g.total}</b></td>
+    <td>${g.orders.map(x=>`${esc(x.no)}${x.date?`（${x.date.slice(5).replace('-','/')} 收單）`:''} ${x.need} 件 → ${esc(x.workers.join('、'))}`).join('<br>')}</td></tr>`).join('');
+  const cont=P.cont.length?`<h3>多日工作延續中（不計入）</h3><table><tr><th>品名</th><th>規格</th><th>訂單號</th><th>員工</th></tr>${P.cont.map(c=>`<tr><td>${esc(c.name)}</td><td>${esc(c.spec)||'-'}</td><td>${esc(c.no)}</td><td>${esc(c.worker)}</td></tr>`).join('')}</table>`:'';
+  const w=window.open('','_blank','width=900,height=700');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>備料準備清單 ${P.date}</title>
+  <style>body{font-family:'Microsoft JhengHei',sans-serif;font-size:13px;padding:20px}h2{font-size:18px;margin:0 0 4px}h3{font-size:14px;margin:18px 0 6px}
+  p{color:#666;font-size:12px;margin:0 0 12px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ccc;padding:7px 10px;text-align:left;vertical-align:top;font-size:13px}
+  th{background:#f5f5f5}.num{text-align:right;font-size:15px;white-space:nowrap}.ck{width:28px;text-align:center;font-size:18px}
+  @media print{button{display:none}}</style></head><body>
+  <h2>備料準備清單</h2><p>派工日期：${dispWdLabel(P.date)}${P.worker?`　員工：${esc(P.worker)}`:''}${P.kw?`　品名篩選：${esc(P.kw)}`:''}　列印時間：${toTW(new Date().toISOString())}</p>
+  <table><tr><th></th><th>品名</th><th>規格</th><th>需準備（件）</th><th>訂單與員工</th></tr>${rows}</table>${cont}
+  <div style="margin-top:16px;text-align:right"><button onclick="window.print()">列印</button></div></body></html>`);
+  w.document.close();
+  setTimeout(()=>w.print(),500);
+};
 // 勾選員工時的派工記錄：依日期（新到舊），每天列出該員工的派工與回報狀態；只用已載入的資料
 let _wlogDays=7,_wlogKey='';
 window.wlogMore=function(){_wlogDays+=7;renderDispatchLog();};
@@ -2640,7 +2732,8 @@ window.openAdjust=function(id){
       <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" id="adj-multiday" style="width:auto;margin:0" ${d.multiDay?'checked':''}> 多日工作</label>
       <span style="display:flex;align-items:center;gap:6px">天數上限 <input type="number" id="adj-maxdays" min="2" value="${d.maxDays||2}" style="width:70px;margin:0"> 天</span>
       ${d.multiDay?`<span style="font-size:11px;color:#6A1B9A">已按「還在做」${stillUsed(d)} 次</span>`:''}
-      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定會套用到同一張合併卡片的其他訂單）</span>`:''}
+      <span style="display:flex;align-items:center;gap:6px">⏰ 做到幾點 <input type="time" id="adj-until-time" value="${d.untilTime||''}" style="width:auto;margin:0"></span>
+      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定、做到幾點會套用到同一張合併卡片的其他訂單）</span>`:''}
     </div>
     <label>加工完成數量</label>
     <input type="number" id="adj-done" value="${d.doneQty||0}" min="0" max="${remain}">
@@ -2677,6 +2770,16 @@ window.submitAdjust=async function(id){
   const adjMulti=!!document.getElementById('adj-multiday')?.checked;
   const adjMax=parseInt(document.getElementById('adj-maxdays')?.value)||0;
   if(adjMulti&&adjMax<2)return alert('多日工作的天數上限至少 2 天');
+  const adjUntil=(document.getElementById('adj-until-time')?.value||'').slice(0,5);
+  if(adjUntil&&adjMulti)return alert('多日工作不能設定「做到幾點」，請取消其中一項');
+  // 做到幾點：有變更才處理；清空 → 移除欄位（saveDispatch 整筆寫入）
+  if((d.untilTime||'')!==adjUntil){
+    if(adjUntil)d.untilTime=adjUntil;else delete d.untilTime;
+    if(d.isMerged){
+      const mates=window.DB.dispatches.filter(x=>x.id!==d.id&&x.isMerged&&x.batchId===d.batchId&&x.worker===d.worker&&(x.groupName||x.orderName)===(d.groupName||d.orderName));
+      for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update({untilTime:adjUntil||firebase.firestore.FieldValue.delete()}).catch(e=>console.warn('做到幾點同步失敗',m.id,e));
+    }
+  }
   // 多日設定有變更才寫入（沒勾、原本也不是多日 → 不新增欄位）
   let multiPatch=null;
   if(adjMulti)multiPatch={multiDay:true,maxDays:adjMax};
@@ -4321,6 +4424,7 @@ window.renderDailyReport=function(){
   if(kw)dispatches=dispatches.filter(d=>matchDispatch(d,kw));
   dispatches=dispatches.sort((a,b)=>(a.worker||'').localeCompare(b.worker||'')||(a.orderName||'').localeCompare(b.orderName||''));
 
+  renderPrepList(date,worker,kw);
   // ── 派工記錄 ──
   const countEl=document.getElementById('daily-dispatch-count');
   if(countEl)countEl.textContent=`共 ${dispatches.length} 筆`;
@@ -4339,7 +4443,7 @@ window.renderDailyReport=function(){
       return`<tr style="${bg}">
         <td style="font-weight:600">${d.worker}</td>
         <td style="color:#888">${d.orderNo||'-'}</td>
-        <td style="font-weight:600">${d.orderName}</td>
+        <td style="font-weight:600">${d.orderName}${untilBadge(d)}</td>
         <td style="color:#888">${d.orderSpec||'-'}</td>
         <td class="col-num">${d.assignQty||0}</td>
         <td class="col-num" style="color:#2E7D32;font-weight:600">${d.doneQty||0}</td>
