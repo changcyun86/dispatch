@@ -310,7 +310,7 @@ textarea{resize:vertical;min-height:70px}
       <div id="d-order-list" style="max-height:280px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;margin-top:4px"></div>
       <div id="d-order-info" style="font-size:12px;color:#888;margin-top:8px;line-height:1.8;background:#E3F2FD;border:1px solid #90CAF9;border-radius:8px;padding:8px 10px;display:none"></div>
       <label style="margin-top:12px">指派員工（可多選）</label>
-      <div id="d-worker-checks" onchange="prodDispatchEst()" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;margin-top:4px;max-height:150px;overflow-y:auto;padding:4px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa"></div>
+      <div id="d-worker-checks" onchange="prodDispatchEst();renderDispatchLog()" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;margin-top:4px;max-height:150px;overflow-y:auto;padding:4px;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa"></div>
       <div id="d-est-combo" style="display:none;font-size:12px;color:#1565C0;margin-top:6px"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px">
         <div>
@@ -343,7 +343,7 @@ textarea{resize:vertical;min-height:70px}
       </div>
       <div id="scheduled-dispatch-list" style="font-size:12px;margin-bottom:8px"></div>
       <div style="border-top:1px solid #eee;margin:12px -1.25rem 12px;padding:0"></div>
-      <div class="card-title" style="margin-top:0">最近派工記錄</div>
+      <div class="card-title" style="margin-top:0" id="dispatch-log-title">最近派工記錄</div>
       <div id="dispatch-log" style="font-size:12px"></div>
     </div>
   </div>
@@ -1799,7 +1799,8 @@ function renderOrders(){
     const dbP=lookupProductBySpec(o.name,o.spec);
     const priceMismatchHint=(dbP&&((o.price||0)!==dbP.price))?`<div class="price-mismatch-hint" title="品名單價資料庫目前為 $${dbP.price}，此訂單為 $${o.price||0}" onclick="applyDbPrice('${o.id}')">⚠ 資料庫 $${dbP.price} <u>套用</u></div>`:'';
     const estH=(st!=='已完成'&&undone>0)?prodEstLine(o.name,o.spec,undone,'剩 '+undone+' 件'):'';
-    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${estH}</td>`;
+    const mt=missedTag(orderMissedCount(o));
+    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${mt}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${mt}${estH}</td>`;
     return`<tr style="background:${isSel?'#FFF8E1':''}">
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
       <td style="white-space:nowrap">${o.date||'-'}</td>
@@ -1859,7 +1860,7 @@ function renderOrders(){
     html.push(`<tr style="background:#F5F7FA;cursor:pointer" onclick="toggleOrderGroup('${key.replace(/'/g,"\\'")}')">
       <td></td>
       <td colspan="2" style="color:#888;font-size:12px">${isOpen?'▼':'▶'} 共 ${g.orders.length} 筆訂單</td>
-      <td style="font-weight:700">${hl(g.name)}${totalUndone>0?prodEstLine(g.name,g.spec,totalUndone,'剩 '+totalUndone+' 件'):''}</td><td style="color:#888">${g.spec||'-'}</td>
+      <td style="font-weight:700">${hl(g.name)}${missedTag(g.orders.reduce((a,o)=>a+orderMissedCount(o),0))}${totalUndone>0?prodEstLine(g.name,g.spec,totalUndone,'剩 '+totalUndone+' 件'):''}</td><td style="color:#888">${g.spec||'-'}</td>
       <td class="col-num" style="font-weight:700">${totalQty}</td>
       <td></td>
       <td class="col-num" style="font-weight:700;color:#1565C0">${totalAmt>0?'$'+totalAmt.toLocaleString():'—'}</td>
@@ -1878,7 +1879,7 @@ function renderOrders(){
 window.openOrderDetail=function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   const relatedDisp=window.DB.dispatches.filter(d=>d.orderId===orderId)
-    .sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+    .sort((a,b)=>dispWorkDate(a).localeCompare(dispWorkDate(b))||(a.createdAt||'').localeCompare(b.createdAt||''));
   const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
   const pct=o.qty>0?Math.min(100,Math.round(reported/o.qty*100)):0;
   document.getElementById('modal-title-txt').textContent=`訂單詳情`;
@@ -1908,6 +1909,10 @@ window.openOrderDetail=function(orderId){
           <span style="font-weight:600;font-size:13px">${d.worker}${seqBadge(d)}</span>
           <span class="badge ${d.status==='已完成'?'bd':d.status==='回報中'?'ba':'bp'}" style="font-size:10px">${d.status}</span>
         </div>
+        ${(()=>{const st=dispReportState(d),wd=dispWorkDate(d),cd=d.createdAt?toTW(d.createdAt,false):wd;
+          return`<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">
+            <span style="color:#185FA5">📅 派工日期 <b>${dispWdLabel(wd)}</b>${cd<wd?`<span style="color:#888">（預約，${cd.slice(5).replace('-','/')} 建立）</span>`:''}</span>
+            ${dispStateBadge(st)}</div>${st.sub?`<div style="color:${st.c};font-size:11px;margin-bottom:4px">${st.sub}</div>`:''}`;})()}
         <div style="color:#666;display:flex;gap:12px;flex-wrap:wrap">
           <span>完工：<strong style="color:#2E7D32">${d.doneQty||0}</strong></span>
           <span>不良：<strong style="color:#C62828">${d.defectQty||0}</strong></span>
@@ -2067,6 +2072,7 @@ function initDispatchForm(){
   if(el&&(!el.value||el.value<today))el.value=today;
 }
 window._selectedOrderIds=new Set(); // 複選訂單
+window._boxRemovedIds=new Set();   // 在「已選訂單」區塊取消勾選的訂單：保留顯示，方便再勾回
 let _dispatchSearchTimer=null;
 window.onDispatchSearch=function(){
   clearTimeout(_dispatchSearchTimer);
@@ -2187,8 +2193,15 @@ window.toggleDispatchOrder=function(id){
   }else{
     window._selectedOrderIds.add(id);
   }
+  window._boxRemovedIds.delete(id); // 從左邊清單操作 → 以清單為準
   renderDispatchOrders();
 }
+// 「已選訂單」區塊內的勾選：取消後仍留在區塊（灰色），可再勾回
+window.toggleBoxOrder=function(id,on){
+  if(on){window._selectedOrderIds.add(id);window._boxRemovedIds.delete(id);}
+  else{window._selectedOrderIds.delete(id);window._boxRemovedIds.add(id);}
+  renderDispatchOrders();
+};
 function renderDispatchWorkers(){
   const cont=document.getElementById('d-worker-checks');if(!cont)return;
   cont.innerHTML=window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:4px 8px;border-radius:6px;border:1px solid #e0e0e0;background:#fff"><input type="checkbox" value="${e}" style="width:auto;margin:0"><span>${e}<span class="prod-wk-est" data-w="${e}" style="display:block;font-size:10px;color:#888;line-height:1.3"></span></span></label>`).join('');
@@ -2197,24 +2210,33 @@ function renderDispatchWorkers(){
 function updateSelectedInfo(){
   const info=document.getElementById('d-order-info');
   const ids=[...window._selectedOrderIds];
-  if(!ids.length){info.style.display='none';prodDispatchEst();return;}
-  const selected=window.DB.orders.filter(o=>ids.includes(o.id));
-  // 群組：同品名+規格+單價 合併顯示
+  // 已取消勾選、但還留在區塊的訂單（訂單若已不存在就清掉）
+  [...window._boxRemovedIds].forEach(id=>{if(!window.DB.orders.some(o=>o.id===id))window._boxRemovedIds.delete(id);});
+  const removed=[...window._boxRemovedIds];
+  if(!ids.length&&!removed.length){info.style.display='none';prodDispatchEst();return;}
+  const shown=window.DB.orders.filter(o=>ids.includes(o.id)||removed.includes(o.id));
+  // 群組：同品名+規格+單價 合併顯示；合計只算勾選的訂單
   const groups={};
-  selected.forEach(o=>{
+  shown.forEach(o=>{
     const key=`${o.name}||${o.spec||''}||${o.price||0}`;
-    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,totalQty:0,orders:[]};
+    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,totalQty:0,orders:[],on:0};
     const remaining=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
-    groups[key].totalQty+=remaining;
-    groups[key].orders.push(o);
+    const on=window._selectedOrderIds.has(o.id);
+    if(on){groups[key].totalQty+=remaining;groups[key].on++;}
+    groups[key].orders.push({o,remaining,on});
   });
   const gList=Object.values(groups);
+  const onGroups=gList.filter(g=>g.on>0).length;
   info.style.display='block';
-  info.innerHTML=`<div style="font-size:12px;font-weight:600;color:#185FA5;margin-bottom:6px">已選 ${ids.length} 筆訂單 → ${gList.length} 組派工</div>`+
-    gList.map(g=>`<div style="background:#fff;border-radius:6px;padding:5px 8px;margin-bottom:4px;font-size:11px;color:#555">
-      <span style="font-weight:600;color:#1a1a1a">${g.name}</span>${g.spec?` <span style="color:#aaa">(${g.spec})</span>`:''} ／ $${g.price} ／ 合計剩餘 <strong style="color:#185FA5">${g.totalQty}</strong> 件
-      <span style="color:#aaa;font-size:10px">（${g.orders.length} 張訂單：${g.orders.map(o=>o.orderno||o.id).join('、')}）</span>
-      ${prodEstLine(g.name,g.spec,g.totalQty,'合計')}
+  info.innerHTML=`<div style="font-size:12px;font-weight:600;color:#185FA5;margin-bottom:6px">已選 ${ids.length} 筆訂單 → ${onGroups} 組派工${removed.length?` <span style="font-weight:400;color:#888">（已取消 ${removed.length} 筆，可再勾回）</span>`:''}</div>`+
+    gList.map(g=>`<div style="background:${g.on?'#fff':'#f5f5f5'};border-radius:6px;padding:5px 8px;margin-bottom:4px;font-size:11px;color:#555">
+      <span style="font-weight:600;color:${g.on?'#1a1a1a':'#aaa'}">${g.name}</span>${g.spec?` <span style="color:#aaa">(${g.spec})</span>`:''} ／ $${g.price} ／ 合計剩餘 <strong style="color:${g.on?'#185FA5':'#aaa'}">${g.totalQty}</strong> 件
+      <div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin:3px 0 2px">
+        ${g.orders.map(x=>`<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:${x.on?'#333':'#aaa'};${x.on?'':'text-decoration:line-through;'}">
+          <input type="checkbox" style="width:auto;margin:0" ${x.on?'checked':''} onchange="toggleBoxOrder('${x.o.id}',this.checked)">
+          ${x.o.orderno||x.o.id}<span style="color:#999">（${x.o.date?x.o.date.slice(5).replace('-','/')+' 收單，':''}剩 ${x.remaining}）</span></label>`).join('')}
+      </div>
+      ${g.on?prodEstLine(g.name,g.spec,g.totalQty,'合計'):''}
     </div>`).join('');
   prodDispatchEst();
 }
@@ -2287,7 +2309,9 @@ window.createDispatch=async function(){
   document.getElementById('d-effective-date').value=today;
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
   window._selectedOrderIds=new Set();
+  window._boxRemovedIds=new Set();
   renderDispatchOrders();
+  renderDispatchLog();
   const totalOrders=ids.length;
   toast(`已派工給 ${selectedWorkers.join('、')}：${totalOrders} 筆訂單`);
 }
@@ -2375,6 +2399,11 @@ function renderDispatchLog(){
     if(!kw||!str)return str||'';
     return str.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'),m=>`<mark style="background:#FFF176;border-radius:2px;padding:0 1px">${m}</mark>`);
   };
+  // 有勾選派工員工 → 改為依日期顯示這些員工的紀錄（不套用品名搜尋，符合的品名黃色標示）
+  const pickedWorkers=[...document.querySelectorAll('#d-worker-checks input:checked')].map(c=>c.value);
+  const titleEl=document.getElementById('dispatch-log-title');
+  if(pickedWorkers.length){renderWorkerLog(el,titleEl,pickedWorkers,highlight);return;}
+  if(titleEl)titleEl.textContent='最近派工記錄';
   // 依訂單分組
   let allDispatches=[...window.DB.dispatches].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
   const grouped={};
@@ -2424,12 +2453,92 @@ function renderDispatchLog(){
         </div>`).join('')}
     </div>`).join('');
 }
+// 勾選員工時的派工記錄：依日期（新到舊），每天列出該員工的派工與回報狀態；只用已載入的資料
+let _wlogDays=7,_wlogKey='';
+window.wlogMore=function(){_wlogDays+=7;renderDispatchLog();};
+function renderWorkerLog(el,titleEl,workers,highlight){
+  const key=workers.join('|');
+  if(key!==_wlogKey){_wlogKey=key;_wlogDays=7;}
+  if(titleEl)titleEl.innerHTML=`最近派工記錄：<span style="color:#185FA5">${workers.join('、')}</span> <span style="font-size:11px;font-weight:400;color:#888">（取消勾選恢復全部）</span>`;
+  const byDate={};
+  window.DB.dispatches.filter(d=>workers.includes(d.worker)).forEach(d=>{(byDate[dispWorkDate(d)]=byDate[dispWorkDate(d)]||[]).push(d);});
+  const dates=Object.keys(byDate).sort().reverse();
+  if(!dates.length){el.innerHTML='<div style="color:#aaa">沒有這些員工的派工記錄（只顯示已讀取的資料：未結案訂單與最近 7 天有回報的派工）</div>';return;}
+  const multi=workers.length>1;
+  const row=d=>{
+    const st=dispReportState(d);
+    const rt=d.lastReportAt?toTW(d.lastReportAt):'';
+    const rtTxt=rt?(rt.slice(0,10)===dispWorkDate(d)?rt.slice(11):rt.slice(5)):'';
+    return`<div style="padding:6px 10px;border-bottom:1px solid #f5f5f5;display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <div style="min-width:0">
+        <span style="font-weight:600">${highlight(d.orderName||'')}</span>${d.orderSpec?` <span style="color:#888">${highlight(d.orderSpec)}</span>`:''}${seqBadge(d)}
+        ${d.orderNo?`<span style="color:#aaa;font-size:11px;margin-left:4px">${highlight(d.orderNo)}</span>`:''}
+        <div style="color:#888;font-size:11px;margin-top:2px">派 ${d.assignQty||0}　完 ${d.doneQty||0}　不良 ${d.defectQty||0}　來料不足 ${d.shortageQty||0}
+          　${dispStateBadge(st)}${st.k==='ok'&&rtTxt?` <span style="color:#aaa">${rtTxt}</span>`:''}</div>
+        ${st.sub?`<div style="font-size:11px;color:${st.c}">${st.sub}</div>`:''}
+        ${d.note&&String(d.note).trim()?`<div style="font-size:11px;color:#E65100;font-weight:600;margin-top:2px;white-space:pre-wrap">📌 派工備註：${d.note}</div>`:''}
+        ${d.workerNote?`<div style="font-size:11px;color:#1565C0;margin-top:2px">💬 ${d.workerNote}</div>`:''}
+      </div>
+      <div style="display:flex;gap:4px;align-items:center;flex-shrink:0">
+        <button class="btn btn-sm btn-warn" onclick="openAdjust('${d.id}')" style="font-size:11px;padding:3px 8px">調整</button>
+        <button class="btn btn-sm" onclick="openDispatchDetail('${d.id}')" style="font-size:11px;padding:3px 8px">詳情</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteDispatch('${d.id}')" style="font-size:11px;padding:3px 8px">刪除</button>
+      </div></div>`;
+  };
+  el.innerHTML=dates.slice(0,_wlogDays).map(dt=>{
+    const list=byDate[dt].sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+    const missed=list.filter(d=>dispReportState(d).k==='missed').length;
+    const body=multi
+      ?workers.filter(w=>list.some(d=>d.worker===w)).map(w=>`<div style="padding:4px 10px;background:#FAFAFA;font-size:12px;font-weight:600;color:#555">${w}</div>${list.filter(d=>d.worker===w).map(row).join('')}`).join('')
+      :list.map(row).join('');
+    return`<div style="margin-bottom:12px;border:1px solid #f0f0f0;border-radius:8px;overflow:hidden">
+      <div style="background:#f7f7f7;padding:8px 10px;font-size:12px;font-weight:600;display:flex;justify-content:space-between">
+        <span>📅 ${dispWdLabel(dt)}${dt===twToday()?' 今天':''}</span>
+        ${missed?`<span style="color:#C62828">🔴 ${missed} 筆未回報</span>`:''}
+      </div>${body}</div>`;
+  }).join('')+(dates.length>_wlogDays?`<div style="text-align:center"><button class="btn btn-sm" onclick="wlogMore()">顯示更多（還有 ${dates.length-_wlogDays} 天）</button></div>`:'');
+}
 // 派工日期＝員工實際做的那天（生效日期）；前一天以前就建立的標示「預派」
 function dispDateLabel(d){
   const wd=dispWorkDate(d);
   const cd=d.createdAt?toTW(d.createdAt,false):wd;
   return`📅 ${wd.slice(5)}${cd<wd?`（${cd.slice(5)} 預派）`:''}`;
 }
+// ══ 派工回報狀態（訂單詳情、訂單列表「未回報」小紅標共用；只用已載入的資料，不額外讀取）══
+function dispWdLabel(date){
+  if(!date)return'-';
+  const w='日一二三四五六'[new Date(date+'T00:00:00Z').getUTCDay()];
+  return`${date.slice(5).replace('-','/')}（${w}）`;
+}
+function dispReportState(d){
+  const today=twToday(),wd=dispWorkDate(d);
+  const q=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+  const still=stillList(d).filter(x=>!x.rejected).map(x=>x.date).sort();
+  const stillTxt=still.length?`${still.map(x=>x.slice(5).replace('-','/')).join('、')} 按過「今天還在做」`:'';
+  if(q>0)return{k:'ok',label:'已回報',c:'#2E7D32',bg:'#E8F5E9',sub:''};
+  if(d.groupReportedAt)return{k:'ok',label:'已回報（合併回報分配 0）',c:'#2E7D32',bg:'#E8F5E9',sub:''};
+  if(wd>today)return{k:'future',label:'預約中',c:'#666',bg:'#f0f0f0',sub:''};
+  if(wd===today)return{k:'today',label:'今天尚未回報',c:'#E65100',bg:'#FFF3E0',sub:stillTxt};
+  if(multiActiveToday(d))return{k:'multi',label:'多日進行中',c:'#1565C0',bg:'#E3F2FD',sub:stillTxt};
+  return{k:'missed',label:'當天未回報',c:'#C62828',bg:'#FFEBEE',sub:stillTxt?stillTxt+'，最後一天未回報':''};
+}
+function dispStateBadge(st){return`<span style="background:${st.bg};color:${st.c};padding:1px 8px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap">${st.k==='missed'?'🔴 ':''}${st.label}</span>`;}
+// 訂單的「未回報」筆數：只看最近一個工作日（同一員工當天多次派工只看最後一次）；
+// 今天已有派工、訂單已完成或已結案 → 不標示。重新派工後自動消失。
+function orderMissedCount(o){
+  if(o.closed===true)return 0;
+  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+  if(o.qty>0&&reported>=o.qty)return 0;
+  const today=twToday();
+  const ds=window.DB.dispatches.filter(d=>d.orderId===o.id&&dispWorkDate(d)<=today);
+  if(!ds.length)return 0;
+  const latest=ds.reduce((m,d)=>{const w=dispWorkDate(d);return w>m?w:m;},'');
+  if(latest>=today)return 0;
+  const last={};
+  ds.filter(d=>dispWorkDate(d)===latest).forEach(d=>{if(!last[d.worker]||(d.createdAt||'')>(last[d.worker].createdAt||''))last[d.worker]=d;});
+  return Object.values(last).filter(d=>dispReportState(d).k==='missed').length;
+}
+function missedTag(n){return n>0?` <span style="background:#FFEBEE;color:#C62828;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap" title="最近一個工作日有員工沒有回報，點訂單詳情查看">⚠ ${n} 筆未回報</span>`:'';}
 window.addWorkerToOrder=function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   const existWorkers=window.DB.dispatches.filter(d=>d.orderId===orderId).map(d=>d.worker);
