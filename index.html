@@ -255,9 +255,9 @@ textarea{resize:vertical;min-height:70px}
   </div>
   <!-- 備料準備 -->
   <div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem">
-    <div style="padding:0.75rem 1.25rem;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:600;color:#555;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-      📦 備料準備 <span id="prep-sub" style="font-size:11px;font-weight:400;color:#aaa"></span>
-      <button class="btn btn-sm" style="margin-left:auto" onclick="printPrepList()">🖨 列印</button>
+    <div onclick="togglePrep()" style="cursor:pointer;user-select:none;padding:0.75rem 1.25rem;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:600;color:#555;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span id="prep-arrow" style="color:#888;width:12px">▼</span>📦 備料準備 <span id="prep-sub" style="font-size:11px;font-weight:400;color:#aaa"></span>
+      <button class="btn btn-sm" style="margin-left:auto" onclick="event.stopPropagation();printPrepList()">🖨 列印</button>
     </div>
     <div id="prep-list" style="padding:0.5rem 1.25rem 0.75rem;font-size:13px"></div>
   </div>
@@ -2513,8 +2513,17 @@ function buildPrepList(date,worker,kw){
   }
   return{date,gl,cont,worker,kw};
 }
+// 收摺狀態記在這台電腦上（下次打開維持一樣）
+function prepCollapsed(){try{return localStorage.getItem('prep-collapsed')==='1';}catch(e){return false;}}
+function applyPrepCollapse(){
+  const c=prepCollapsed(),el=document.getElementById('prep-list'),ar=document.getElementById('prep-arrow');
+  if(el)el.style.display=c?'none':'';
+  if(ar)ar.textContent=c?'▶':'▼';
+}
+window.togglePrep=function(){try{localStorage.setItem('prep-collapsed',prepCollapsed()?'0':'1');}catch(e){}applyPrepCollapse();};
 function renderPrepList(date,worker,kw){
   const el=document.getElementById('prep-list');if(!el)return;
+  applyPrepCollapse();
   const P=_prepData=buildPrepList(date,worker,kw);
   const sub=document.getElementById('prep-sub');
   if(sub)sub.textContent=`${dispWdLabel(date)}${P.gl.length?`　共 ${P.gl.length} 項`:''}${worker||kw?'（已套用上方篩選）':''}`;
