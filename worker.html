@@ -754,7 +754,7 @@ window.pinCancel=function(){
   pinBuffer='';pinPending='';
   document.getElementById('pin-screen').style.display='none';
   stopScope();
-  currentWorker=null;localStorage.removeItem('worker_name');renderAnnouncements();window._untilList=[];untilCheck();
+  currentWorker=null;localStorage.removeItem('worker_name');renderAnnouncements();window._untilList=[];window._startList=[];untilCheck();
   document.getElementById('select-screen').style.display='flex';
 }
 
@@ -811,7 +811,7 @@ function showMain(name){
 
 window.logoutWorker=function(){
   stopScope();unmountMat();unmountReq();if(currentTab==='mat'||currentTab==='req')switchTab('pending');
-  currentWorker=null;localStorage.removeItem('worker_name');renderAnnouncements();window._untilList=[];untilCheck();
+  currentWorker=null;localStorage.removeItem('worker_name');renderAnnouncements();window._untilList=[];window._startList=[];untilCheck();
   document.getElementById('main-screen').style.display='none';
   document.getElementById('select-screen').style.display='flex';
 }
@@ -1553,6 +1553,7 @@ function renderWorkerMain(){
     <div class="metric"><div class="metric-label">本月加工累計<br><span style="font-size:10px;color:#bbb">Tổng tiền gia công tháng này</span></div><div class="metric-val">${mEarn}</div>${mSub}</div>
   `;
   window._untilList=myPending.filter(d=>d.untilTime&&!d.multiDay);
+  window._startList=myPending.filter(d=>d.startTime&&!d.multiDay); // 只看畫面上的卡片 → 被工單順序擋住的，出現後才提醒
   window._hasPrio=myPending.some(d=>d.priority>0);
   untilCheck();
   if(currentTab!=='pending')return;
@@ -1595,7 +1596,7 @@ function renderWorkerMain(){
         const o=orders.find(x=>x.id===d.orderId);
         const remain=o?getOrderRemain(o,d.id):Math.max(0,d.assignQty);
         return`<div class="card"${group._rank?' style="border:2px solid #1565C0"':''}>
-          ${prioHead(group._rank)}${untilBar([d])}
+          ${prioHead(group._rank)}${startBar([d])}${untilBar([d])}
           <div style="display:flex;justify-content:space-between;margin-bottom:8px">
             <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;color:#888">${d.orderNo||''}</span>
@@ -1648,7 +1649,7 @@ function renderWorkerMain(){
               <input type="number" id="g${k}-${gid}" min="0" value="0" inputmode="numeric" oninput="grpUpdate('g','${gid}')">
             </div>`;
         return`<div class="card" data-grp="g${gid}" data-ids="${list.map(d=>d.id).join(',')}"${group._rank?' style="border:2px solid #1565C0"':''}>
-          ${prioHead(group._rank)}${untilBar(list)}
+          ${prioHead(group._rank)}${startBar(list)}${untilBar(list)}
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
             <div><span style="font-weight:600;font-size:15px">${first.orderName}</span>${first.orderSpec?` <span style="color:#aaa;font-size:12px">${first.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;background:#E3F2FD;color:#185FA5;padding:2px 8px;border-radius:12px">合併 ${list.length} 張 / Gộp ${list.length}</span>
@@ -1742,6 +1743,7 @@ function previewHtml(){
           ${d.sequence?`<span style="background:#EDE7F6;color:#5E35B1;border-radius:10px;padding:1px 8px;font-size:11px">第 ${d.sequence} 張 / Thứ ${d.sequence}</span>`:''}
         </div>
         <div style="font-size:13px;color:#555;margin-top:4px">數量 / Số lượng：<b>${qty}</b></div>
+        ${d.startTime?`<div style="font-size:13px;font-weight:700;color:#1565C0;margin-top:4px">▶ ${d.startTime} 開始 / Bắt đầu lúc ${d.startTime}</div>`:''}
         ${d.untilTime?`<div style="font-size:13px;font-weight:700;color:${d.untilMust?'#C62828':'#E65100'};margin-top:4px">⏰ ${d.untilMust?`${d.untilTime} 前必須完成 / Phải hoàn thành trước ${d.untilTime}`:`做到 ${d.untilTime} / Làm đến ${d.untilTime}`}</div>`:''}
         ${notes.length?`<div style="font-size:12px;color:#E65100;font-weight:600;margin-top:4px;white-space:pre-wrap">📌 ${esc(notes.join('\n'))}</div>`:''}
       </div>`;
@@ -1785,6 +1787,24 @@ function untilBar(list){
   const must=list.some(d=>d.untilMust)?'1':'';
   return`<div class="until-bar" data-t="${t}" data-must="${must}" style="${untilBarStyle(t,now,must)}">${untilBarHtml(t,now,must)}</div>`;
 }
+// ══ 幾點開始（派工欄位 startTime "HH:MM"）══ 只是提醒，開始前照常可回報；時間到跳藍色視窗＋震動
+function startBarHtml(t,now){
+  return t>now
+    ?`▶ ${t} 開始<br><span style="font-size:12px;font-weight:600">Bắt đầu lúc ${t}</span>`
+    :`▶ ${t} 開始 / Bắt đầu lúc ${t}`;
+}
+function startBarStyle(t,now){
+  return t>now
+    ?'border-radius:8px;padding:8px 12px;margin:-2px 0 10px;font-size:16px;font-weight:700;line-height:1.4;text-align:center;background:#E3F2FD;color:#1565C0;border:2px solid #42A5F5'
+    :'border-radius:8px;padding:4px 12px;margin:-2px 0 8px;font-size:12px;font-weight:600;text-align:center;background:#F1F8FE;color:#1565C0;border:1px solid #BBDEFB';
+}
+function startBar(list){
+  const t=[...new Set(list.map(d=>d.startTime).filter(Boolean))].sort()[0];
+  if(!t||list.some(d=>d.multiDay))return'';
+  const now=untilNowHM();
+  return`<div class="start-bar" data-t="${t}" style="${startBarStyle(t,now)}">${startBarHtml(t,now)}</div>`;
+}
+function _startSig(d){return's:'+d.id+'@'+d.startTime;}
 function _untilKey(k){return`until-${k}-${currentWorker}-${toTW(new Date().toISOString(),false)}`;}
 function _untilGet(k){try{return new Set(JSON.parse(localStorage.getItem(_untilKey(k))||'[]'));}catch(e){return new Set();}}
 function _untilAdd(k,sigs){const st=_untilGet(k);sigs.forEach(x=>st.add(x));try{localStorage.setItem(_untilKey(k),JSON.stringify([...st]));}catch(e){}}
@@ -1794,12 +1814,16 @@ function untilCheck(){
   const now=untilNowHM();
   // 卡片上的橫條：時間到就變紅（直接改畫面，不重畫卡片，避免清掉正在輸入的數字）
   document.querySelectorAll('.until-bar').forEach(el=>{const t=el.dataset.t,mu=el.dataset.must;el.style.cssText=untilBarStyle(t,now,mu);el.innerHTML=untilBarHtml(t,now,mu);});
+  document.querySelectorAll('.start-bar').forEach(el=>{const t=el.dataset.t;el.style.cssText=startBarStyle(t,now);el.innerHTML=startBarHtml(t,now);});
   const list=currentWorker?(window._untilList||[]):[];
+  const sList=currentWorker?(window._startList||[]):[];
   const due=list.filter(d=>d.untilTime<=now&&!_untilGet('due').has(_untilSig(d)));
+  const startDue=sList.filter(d=>d.startTime<=now&&!_untilGet('start').has(_startSig(d)));
   const notice=list.filter(d=>d.untilTime>now&&!_untilGet('seen').has(_untilSig(d)));
-  const kind=due.length?'due':notice.length?'seen':'';
-  const items=kind==='due'?due:notice;
-  const sig=kind+':'+items.map(_untilSig).sort().join(',');
+  // 先後：時間到（做到幾點）→ 開始時間到 → 登入通知
+  const kind=due.length?'due':startDue.length?'start':notice.length?'seen':'';
+  const items=kind==='due'?due:kind==='start'?startDue:notice;
+  const sig=kind+':'+items.map(kind==='start'?_startSig:_untilSig).sort().join(',');
   let m=document.getElementById('until-modal');
   if(!kind){if(m)m.remove();_untilShown='';return;}
   if(m&&sig===_untilShown)return;
@@ -1807,22 +1831,29 @@ function untilCheck(){
   if(!m){m=document.createElement('div');m.id='until-modal';document.body.appendChild(m);}
   // 同品名＋時間合併成一行
   const rows=[];const seen=new Set();
-  items.slice().sort((a,b)=>a.untilTime.localeCompare(b.untilTime)).forEach(d=>{
+  if(kind==='start')items.slice().sort((a,b)=>a.startTime.localeCompare(b.startTime)).forEach(d=>{
+    const k=d.orderName+'|'+(d.orderSpec||'')+'|'+d.startTime;if(seen.has(k))return;seen.add(k);
+    rows.push(`<div style="padding:8px 0;border-top:0.5px solid #eee;font-size:15px"><b>${annEsc(d.orderName)}</b>${d.orderSpec?` <span style="color:#888;font-size:13px">${annEsc(d.orderSpec)}</span>`:''}<div style="font-size:18px;font-weight:700;color:#1565C0">▶ ${d.startTime} 到了，請開始做</div><div style="font-size:12px;color:#1565C0">Đã đến ${d.startTime}, hãy bắt đầu làm ${annEsc(d.orderName)}</div>${d.untilTime?`<div style="font-size:13px;font-weight:700;color:${d.untilMust?'#C62828':'#E65100'};margin-top:2px">⏰ ${d.untilMust?d.untilTime+' 前必須完成':'做到 '+d.untilTime}</div>`:''}</div>`);
+  });
+  else items.slice().sort((a,b)=>a.untilTime.localeCompare(b.untilTime)).forEach(d=>{
     const k=d.orderName+'|'+(d.orderSpec||'')+'|'+d.untilTime;if(seen.has(k))return;seen.add(k);
-    rows.push(`<div style="padding:8px 0;border-top:0.5px solid #eee;font-size:15px"><b>${annEsc(d.orderName)}</b>${d.orderSpec?` <span style="color:#888;font-size:13px">${annEsc(d.orderSpec)}</span>`:''}<div style="font-size:18px;font-weight:700;color:${kind==='due'||d.untilMust?'#C62828':'#E65100'}">⏰ ${kind==='due'?'已到 '+d.untilTime:(d.untilMust?d.untilTime+' 前必須完成':'做到 '+d.untilTime)}</div>${d.untilMust?`<div style="font-size:12px;color:#C62828">${kind==='due'?'必須完成 / Phải hoàn thành':'Phải hoàn thành trước '+d.untilTime+'・有問題請立即回報 / Có vấn đề hãy báo ngay'}</div>`:''}</div>`);
+    rows.push(`<div style="padding:8px 0;border-top:0.5px solid #eee;font-size:15px"><b>${annEsc(d.orderName)}</b>${d.orderSpec?` <span style="color:#888;font-size:13px">${annEsc(d.orderSpec)}</span>`:''}${d.startTime&&kind==='seen'?`<div style="font-size:13px;font-weight:700;color:#1565C0">▶ ${d.startTime} 開始 / Bắt đầu lúc ${d.startTime}</div>`:''}<div style="font-size:18px;font-weight:700;color:${kind==='due'||d.untilMust?'#C62828':'#E65100'}">⏰ ${kind==='due'?'已到 '+d.untilTime:(d.untilMust?d.untilTime+' 前必須完成':'做到 '+d.untilTime)}</div>${d.untilMust?`<div style="font-size:12px;color:#C62828">${kind==='due'?'必須完成 / Phải hoàn thành':'Phải hoàn thành trước '+d.untilTime+'・有問題請立即回報 / Có vấn đề hãy báo ngay'}</div>`:''}</div>`);
   });
   const head=kind==='due'
     ?`<div style="font-size:20px;font-weight:700;color:#C62828">⏰ 時間到！/ Đã hết giờ!</div><div style="font-size:14px;margin:6px 0 8px">請停止以下工作並回報數量<br><span style="color:#666">Hãy dừng các công việc sau và báo cáo số lượng</span></div>`
+    :kind==='start'
+    ?`<div style="font-size:20px;font-weight:700;color:#1565C0">▶ 開始時間到了 / Đến giờ bắt đầu</div><div style="font-size:14px;margin:6px 0 8px">請開始做以下工作<br><span style="color:#666">Hãy bắt đầu làm các công việc sau</span></div>`
     :`<div style="font-size:17px;font-weight:700;color:#E65100">⏰ 今天有時間限制的工作</div><div style="font-size:13px;color:#666;margin:4px 0 8px">Công việc có giờ kết thúc hôm nay</div>`;
   m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:16px';
-  m.innerHTML=`<div style="background:#fff;border-radius:12px;max-width:440px;width:100%;max-height:80vh;overflow:auto;padding:16px;${kind==='due'?'border:4px solid #C62828':''}">
+  m.innerHTML=`<div style="background:#fff;border-radius:12px;max-width:440px;width:100%;max-height:80vh;overflow:auto;padding:16px;${kind==='due'?'border:4px solid #C62828':kind==='start'?'border:4px solid #1565C0':''}">
     ${head}${rows.join('')}
-    <button class="btn btn-primary" style="width:100%;margin-top:12px;padding:12px;font-size:15px;${kind==='due'?'background:#C62828;border-color:#C62828':''}" onclick="untilAck('${kind}')">知道了 / Tôi đã biết</button></div>`;
-  if(kind==='due'){try{navigator.vibrate&&navigator.vibrate([500,200,500,200,500]);}catch(e){}}
+    <button class="btn btn-primary" style="width:100%;margin-top:12px;padding:12px;font-size:15px;${kind==='due'?'background:#C62828;border-color:#C62828':kind==='start'?'background:#1565C0;border-color:#1565C0':''}" onclick="untilAck('${kind}')">知道了 / Tôi đã biết</button></div>`;
+  if(kind==='due'||kind==='start'){try{navigator.vibrate&&navigator.vibrate([500,200,500,200,500]);}catch(e){}}
 }
 window.untilAck=function(kind){
   const list=window._untilList||[];const now=untilNowHM();
   if(kind==='due'){const s=list.filter(d=>d.untilTime<=now).map(_untilSig);_untilAdd('due',s);_untilAdd('seen',s);}
+  else if(kind==='start')_untilAdd('start',(window._startList||[]).filter(d=>d.startTime<=now).map(_startSig));
   else _untilAdd('seen',list.filter(d=>d.untilTime>now).map(_untilSig));
   const m=document.getElementById('until-modal');if(m)m.remove();
   _untilShown='';
