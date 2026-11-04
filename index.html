@@ -261,6 +261,13 @@ textarea{resize:vertical;min-height:70px}
     </div>
     <div id="prep-list" style="padding:0.5rem 1.25rem 0.75rem;font-size:13px"></div>
   </div>
+  <!-- 完成明細 -->
+  <div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem">
+    <div onclick="toggleDoneBox()" style="cursor:pointer;user-select:none;padding:0.75rem 1.25rem;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:600;color:#555;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span id="done-arrow" style="color:#888;width:12px">▼</span>✅ 完成明細 <span id="done-sub" style="font-size:11px;font-weight:400;color:#aaa"></span>
+    </div>
+    <div id="done-list" style="padding:0.5rem 1.25rem 0.75rem;font-size:13px"></div>
+  </div>
   <!-- 派工記錄 -->
   <div class="card" style="padding:0;overflow:hidden;margin-bottom:1rem">
     <div style="padding:0.75rem 1.25rem;border-bottom:1px solid #f0f0f0;font-size:13px;font-weight:600;color:#555;display:flex;align-items:center;gap:8px">
@@ -2535,6 +2542,56 @@ function renderPrepList(date,worker,kw){
     (P.cont.length?`<div style="margin-top:8px;font-size:12px;color:#1565C0"><b>多日工作延續中</b>（物料應已備妥，不計入）</div>`+
       P.cont.map(c=>`<div style="font-size:12px;color:#666;padding-left:14px">${c.name}${c.spec?' '+c.spec:''}　${c.no}　→ ${c.worker}（${c.from.slice(5).replace('-','/')} 開始）</div>`).join(''):'');
 }
+// ══ 完成明細（每日記錄）══
+// 以回報日期計算（lastReportAt 的台灣日期；沒有回報時間但有數量的＝管理端填的，用派工日期）。
+// 多日工作算在最後回報那天。數量用派工紀錄目前的數字。只用已載入的資料。
+const _doneOpen=new Set();
+function doneCollapsed(){try{return localStorage.getItem('done-collapsed')==='1';}catch(e){return false;}}
+function applyDoneCollapse(){
+  const c=doneCollapsed(),el=document.getElementById('done-list'),ar=document.getElementById('done-arrow');
+  if(el)el.style.display=c?'none':'';
+  if(ar)ar.textContent=c?'▶':'▼';
+}
+window.toggleDoneBox=function(){try{localStorage.setItem('done-collapsed',doneCollapsed()?'0':'1');}catch(e){}applyDoneCollapse();};
+window.toggleDoneItem=function(k){_doneOpen.has(k)?_doneOpen.delete(k):_doneOpen.add(k);renderDailyReport();};
+function dispReportDate(d){
+  const q=(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+  if(q<=0)return null;
+  return d.lastReportAt?toTW(d.lastReportAt,false):dispWorkDate(d);
+}
+function renderDoneList(date,worker,kw){
+  const el=document.getElementById('done-list');if(!el)return;
+  applyDoneCollapse();
+  let ds=window.DB.dispatches.filter(d=>dispReportDate(d)===date);
+  if(worker)ds=ds.filter(d=>d.worker===worker);
+  if(kw)ds=ds.filter(d=>matchDispatch(d,kw));
+  const groups={};
+  ds.forEach(d=>{
+    const k=(d.orderName||'')+'||'+(d.orderSpec||'');
+    const g=groups[k]=groups[k]||{k,name:d.orderName||'',spec:d.orderSpec||'',done:0,def:0,sho:0,w:{}};
+    g.done+=d.doneQty||0;g.def+=d.defectQty||0;g.sho+=d.shortageQty||0;
+    const x=g.w[d.worker]=g.w[d.worker]||{done:0,def:0,sho:0};
+    x.done+=d.doneQty||0;x.def+=d.defectQty||0;x.sho+=d.shortageQty||0;
+  });
+  const gl=Object.values(groups).sort((a,b)=>(a.name+a.spec).localeCompare(b.name+b.spec,'zh-Hant'));
+  const sub=document.getElementById('done-sub');
+  const tot=gl.reduce((a,g)=>({done:a.done+g.done,def:a.def+g.def,sho:a.sho+g.sho}),{done:0,def:0,sho:0});
+  if(sub)sub.textContent=`${dispWdLabel(date)}${gl.length?`　共 ${gl.length} 項，完成 ${tot.done}`:''}${worker||kw?'（已套用上方篩選）':''}`;
+  if(!gl.length){el.innerHTML='<div style="color:#aaa;padding:0.75rem 0">這天沒有回報的完成數量</div>';return;}
+  const extra=(def,sho)=>`${def?`　<span style="color:#C62828">不良 ${def}</span>`:''}${sho?`　<span style="color:#E65100">來料不足 ${sho}</span>`:''}`;
+  el.innerHTML=gl.map(g=>{
+    const open=_doneOpen.has(g.k),ke=g.k.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    const ws=Object.keys(g.w).sort((a,b)=>g.w[b].done-g.w[a].done);
+    return`<div style="padding:8px 0;border-bottom:1px solid #f5f5f5">
+      <div onclick="toggleDoneItem('${ke}')" style="cursor:pointer;user-select:none">
+        <span style="color:#888;display:inline-block;width:14px">${open?'▼':'▶'}</span><b>${g.name}</b>${g.spec?` <span style="color:#888">${g.spec}</span>`:''}
+        　完成 <b style="color:#2E7D32;font-size:15px">${g.done}</b>${extra(g.def,g.sho)}
+        <span style="color:#aaa;font-size:11px">　${ws.length} 人</span>
+      </div>
+      ${open?`<div style="font-size:12px;color:#555;padding:4px 0 0 14px;line-height:1.9">${ws.map(w=>`${w}　完成 <b>${g.w[w].done}</b>${extra(g.w[w].def,g.w[w].sho)}`).join('<br>')}</div>`:''}
+    </div>`;
+  }).join('')+`<div style="padding:8px 0 0;font-weight:600">合計　完成 <span style="color:#2E7D32">${tot.done}</span>${extra(tot.def,tot.sho)}</div>`;
+}
 window.printPrepList=function(){
   const P=_prepData;
   if(!P||(!P.gl.length&&!P.cont.length))return alert('這天沒有需要備料的派工');
@@ -4434,6 +4491,7 @@ window.renderDailyReport=function(){
   dispatches=dispatches.sort((a,b)=>(a.worker||'').localeCompare(b.worker||'')||(a.orderName||'').localeCompare(b.orderName||''));
 
   renderPrepList(date,worker,kw);
+  renderDoneList(date,worker,kw);
   // ── 派工記錄 ──
   const countEl=document.getElementById('daily-dispatch-count');
   if(countEl)countEl.textContent=`共 ${dispatches.length} 筆`;
