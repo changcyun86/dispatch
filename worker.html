@@ -1551,6 +1551,7 @@ function renderWorkerMain(){
     <div class="metric"><div class="metric-label">本月加工累計<br><span style="font-size:10px;color:#bbb">Tổng tiền gia công tháng này</span></div><div class="metric-val">${mEarn}</div>${mSub}</div>
   `;
   window._untilList=myPending.filter(d=>d.untilTime&&!d.multiDay);
+  window._hasPrio=myPending.some(d=>d.priority>0);
   untilCheck();
   if(currentTab!=='pending')return;
   renderDrinkNotice(myPending.length);
@@ -1569,16 +1570,30 @@ function renderWorkerMain(){
     return Object.values(groups);
   }
 
+  // 排列順序（priority）：有排的卡片在最上面，先比派工日期與時間（同一次派工），再比號碼；
+  // 沒排的接在後面，依派工日期與時間。卡片上的 ①②③ 是目前畫面上的名次（做完一張，下一張變 ①）。
+  function sortPendingGroups(groups){
+    const info=g=>{
+      const first=g.slice().sort((a,b)=>((a.effectiveDate||toTW(a.createdAt,false))+(a.createdAt||'')).localeCompare((b.effectiveDate||toTW(b.createdAt,false))+(b.createdAt||'')))[0];
+      const pr=g.map(d=>d.priority).filter(x=>x>0);
+      return{p:pr.length?Math.min(...pr):0,t:(first.effectiveDate||toTW(first.createdAt,false))+'|'+(first.createdAt||'')};
+    };
+    const arr=groups.map(g=>({g,...info(g)}));
+    arr.sort((a,b)=>(a.p?0:1)-(b.p?0:1)||a.t.localeCompare(b.t)||(a.p-b.p));
+    let rank=0;
+    arr.forEach(x=>{if(x.p){rank++;x.g._rank=rank;}else x.g._rank=0;});
+    return arr.map(x=>x.g);
+  }
   tasks.innerHTML=(()=>{
-    const groups=groupPendingByBatch(myPending);
+    const groups=sortPendingGroups(groupPendingByBatch(myPending));
     return groups.map(group=>{
       if(group.length===1){
         // 單筆工單
         const d=group[0];
         const o=orders.find(x=>x.id===d.orderId);
         const remain=o?getOrderRemain(o,d.id):Math.max(0,d.assignQty);
-        return`<div class="card">
-          ${untilBar([d])}
+        return`<div class="card"${group._rank?' style="border:2px solid #1565C0"':''}>
+          ${prioHead(group._rank)}${untilBar([d])}
           <div style="display:flex;justify-content:space-between;margin-bottom:8px">
             <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;color:#888">${d.orderNo||''}</span>
@@ -1630,8 +1645,8 @@ function renderWorkerMain(){
               <div style="font-size:11px;color:${color};font-weight:600;margin-bottom:3px">${label}</div>
               <input type="number" id="g${k}-${gid}" min="0" value="0" inputmode="numeric" oninput="grpUpdate('g','${gid}')">
             </div>`;
-        return`<div class="card" data-grp="g${gid}" data-ids="${list.map(d=>d.id).join(',')}">
-          ${untilBar(list)}
+        return`<div class="card" data-grp="g${gid}" data-ids="${list.map(d=>d.id).join(',')}"${group._rank?' style="border:2px solid #1565C0"':''}>
+          ${prioHead(group._rank)}${untilBar(list)}
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
             <div><span style="font-weight:600;font-size:15px">${first.orderName}</span>${first.orderSpec?` <span style="color:#aaa;font-size:12px">${first.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;background:#E3F2FD;color:#185FA5;padding:2px 8px;border-radius:12px">合併 ${list.length} 張 / Gộp ${list.length}</span>
@@ -1661,7 +1676,9 @@ function renderWorkerMain(){
         </div>`;
       }
     }).join('');
-  })();}
+  })();
+  if(window._hasPrio)tasks.insertAdjacentHTML('afterbegin','<div style="background:#E3F2FD;color:#1565C0;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:14px;font-weight:700;text-align:center">請依順序加工 ①→②→③<br><span style="font-size:12px">Hãy làm theo thứ tự ①→②→③</span></div>');
+}
 
 
 // ── 同品名合併群組批次回報 ──
@@ -1687,6 +1704,14 @@ async function autoClockOut(opt){
   }catch(e){console.warn('autoClockOut failed',e);}
 }
 // 派工備註：橘色框醒目顯示（合併卡片：各張不同的備註都列出）
+// ══ 排列順序（派工欄位 priority）══
+function prioCircle(n){return n>=1&&n<=20?String.fromCharCode(0x2460+n-1):`(${n})`;}
+function prioHead(rank){
+  if(!rank)return'';
+  return`<div style="display:flex;align-items:center;gap:8px;margin:-2px 0 8px">
+    <span style="font-size:26px;line-height:1;color:#1565C0;font-weight:700">${prioCircle(rank)}</span>
+    <span style="font-size:13px;font-weight:700;color:#1565C0">${rank===1?'先做這張 / Làm việc này trước':`第 ${rank} 優先 / Ưu tiên ${rank}`}</span></div>`;
+}
 // ══ 做到幾點（派工欄位 untilTime "HH:MM"）══
 // 卡片頂端常駐標示；登入時跳一次通知；時間到跳紅色視窗＋震動，按「知道了」才關。
 // 全部在手機上計算，不讀寫資料庫；已看過的記在手機上（每筆派工、每個時間、每天各一次）。

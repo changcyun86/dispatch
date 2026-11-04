@@ -892,7 +892,8 @@ function dispWorkDate(d){return d.effectiveDate||toTW(d.createdAt,false);}
 // 工單順序標籤（只顯示，派工時有填才出現；與預約派工的樣式相同）
 function untilBadge(d){return d&&d.untilTime?` <span style="background:#FFEBEE;color:#C62828;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap">⏰ 做到 ${d.untilTime}</span>`:'';}
 // 工單順序標示（同時帶出「做到幾點」，所有顯示工單順序的地方都會看到）
-function seqBadge(d){return seqOnlyBadge(d)+untilBadge(d);}
+function prioBadge(d){return d&&d.priority?` <span style="background:#E3F2FD;color:#1565C0;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap">排第 ${d.priority}</span>`:'';}
+function seqBadge(d){return seqOnlyBadge(d)+prioBadge(d)+untilBadge(d);}
 function seqOnlyBadge(d){return d&&d.sequence?` <span style="background:#FFF3E0;color:#E65100;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:400;white-space:nowrap">第 ${d.sequence} 張</span>`:'';}
 // ══ 多日工作 ══
 // 派工欄位：multiDay、maxDays（總共可做幾天）、stillDays:[{date,at,rejected}]；打卡紀錄：stillIds
@@ -2092,6 +2093,24 @@ function initDispatchForm(){
 }
 window._selectedOrderIds=new Set(); // 複選訂單
 window._boxRemovedIds=new Set();   // 在「已選訂單」區塊取消勾選的訂單：保留顯示，方便再勾回
+window._grpOrder=[];               // 「已選訂單」區塊各組的先後（排列順序用），存組別 key
+window._grpPrioOn=false;           // 是否「依此順序排列」
+window.grpMove=function(key,dir){
+  const a=window._grpOrder,i=a.indexOf(key),j=i+dir;
+  if(i<0||j<0||j>=a.length)return;
+  [a[i],a[j]]=[a[j],a[i]];
+  updateSelectedInfo();
+};
+window.grpPrioToggle=function(on){window._grpPrioOn=!!on;updateSelectedInfo();};
+// 派工時各組的排列順序（只算勾選中的組，依區塊內的先後編 1、2、3…）；沒勾「依此順序排列」→ 空
+function grpPrioMap(){
+  if(!window._grpPrioOn)return{};
+  const ids=[...window._selectedOrderIds];
+  const live=new Set(window.DB.orders.filter(o=>ids.includes(o.id)).map(o=>`${o.name}||${o.spec||''}||${o.price||0}`));
+  const keys=window._grpOrder.filter(k=>live.has(k));
+  if(keys.length<2)return{};
+  const m={};keys.forEach((k,i)=>m[k]=i+1);return m;
+}
 let _dispatchSearchTimer=null;
 window.onDispatchSearch=function(){
   clearTimeout(_dispatchSearchTimer);
@@ -2244,11 +2263,23 @@ function updateSelectedInfo(){
     if(on){groups[key].totalQty+=remaining;groups[key].on++;}
     groups[key].orders.push({o,remaining,on});
   });
-  const gList=Object.values(groups);
-  const onGroups=gList.filter(g=>g.on>0).length;
+  // 組的先後：保留使用者排過的順序，新出現的組接在後面，消失的組移除
+  Object.keys(groups).forEach(k=>{if(!window._grpOrder.includes(k))window._grpOrder.push(k);});
+  window._grpOrder=window._grpOrder.filter(k=>groups[k]);
+  const gList=window._grpOrder.map(k=>({...groups[k],key:k}));
+  const onList=gList.filter(g=>g.on>0);
+  const onGroups=onList.length;
+  const prioOn=window._grpPrioOn&&onGroups>=2;
+  const prioNo={};onList.forEach((g,i)=>prioNo[g.key]=i+1);
+  const keyEsc=k=>k.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
   info.style.display='block';
   info.innerHTML=`<div style="font-size:12px;font-weight:600;color:#185FA5;margin-bottom:6px">已選 ${ids.length} 筆訂單 → ${onGroups} 組派工${removed.length?` <span style="font-weight:400;color:#888">（已取消 ${removed.length} 筆，可再勾回）</span>`:''}</div>`+
-    gList.map(g=>`<div style="background:${g.on?'#fff':'#f5f5f5'};border-radius:6px;padding:5px 8px;margin-bottom:4px;font-size:11px;color:#555">
+    (onGroups>=2?`<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#1565C0;margin:0 0 6px;cursor:pointer"><input type="checkbox" style="width:auto;margin:0" ${window._grpPrioOn?'checked':''} onchange="grpPrioToggle(this.checked)"> 依此順序排列（員工全部看得到，依 ①②③ 由上往下排列；用 ↑↓ 調整先後）</label>`:'')+
+    gList.map((g,gi)=>`<div style="background:${g.on?'#fff':'#f5f5f5'};border-radius:6px;padding:5px 8px;margin-bottom:4px;font-size:11px;color:#555">
+      ${prioOn?`<span style="display:inline-flex;gap:2px;margin-right:4px;vertical-align:middle">
+        <button class="btn btn-sm" style="padding:0 6px;font-size:11px;line-height:18px" ${gi===0?'disabled':''} onclick="grpMove('${keyEsc(g.key)}',-1)">↑</button>
+        <button class="btn btn-sm" style="padding:0 6px;font-size:11px;line-height:18px" ${gi===gList.length-1?'disabled':''} onclick="grpMove('${keyEsc(g.key)}',1)">↓</button></span>`:''}
+      ${prioOn&&g.on?`<span style="background:#1565C0;color:#fff;border-radius:10px;padding:0 7px;font-weight:700;margin-right:4px">${prioNo[g.key]}</span>`:''}
       <span style="font-weight:600;color:${g.on?'#1a1a1a':'#aaa'}">${g.name}</span>${g.spec?` <span style="color:#aaa">(${g.spec})</span>`:''} ／ $${g.price} ／ 合計剩餘 <strong style="color:${g.on?'#185FA5':'#aaa'}">${g.totalQty}</strong> 件
       <div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin:3px 0 2px">
         ${g.orders.map(x=>`<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:${x.on?'#333':'#aaa'};${x.on?'':'text-decoration:line-through;'}">
@@ -2297,7 +2328,9 @@ window.createDispatch=async function(){
     groups[key].orders.push(o);
   });
   // 每組每張訂單各自建立一筆 dispatch，共用 batchId
-  for(const g of Object.values(groups)){
+  const prioMap=grpPrioMap(); // 排列順序（priority）：有勾「依此順序排列」才寫入
+  for(const [gkey,g] of Object.entries(groups)){
+    const prioField=prioMap[gkey]?{priority:prioMap[gkey]}:{};
     const isReDispatch=g.orders.some(o=>(o.done||0)+(o.defect||0)+(o.shortage||0)>0);
     const isSameNameGroup=g.orders.length>1; // 同品名合併群組標記
     for(const o of g.orders){
@@ -2318,7 +2351,8 @@ window.createDispatch=async function(){
           groupName:isSameNameGroup?g.name:'', // 群組品名，供 worker.html grouped 顯示用
           doneQty:0,defectQty:0,shortageQty:0,
           note,effectiveDate,sequence,status:'待完成',createdAt:now,
-          ...multiFields
+          ...multiFields,
+          ...prioField
         });
       }
     }
@@ -2334,6 +2368,7 @@ window.createDispatch=async function(){
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
   window._selectedOrderIds=new Set();
   window._boxRemovedIds=new Set();
+  window._grpOrder=[];window._grpPrioOn=false;
   renderDispatchOrders();
   renderDispatchLog();
   const totalOrders=ids.length;
@@ -2799,7 +2834,8 @@ window.openAdjust=function(id){
       <span style="display:flex;align-items:center;gap:6px">天數上限 <input type="number" id="adj-maxdays" min="2" value="${d.maxDays||2}" style="width:70px;margin:0"> 天</span>
       ${d.multiDay?`<span style="font-size:11px;color:#6A1B9A">已按「還在做」${stillUsed(d)} 次</span>`:''}
       <span style="display:flex;align-items:center;gap:6px">⏰ 做到幾點 <input type="time" id="adj-until-time" value="${d.untilTime||''}" style="width:auto;margin:0"></span>
-      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定、做到幾點會套用到同一張合併卡片的其他訂單）</span>`:''}
+      <span style="display:flex;align-items:center;gap:6px">排列順序 <input type="number" id="adj-priority" min="1" value="${d.priority||''}" placeholder="不排" style="width:70px;margin:0"></span>
+      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定、做到幾點、排列順序會套用到同一張合併卡片的其他訂單）</span>`:''}
     </div>
     <label>加工完成數量</label>
     <input type="number" id="adj-done" value="${d.doneQty||0}" min="0" max="${remain}">
@@ -2838,6 +2874,15 @@ window.submitAdjust=async function(id){
   if(adjMulti&&adjMax<2)return alert('多日工作的天數上限至少 2 天');
   const adjUntil=(document.getElementById('adj-until-time')?.value||'').slice(0,5);
   if(adjUntil&&adjMulti)return alert('多日工作不能設定「做到幾點」，請取消其中一項');
+  // 排列順序：有變更才處理；清空 → 移除欄位
+  const adjPrio=parseInt(document.getElementById('adj-priority')?.value)||0;
+  if((d.priority||0)!==adjPrio){
+    if(adjPrio>0)d.priority=adjPrio;else delete d.priority;
+    if(d.isMerged){
+      const mates=window.DB.dispatches.filter(x=>x.id!==d.id&&x.isMerged&&x.batchId===d.batchId&&x.worker===d.worker&&(x.groupName||x.orderName)===(d.groupName||d.orderName));
+      for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update({priority:adjPrio>0?adjPrio:firebase.firestore.FieldValue.delete()}).catch(e=>console.warn('排列順序同步失敗',m.id,e));
+    }
+  }
   // 做到幾點：有變更才處理；清空 → 移除欄位（saveDispatch 整筆寫入）
   if((d.untilTime||'')!==adjUntil){
     if(adjUntil)d.untilTime=adjUntil;else delete d.untilTime;
