@@ -1178,7 +1178,8 @@ function renderHistory(){
       const o=orders.find(x=>x.id===d.orderId);
       const othersRep=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==d.id)
         .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-      const remain=Math.max(0,(o?o.qty:d.assignQty)-othersRep);
+      // 有指定派工數量（小於訂單數量）→ 最多只能報到指定數量（和第一次回報同一規則）
+      const remain=Math.min(Math.max(0,(o?o.qty:d.assignQty)-othersRep),(o&&d.assignQty&&d.assignQty<o.qty)?d.assignQty:Infinity);
       el.innerHTML=`<div class="card" style="border:1.5px solid #185FA5;padding:0.875rem;margin-bottom:10px">
         <div style="font-weight:600;margin-bottom:4px">${d.orderName}${d.orderSpec?' '+d.orderSpec:''}</div>
         <div style="font-size:11px;color:#888;margin-bottom:10px">
@@ -1338,7 +1339,8 @@ window.validateEdit=function(id){
   const o=orders.find(x=>x.id===d.orderId);
   const othersReported=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==id)
     .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
-  const avail=Math.max(0,(o?o.qty:d.assignQty)-othersReported);
+  // 有指定派工數量（小於訂單數量）→ 修改時最多也只能報到指定數量（和第一次回報同一規則）
+  const avail=Math.min(Math.max(0,(o?o.qty:d.assignQty)-othersReported),(o&&d.assignQty&&d.assignQty<o.qty)?d.assignQty:Infinity);
   if(err){
     if(myTotal>avail){err.style.display='block';err.textContent=`超過可回報量 ${avail} / Vượt quá ${avail}`;return false;}
     err.style.display='none';
@@ -1556,7 +1558,7 @@ function renderWorkerMain(){
   if(currentTab!=='pending')return;
   renderDrinkNotice(myPending.length);
   const tasks=document.getElementById('wm-tasks');
-  if(!myPending.length){tasks.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單<br>Không có công việc chờ xử lý</div>';return;}
+  if(!myPending.length){tasks.innerHTML='<div class="card" style="text-align:center;color:#aaa;padding:2rem">✓ 目前沒有待辦工單<br>Không có công việc chờ xử lý</div>'+previewHtml();return;}
   // ── 待辦工單顯示 ──
 
   // 同 batchId + 同品名 + 同員工的 dispatch 群組化
@@ -1677,6 +1679,7 @@ function renderWorkerMain(){
       }
     }).join('');
   })();
+  tasks.insertAdjacentHTML('beforeend',previewHtml());
   if(window._hasPrio)tasks.insertAdjacentHTML('afterbegin','<div style="background:#E3F2FD;color:#1565C0;border-radius:8px;padding:8px 12px;margin-bottom:10px;font-size:14px;font-weight:700;text-align:center">請依順序加工 ①→②→③<br><span style="font-size:12px">Hãy làm theo thứ tự ①→②→③</span></div>');
 }
 
@@ -1704,6 +1707,52 @@ async function autoClockOut(opt){
   }catch(e){console.warn('autoClockOut failed',e);}
 }
 // 派工備註：橘色框醒目顯示（合併卡片：各張不同的備註都列出）
+// ══ 預告（派工欄位 preview）：管理端勾「讓員工提前看到」的預派工單，派工後就顯示到那天為止 ══
+// 只能看不能回報；資料本來就在手機裡（自己的派工），不增加讀取。
+function previewHtml(){
+  const today=toTW(new Date().toISOString(),false);
+  const wd=d=>d.effectiveDate||toTW(d.createdAt,false);
+  const rep=d=>(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)>0;
+  let list=dispatches.filter(d=>d.worker===currentWorker&&d.preview&&wd(d)>today&&!rep(d));
+  // 同一張訂單同一天有多次預派 → 只看最後一次
+  const last={};list.forEach(d=>{const k=d.orderId+'|'+wd(d);if(!last[k]||(d.createdAt||'')>(last[k].createdAt||''))last[k]=d;});
+  list=Object.values(last);
+  if(!list.length)return'';
+  // 合併卡片（同批次同品名）
+  const gm={};list.forEach(d=>{const k=d.isMerged?`${d.batchId}||${d.groupName||d.orderName}`:d.id;(gm[k]=gm[k]||[]).push(d);});
+  const byDate={};Object.values(gm).forEach(g=>{(byDate[wd(g[0])]=byDate[wd(g[0])]||[]).push(g);});
+  const wk=dt=>'日一二三四五六'[new Date(dt+'T00:00:00Z').getUTCDay()];
+  const tomorrow=_addDays(today,1);
+  const esc=x=>annEsc(x||'');
+  const body=Object.keys(byDate).sort().map(dt=>{
+    // 和當天待辦相同：有排列順序的在前（先比派工時間、再比號碼），其他依派工時間、工單順序
+    const gi=g=>({p:Math.min(...g.map(x=>x.priority||Infinity)),t:g[0].createdAt||'',q:g[0].sequence||Infinity});
+    const gs=byDate[dt].sort((a,b)=>{const A=gi(a),B=gi(b);const ap=isFinite(A.p),bp=isFinite(B.p);
+      if(ap!==bp)return ap?-1:1;
+      return A.t.localeCompare(B.t)||(ap?A.p-B.p:A.q-B.q);});
+    let rank=0;
+    const cards=gs.map(g=>{
+      const d=g[0],qty=g.reduce((a,x)=>a+(x.assignQty||0),0);
+      const pr=g.some(x=>x.priority>0)?++rank:0;
+      const notes=[...new Set(g.map(x=>(x.note||'').trim()).filter(Boolean))];
+      return`<div style="background:#F5F7FB;border:1px dashed #9FA8DA;border-radius:10px;padding:10px 12px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          ${pr?`<span style="font-size:20px;color:#3949AB;font-weight:700">${prioCircle(pr)}</span>`:''}
+          <span style="font-weight:600;font-size:15px">${esc(d.groupName||d.orderName)}</span>${d.orderSpec?`<span style="color:#888;font-size:12px">${esc(d.orderSpec)}</span>`:''}
+          ${d.sequence?`<span style="background:#EDE7F6;color:#5E35B1;border-radius:10px;padding:1px 8px;font-size:11px">第 ${d.sequence} 張 / Thứ ${d.sequence}</span>`:''}
+        </div>
+        <div style="font-size:13px;color:#555;margin-top:4px">數量 / Số lượng：<b>${qty}</b></div>
+        ${d.untilTime?`<div style="font-size:13px;font-weight:700;color:${d.untilMust?'#C62828':'#E65100'};margin-top:4px">⏰ ${d.untilMust?`${d.untilTime} 前必須完成 / Phải hoàn thành trước ${d.untilTime}`:`做到 ${d.untilTime} / Làm đến ${d.untilTime}`}</div>`:''}
+        ${notes.length?`<div style="font-size:12px;color:#E65100;font-weight:600;margin-top:4px;white-space:pre-wrap">📌 ${esc(notes.join('\n'))}</div>`:''}
+      </div>`;
+    }).join('');
+    return`<div style="font-size:13px;font-weight:700;color:#3949AB;margin:10px 0 6px">${dt.slice(5).replace('-','/')}（${wk(dt)}）${dt===tomorrow?' 明天 / Ngày mai':''}</div>${cards}`;
+  }).join('');
+  return`<div style="margin-top:18px;padding-top:12px;border-top:2px dashed #C5CAE9">
+    <div style="font-size:15px;font-weight:700;color:#3949AB">📅 預告 / Công việc sắp tới</div>
+    <div style="font-size:12px;color:#888;margin-top:2px">先讓你知道，還不能回報 / Chỉ để xem trước, chưa báo cáo được</div>
+    ${body}</div>`;
+}
 // ══ 排列順序（派工欄位 priority）══
 function prioCircle(n){return n>=1&&n<=20?String.fromCharCode(0x2460+n-1):`(${n})`;}
 function prioHead(rank){
@@ -1716,13 +1765,16 @@ function prioHead(rank){
 // 卡片頂端常駐標示；登入時跳一次通知；時間到跳紅色視窗＋震動，按「知道了」才關。
 // 全部在手機上計算，不讀寫資料庫；已看過的記在手機上（每筆派工、每個時間、每天各一次）。
 function untilNowHM(){return new Date(Date.now()+8*3600e3).toISOString().slice(11,16);}
-function untilBarHtml(t,now){
+function untilBarHtml(t,now,must){
+  if(must)return t<=now
+    ?`⏰ 已到 ${t}，必須完成並回報數量<br><span style="font-size:12px;font-weight:600">Đã đến ${t} – phải hoàn thành và báo cáo số lượng</span>`
+    :`⏰ ${t} 前必須完成<br><span style="font-size:12px;font-weight:600">Phải hoàn thành trước ${t}</span><div style="font-size:12px;margin-top:2px">有問題請立即回報 / Có vấn đề hãy báo ngay</div>`;
   return t<=now
     ?`⏰ 已到 ${t}，請停止並回報數量<br><span style="font-size:12px;font-weight:600">Đã đến ${t} – hãy dừng lại và báo cáo số lượng</span>`
     :`⏰ 做到 ${t}<br><span style="font-size:12px;font-weight:600">Làm đến ${t}</span>`;
 }
-function untilBarStyle(t,now){
-  const due=t<=now;
+function untilBarStyle(t,now,must){
+  const due=t<=now||must;
   return`border-radius:8px;padding:8px 12px;margin:-2px 0 10px;font-size:16px;font-weight:700;line-height:1.4;text-align:center;`+
     (due?'background:#C62828;color:#fff;border:2px solid #B71C1C':'background:#FFF3E0;color:#E65100;border:2px solid #FB8C00');
 }
@@ -1730,7 +1782,8 @@ function untilBar(list){
   const t=[...new Set(list.map(d=>d.untilTime).filter(Boolean))].sort()[0];
   if(!t||list.some(d=>d.multiDay))return'';
   const now=untilNowHM();
-  return`<div class="until-bar" data-t="${t}" style="${untilBarStyle(t,now)}">${untilBarHtml(t,now)}</div>`;
+  const must=list.some(d=>d.untilMust)?'1':'';
+  return`<div class="until-bar" data-t="${t}" data-must="${must}" style="${untilBarStyle(t,now,must)}">${untilBarHtml(t,now,must)}</div>`;
 }
 function _untilKey(k){return`until-${k}-${currentWorker}-${toTW(new Date().toISOString(),false)}`;}
 function _untilGet(k){try{return new Set(JSON.parse(localStorage.getItem(_untilKey(k))||'[]'));}catch(e){return new Set();}}
@@ -1740,7 +1793,7 @@ let _untilShown='';
 function untilCheck(){
   const now=untilNowHM();
   // 卡片上的橫條：時間到就變紅（直接改畫面，不重畫卡片，避免清掉正在輸入的數字）
-  document.querySelectorAll('.until-bar').forEach(el=>{const t=el.dataset.t;el.style.cssText=untilBarStyle(t,now);el.innerHTML=untilBarHtml(t,now);});
+  document.querySelectorAll('.until-bar').forEach(el=>{const t=el.dataset.t,mu=el.dataset.must;el.style.cssText=untilBarStyle(t,now,mu);el.innerHTML=untilBarHtml(t,now,mu);});
   const list=currentWorker?(window._untilList||[]):[];
   const due=list.filter(d=>d.untilTime<=now&&!_untilGet('due').has(_untilSig(d)));
   const notice=list.filter(d=>d.untilTime>now&&!_untilGet('seen').has(_untilSig(d)));
@@ -1756,7 +1809,7 @@ function untilCheck(){
   const rows=[];const seen=new Set();
   items.slice().sort((a,b)=>a.untilTime.localeCompare(b.untilTime)).forEach(d=>{
     const k=d.orderName+'|'+(d.orderSpec||'')+'|'+d.untilTime;if(seen.has(k))return;seen.add(k);
-    rows.push(`<div style="padding:8px 0;border-top:0.5px solid #eee;font-size:15px"><b>${annEsc(d.orderName)}</b>${d.orderSpec?` <span style="color:#888;font-size:13px">${annEsc(d.orderSpec)}</span>`:''}<div style="font-size:18px;font-weight:700;color:${kind==='due'?'#C62828':'#E65100'}">⏰ ${kind==='due'?'已到':'做到'} ${d.untilTime}</div></div>`);
+    rows.push(`<div style="padding:8px 0;border-top:0.5px solid #eee;font-size:15px"><b>${annEsc(d.orderName)}</b>${d.orderSpec?` <span style="color:#888;font-size:13px">${annEsc(d.orderSpec)}</span>`:''}<div style="font-size:18px;font-weight:700;color:${kind==='due'||d.untilMust?'#C62828':'#E65100'}">⏰ ${kind==='due'?'已到 '+d.untilTime:(d.untilMust?d.untilTime+' 前必須完成':'做到 '+d.untilTime)}</div>${d.untilMust?`<div style="font-size:12px;color:#C62828">${kind==='due'?'必須完成 / Phải hoàn thành':'Phải hoàn thành trước '+d.untilTime+'・有問題請立即回報 / Có vấn đề hãy báo ngay'}</div>`:''}</div>`);
   });
   const head=kind==='due'
     ?`<div style="font-size:20px;font-weight:700;color:#C62828">⏰ 時間到！/ Đã hết giờ!</div><div style="font-size:14px;margin:6px 0 8px">請停止以下工作並回報數量<br><span style="color:#666">Hãy dừng các công việc sau và báo cáo số lượng</span></div>`

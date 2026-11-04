@@ -330,7 +330,8 @@ textarea{resize:vertical;min-height:70px}
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:8px">
         <div>
           <label>生效日期 <span style="color:#aaa;font-weight:400">（預設今天）</span></label>
-          <input type="date" id="d-effective-date" style="margin-top:4px">
+          <input type="date" id="d-effective-date" style="margin-top:4px" onchange="dPreviewVis()" oninput="dPreviewVis()">
+          <label id="d-preview-wrap" style="display:none;align-items:center;gap:4px;margin-top:4px;font-size:12px;color:#1565C0;cursor:pointer"><input type="checkbox" id="d-preview" style="width:auto;margin:0"> 👁 讓員工提前看到（派工後員工就能在「預告」看到）</label>
         </div>
         <div>
           <label>派工數量 <span style="color:#aaa;font-weight:400">（選填）</span></label>
@@ -344,7 +345,9 @@ textarea{resize:vertical;min-height:70px}
       <div style="display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap;font-size:13px">
         <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" id="d-multiday" style="width:auto;margin:0" onchange="document.getElementById('d-maxdays-wrap').style.display=this.checked?'flex':'none'"> 多日工作</label>
         <span id="d-maxdays-wrap" style="display:none;align-items:center;gap:6px">天數上限 <input type="number" id="d-maxdays" min="2" value="2" style="width:70px;margin:0"> 天 <span style="color:#aaa;font-size:11px">（最多可按「還在做」上限減 1 次，最後一天必須回報數量）</span></span>
-        <span style="display:flex;align-items:center;gap:6px">⏰ 做到幾點 <input type="time" id="d-until-time" style="width:auto;margin:0"> <span style="color:#aaa;font-size:11px">（選填，多日工作不適用）</span></span>
+        <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">⏰ 做到幾點 <span id="d-until-time-box"></span>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:#C62828"><input type="checkbox" id="d-until-must" style="width:auto;margin:0"> 必須做完</label>
+          <span style="color:#aaa;font-size:11px">（選填，多日工作不適用）</span></span>
       </div>
       <label>備註 <span style="color:#aaa;font-weight:400">（選填）</span></label>
       <textarea id="d-note" placeholder="填寫備註說明...（可不填）" style="min-height:60px"></textarea>
@@ -890,10 +893,32 @@ function toTW(isoStr,showTime=true){
 // 派工記錄的「歸屬日期」：優先用生效日（預約派工的實際回報日），沒有才退回建立時間換算台灣時間
 function dispWorkDate(d){return d.effectiveDate||toTW(d.createdAt,false);}
 // 工單順序標籤（只顯示，派工時有填才出現；與預約派工的樣式相同）
-function untilBadge(d){return d&&d.untilTime?` <span style="background:#FFEBEE;color:#C62828;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap">⏰ 做到 ${d.untilTime}</span>`:'';}
+// 24 小時制時間選擇（時 00–23、分 00/30）；原本存的時間若不是 00/30（舊資料）也保留可選
+function untilPickerHtml(id,val){
+  const [vh,vm]=(val||'').split(':');
+  const hs=['<option value="">--</option>'].concat([...Array(24)].map((_,i)=>{const h=String(i).padStart(2,'0');return`<option value="${h}"${h===vh?' selected':''}>${h}</option>`;}));
+  const ms=['00','30'];if(vm&&!ms.includes(vm))ms.push(vm);
+  return`<select id="${id}-h" style="width:auto;margin:0" onchange="if(this.value&&!document.getElementById('${id}-m').value)document.getElementById('${id}-m').value='00'">${hs.join('')}</select> 時
+    <select id="${id}-m" style="width:auto;margin:0"><option value="">--</option>${ms.map(m=>`<option value="${m}"${m===vm?' selected':''}>${m}</option>`).join('')}</select> 分`;
+}
+function untilPickerVal(id){
+  const h=document.getElementById(id+'-h')?.value||'',m=document.getElementById(id+'-m')?.value||'';
+  return h?`${h}:${m||'00'}`:'';
+}
+function untilBadge(d){return d&&d.untilTime?` <span style="background:#FFEBEE;color:#C62828;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap">⏰ ${d.untilMust?`${d.untilTime} 前必須完成`:`做到 ${d.untilTime}`}</span>`:'';}
+function previewBadge(d){return d&&d.preview&&dispWorkDate(d)>twToday()?` <span style="background:#E8EAF6;color:#3949AB;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap">👁 預告中</span>`:'';}
+window.dPreviewVis=function(){
+  const v=document.getElementById('d-effective-date')?.value||'';
+  const w=document.getElementById('d-preview-wrap');if(!w)return;
+  const show=v>twToday();
+  w.style.display=show?'flex':'none';
+  if(!show){const c=document.getElementById('d-preview');if(c)c.checked=false;}
+};
+function dUntilInit(){const b=document.getElementById('d-until-time-box');if(b)b.innerHTML=untilPickerHtml('d-until-time','');}
+document.addEventListener('DOMContentLoaded',dUntilInit);dUntilInit();
 // 工單順序標示（同時帶出「做到幾點」，所有顯示工單順序的地方都會看到）
 function prioBadge(d){return d&&d.priority?` <span style="background:#E3F2FD;color:#1565C0;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap">排第 ${d.priority}</span>`:'';}
-function seqBadge(d){return seqOnlyBadge(d)+prioBadge(d)+untilBadge(d);}
+function seqBadge(d){return seqOnlyBadge(d)+prioBadge(d)+untilBadge(d)+previewBadge(d);}
 function seqOnlyBadge(d){return d&&d.sequence?` <span style="background:#FFF3E0;color:#E65100;padding:1px 6px;border-radius:10px;font-size:11px;font-weight:400;white-space:nowrap">第 ${d.sequence} 張</span>`:'';}
 // ══ 多日工作 ══
 // 派工欄位：multiDay、maxDays（總共可做幾天）、stillDays:[{date,at,rejected}]；打卡紀錄：stillIds
@@ -2313,9 +2338,13 @@ window.createDispatch=async function(){
   if(multiDay&&maxDays<2)return alert('多日工作的天數上限至少 2 天');
   const multiFields=multiDay?{multiDay:true,maxDays}:{}; // 沒勾多日：不新增任何欄位，與原本相同
   // 做到幾點（untilTime，"HH:MM"）：只有填寫才新增欄位；多日工作不開放
-  const untilTime=(document.getElementById('d-until-time')?.value||'').slice(0,5);
+  const untilTime=untilPickerVal('d-until-time');
   if(untilTime&&multiDay)return alert('多日工作不能設定「做到幾點」，請取消其中一項');
+  if(!untilTime&&document.getElementById('d-until-must')?.checked)return alert('勾了「必須做完」，請先選擇時間');
   if(untilTime)multiFields.untilTime=untilTime;
+  if(untilTime&&document.getElementById('d-until-must')?.checked)multiFields.untilMust=true;
+  // 讓員工提前看到（只有未來日期才有）
+  if(document.getElementById('d-preview')?.checked&&effectiveDate>toTW(new Date().toISOString(),false))multiFields.preview=true;
   const batchId=genId('B');
   const now=new Date().toISOString();
   // 依品名+規格+單價分組
@@ -2361,10 +2390,11 @@ window.createDispatch=async function(){
   document.getElementById('d-note').value='';
   document.getElementById('d-sequence').value='';
   document.getElementById('d-assign-qty').value='';
-  {const ut=document.getElementById('d-until-time');if(ut)ut.value='';}
+  dUntilInit();{const um=document.getElementById('d-until-must');if(um)um.checked=false;}
+  {const pv=document.getElementById('d-preview');if(pv)pv.checked=false;}dPreviewVis();
   {const md=document.getElementById('d-multiday');if(md){md.checked=false;document.getElementById('d-maxdays-wrap').style.display='none';document.getElementById('d-maxdays').value='2';}}
   const today=toTW(new Date().toISOString(),false);
-  document.getElementById('d-effective-date').value=today;
+  document.getElementById('d-effective-date').value=today;dPreviewVis();
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
   window._selectedOrderIds=new Set();
   window._boxRemovedIds=new Set();
@@ -2833,9 +2863,11 @@ window.openAdjust=function(id){
       <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="checkbox" id="adj-multiday" style="width:auto;margin:0" ${d.multiDay?'checked':''}> 多日工作</label>
       <span style="display:flex;align-items:center;gap:6px">天數上限 <input type="number" id="adj-maxdays" min="2" value="${d.maxDays||2}" style="width:70px;margin:0"> 天</span>
       ${d.multiDay?`<span style="font-size:11px;color:#6A1B9A">已按「還在做」${stillUsed(d)} 次</span>`:''}
-      <span style="display:flex;align-items:center;gap:6px">⏰ 做到幾點 <input type="time" id="adj-until-time" value="${d.untilTime||''}" style="width:auto;margin:0"></span>
+      <span style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">⏰ 做到幾點 ${untilPickerHtml('adj-until-time',d.untilTime||'')}
+        <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:#C62828"><input type="checkbox" id="adj-until-must" style="width:auto;margin:0" ${d.untilMust?'checked':''}> 必須做完</label></span>
+      ${dispWorkDate(d)>twToday()?`<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:#3949AB"><input type="checkbox" id="adj-preview" style="width:auto;margin:0" ${d.preview?'checked':''}> 👁 讓員工提前看到</label>`:''}
       <span style="display:flex;align-items:center;gap:6px">排列順序 <input type="number" id="adj-priority" min="1" value="${d.priority||''}" placeholder="不排" style="width:70px;margin:0"></span>
-      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定、做到幾點、排列順序會套用到同一張合併卡片的其他訂單）</span>`:''}
+      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定、做到幾點、必須做完、提前看到、排列順序會套用到同一張合併卡片的其他訂單）</span>`:''}
     </div>
     <label>加工完成數量</label>
     <input type="number" id="adj-done" value="${d.doneQty||0}" min="0" max="${remain}">
@@ -2872,8 +2904,10 @@ window.submitAdjust=async function(id){
   const adjMulti=!!document.getElementById('adj-multiday')?.checked;
   const adjMax=parseInt(document.getElementById('adj-maxdays')?.value)||0;
   if(adjMulti&&adjMax<2)return alert('多日工作的天數上限至少 2 天');
-  const adjUntil=(document.getElementById('adj-until-time')?.value||'').slice(0,5);
+  const adjUntil=untilPickerVal('adj-until-time');
   if(adjUntil&&adjMulti)return alert('多日工作不能設定「做到幾點」，請取消其中一項');
+  const adjMust=!!document.getElementById('adj-until-must')?.checked;
+  if(adjMust&&!adjUntil)return alert('勾了「必須做完」，請先選擇時間');
   // 排列順序：有變更才處理；清空 → 移除欄位
   const adjPrio=parseInt(document.getElementById('adj-priority')?.value)||0;
   if((d.priority||0)!==adjPrio){
@@ -2883,12 +2917,17 @@ window.submitAdjust=async function(id){
       for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update({priority:adjPrio>0?adjPrio:firebase.firestore.FieldValue.delete()}).catch(e=>console.warn('排列順序同步失敗',m.id,e));
     }
   }
-  // 做到幾點：有變更才處理；清空 → 移除欄位（saveDispatch 整筆寫入）
-  if((d.untilTime||'')!==adjUntil){
-    if(adjUntil)d.untilTime=adjUntil;else delete d.untilTime;
-    if(d.isMerged){
+  // 做到幾點／必須做完／提前看到：有變更才處理；取消 → 移除欄位（saveDispatch 整筆寫入）
+  {
+    const FV=firebase.firestore.FieldValue,patch={};
+    const setF=(k,v)=>{if(v){if(d[k]!==v){d[k]=v;patch[k]=v;}}else if(k in d){delete d[k];patch[k]=FV.delete();}};
+    setF('untilTime',adjUntil||'');
+    setF('untilMust',adjUntil&&adjMust?true:'');
+    const pvEl=document.getElementById('adj-preview');
+    if(pvEl)setF('preview',pvEl.checked?true:'');
+    if(Object.keys(patch).length&&d.isMerged){
       const mates=window.DB.dispatches.filter(x=>x.id!==d.id&&x.isMerged&&x.batchId===d.batchId&&x.worker===d.worker&&(x.groupName||x.orderName)===(d.groupName||d.orderName));
-      for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update({untilTime:adjUntil||firebase.firestore.FieldValue.delete()}).catch(e=>console.warn('做到幾點同步失敗',m.id,e));
+      for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update(patch).catch(e=>console.warn('時間設定同步失敗',m.id,e));
     }
   }
   // 多日設定有變更才寫入（沒勾、原本也不是多日 → 不新增欄位）
