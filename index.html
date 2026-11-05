@@ -1933,18 +1933,21 @@ window.dueSaveEditor=async function(){
 
 // ── Excel 貼上匯入（含預覽）──
 // 欄位固定：接單日期 / 訂單號 / 品名 / 規格 / 數量 / 備註 / 交期（後兩欄可省略）；單價一律從品名資料庫帶入
+// 重複判斷（2026/11 修改）：同「訂單號＋品名」視為重複（不看規格）。
+// 比對範圍：進行中訂單（已在畫面上，不需讀取）、已結案訂單（只用貼上的訂單號查詢）、同一次貼上的其他列。
+// 重複的列逐筆選擇：略過（預設）／補上交期與備註到現有訂單／仍要新增一筆。不再提供「覆蓋」（會刪掉派工紀錄）。
 window._impRows=null;
-window.parseOrderPaste=function(){
+window.parseOrderPaste=async function(){
   const raw=document.getElementById('order-paste-input').value.replace(/\r/g,'');
   if(!raw.trim()){alert('請先貼上資料');return;}
   const lines=raw.split('\n').filter(l=>l.trim());
-  const rows=[];
+  const rows=[],firstLine=new Map();
   lines.forEach((line,idx)=>{
     const cols=line.split('\t').map(c=>c.trim());
     while(cols.length>5&&cols[cols.length-1]==='')cols.pop(); // 行尾多餘的空白欄
     const [dateVal='',orderno='',name='',spec='',qtyRaw='',note='',dueRaw='']=cols;
     if(idx===0&&(name.includes('品名')||dateVal.includes('日期')))return; // 標題列
-    const r={line:idx+1,dateVal,orderno,name,spec,qtyRaw,note,dueRaw,errs:[],warns:[]};
+    const r={line:idx+1,dateVal,orderno,name,spec,qtyRaw,note,dueRaw,errs:[],warns:[],dups:[],act:'new'};
     if(cols.length>7)r.errs.push(`有 ${cols.length} 欄（最多 7 欄），請確認欄位順序`);
     if(!name)r.errs.push('沒有品名');
     const q=Number(String(qtyRaw).replace(/,/g,''));
@@ -1959,32 +1962,131 @@ window.parseOrderPaste=function(){
       const other=ds.filter(d=>d!==r.due);
       if(other.length)r.warns.push(`備註含日期 ${other.map(dueFmt).join('、')}，是否要分批交期？（匯入後到「交期」欄加一批）`);
     }
-    if(!r.errs.length&&orderno&&window.DB.orders.some(o=>o.orderno===orderno&&o.name===name&&(o.spec||'')===(spec||'')))r.warns.push('與現有訂單重複（匯入時會詢問覆蓋或跳過）');
+    if(orderno&&name){ // 同一次貼上裡的重複
+      const k=orderno+'||'+name;
+      if(firstLine.has(k))r.errs.push(`與第 ${firstLine.get(k)} 列重複（同一次貼上的資料）`);else firstLine.set(k,r.line);
+    }
     rows.push(r);
   });
   if(!rows.length){alert('無法解析資料，請確認格式');return;}
+  document.getElementById('due-modal-title').textContent='匯入預覽';
+  document.getElementById('due-modal-content').innerHTML='<div style="text-align:center;color:#888;padding:1.5rem">⏳ 檢查重複訂單...</div>';
+  document.getElementById('due-modal').style.display='flex';
+  // 和現有訂單比對：先比對畫面上的訂單；比對不到的，用訂單號查一次（找已結案的）
+  const key=o=>(o.orderno||'')+'||'+(o.name||'');
+  const found=new Map(); // key → [訂單]
+  const add=o=>{const k=key(o);if(!found.has(k))found.set(k,[]);const l=found.get(k);if(!l.some(x=>x.id===o.id))l.push(o);};
+  window.DB.orders.forEach(o=>{if(o.orderno)add(o);});
+  const valid=rows.filter(r=>!r.errs.length&&r.orderno);
+  if(RS.mode!=='legacy'){
+    const ask=[...new Set(valid.filter(r=>!found.has(key(r))).map(r=>r.orderno))];
+    try{
+      for(let i=0;i<ask.length;i+=30){
+        const sn=await db.collection('orders').where('orderno','in',ask.slice(i,i+30)).get();
+        sn.docs.forEach(d=>add({id:d.id,...d.data(),_remote:true}));
+      }
+    }catch(e){
+      console.warn('[匯入] 查詢已結案訂單失敗',e);
+      rows.forEach(r=>{if(!r.errs.length&&r.orderno)r.warns.push('無法查詢已結案訂單（網路問題），只比對了進行中的訂單');});
+    }
+  }
+  valid.forEach(r=>{
+    const d=found.get(key(r));
+    if(d&&d.length){
+      // 補上時優先選未結案、接單日期較新的那筆
+      r.dups=[...d].sort((a,b)=>(!!a.closed-!!b.closed)||(b.date||'').localeCompare(a.date||''));
+      r.act='skip';
+    }
+  });
+  // 補上交期時要知道現有交期：已結案的交期沒有常駐，這裡讀一次（只有重複且有交期的列才讀）
+  await Promise.all(valid.filter(r=>r.dups.length&&r.due).map(r=>dueEnsure(r.dups[0].id)));
   window._impRows=rows;
-  const ok=rows.filter(r=>!r.errs.length).length,bad=rows.length-ok;
+  renderImportPreview();
+};
+function impDupInfo(r){
+  return r.dups.map(o=>{
+    const rep=(o.done||0)+(o.defect||0)+(o.shortage||0);
+    const hasD=!o._remote&&window.DB.dispatches.some(d=>d.orderId===o.id);
+    const s=!o._remote?dueSummary(o):null,doc=dueGet(o.id);
+    const dueTxt=s&&s.next?`交期 ${dueFmt(s.next.date)}`:doc&&(doc.entries||[]).length?`交期 ${(doc.entries||[]).map(e=>dueFmt(e.date)).join('、')}`:'無交期';
+    const diff=[];
+    if((o.spec||'')!==(r.spec||''))diff.push(`規格不同：現有「${o.spec||'空白'}」→ 這列「${r.spec||'空白'}」`);
+    if(o.qty!==r.qty)diff.push(`數量不同：現有 ${o.qty} → 這列 ${r.qty}`);
+    return`<div style="color:#E65100">⚠ 已有相同訂單（${o.closed?'已結案':'進行中'}）：接單 ${dueEsc(o.date||'-')}・數量 ${o.qty}・已回報 ${rep}${o._remote?'':hasD?'・已派工':'・未派工'}・${dueTxt}${o.note?'・備註 '+dueEsc(o.note):''}</div>`+
+      diff.map(t=>`<div style="color:#C62828;font-size:11px">${dueEsc(t)}</div>`).join('');
+  }).join('');
+}
+function renderImportPreview(){
+  const rows=window._impRows||[];
+  const okRows=rows.filter(r=>!r.errs.length);
+  const nNew=okRows.filter(r=>r.act==='new').length,nFill=okRows.filter(r=>r.act==='fill').length,nSkip=okRows.filter(r=>r.act==='skip').length;
+  const bad=rows.length-okRows.length,nDup=okRows.filter(r=>r.dups.length).length;
+  const todo=nNew+nFill;
   document.getElementById('due-modal-title').textContent='匯入預覽';
   document.getElementById('due-modal-content').innerHTML=`
-    <div style="font-size:13px;margin-bottom:8px">共 ${rows.length} 列：<b style="color:#2E7D32">可匯入 ${ok}</b>${bad?`・<b style="color:#C62828">有錯誤 ${bad}（不會匯入）</b>`:''}</div>
+    <div style="font-size:13px;margin-bottom:8px">共 ${rows.length} 列：<b style="color:#2E7D32">新增 ${nNew}</b>${nDup?`・<b style="color:#E65100">與現有訂單重複 ${nDup}</b>（補上 ${nFill}・略過 ${nSkip}）`:''}${bad?`・<b style="color:#C62828">有錯誤 ${bad}（不會匯入）</b>`:''}</div>
     <div class="tbl-wrap"><table class="tbl" style="font-size:12px"><thead><tr>
-      <th>列</th><th>接單日期</th><th>訂單號</th><th>品名</th><th>規格</th><th class="col-num">數量</th><th class="col-num">單價</th><th>備註</th><th>交期</th><th>說明</th>
-    </tr></thead><tbody>${rows.map(r=>{
-      const bg=r.errs.length?'#FFEBEE':r.warns.length?'#FFF8E1':'';
-      const msg=[...r.errs.map(m=>`<div style="color:#C62828">✕ ${dueEsc(m)}</div>`),...r.warns.map(m=>`<div style="color:#8D6E00">⚠ ${dueEsc(m)}</div>`)].join('')||'<span style="color:#2E7D32">✓</span>';
-      return`<tr style="background:${bg}"><td>${r.line}</td><td style="white-space:nowrap">${dueEsc(r.date||r.dateVal)}</td><td>${dueEsc(r.orderno)}</td><td style="font-weight:600">${dueEsc(r.name)}</td><td>${dueEsc(r.spec)}</td><td class="col-num">${dueEsc(r.qtyRaw)}</td><td class="col-num">${r.price?'$'+r.price:'<span style="color:#8D6E00">0</span>'}</td><td>${dueEsc(r.note)}</td><td style="white-space:nowrap">${r.due?dueFmt(r.due):dueEsc(r.dueRaw)}</td><td>${msg}</td></tr>`;
+      <th>列</th><th>接單日期</th><th>訂單號</th><th>品名</th><th>規格</th><th class="col-num">數量</th><th class="col-num">單價</th><th>備註</th><th>交期</th><th style="min-width:260px">說明</th>
+    </tr></thead><tbody>${rows.map((r,i)=>{
+      const bg=r.errs.length?'#FFEBEE':r.dups.length?'#FFF3E0':r.warns.length?'#FFF8E1':'';
+      let msg=[...r.errs.map(m=>`<div style="color:#C62828">✕ ${dueEsc(m)}</div>`),...r.warns.map(m=>`<div style="color:#8D6E00">⚠ ${dueEsc(m)}</div>`)].join('');
+      if(!r.errs.length&&r.dups.length){
+        const canFill=!!(r.note||r.due);
+        msg=impDupInfo(r)+msg+`<select onchange="impSetAct(${i},this.value)" style="margin-top:4px;font-size:12px;padding:3px 6px;width:auto">
+          <option value="skip" ${r.act==='skip'?'selected':''}>略過（不匯入）</option>
+          ${canFill?`<option value="fill" ${r.act==='fill'?'selected':''}>補上${[r.due&&'交期',r.note&&'備註'].filter(Boolean).join('／')}到現有訂單</option>`:''}
+          <option value="new" ${r.act==='new'?'selected':''}>仍要新增一筆</option>
+        </select>${r.act==='fill'?`<div style="font-size:11px;color:#1565C0">→ ${dueEsc(impFillText(r))}</div>`:''}`;
+      }
+      if(!msg)msg='<span style="color:#2E7D32">✓</span>';
+      return`<tr style="background:${bg}${r.act==='skip'&&!r.errs.length?';opacity:0.75':''}"><td>${r.line}</td><td style="white-space:nowrap">${dueEsc(r.date||r.dateVal)}</td><td>${dueEsc(r.orderno)}</td><td style="font-weight:600">${dueEsc(r.name)}</td><td>${dueEsc(r.spec)}</td><td class="col-num">${dueEsc(r.qtyRaw)}</td><td class="col-num">${r.price?'$'+r.price:'<span style="color:#8D6E00">0</span>'}</td><td>${dueEsc(r.note)}</td><td style="white-space:nowrap">${r.due?dueFmt(r.due):dueEsc(r.dueRaw)}</td><td>${msg}</td></tr>`;
     }).join('')}</tbody></table></div>
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn btn-primary btn-sm" onclick="confirmOrderImport()" ${ok?'':'disabled'}>確認匯入 ${ok} 筆</button>
+    <div style="display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" onclick="confirmOrderImport()" ${todo?'':'disabled'}>確認匯入（新增 ${nNew}${nFill?`、補上 ${nFill}`:''}）</button>
       <button class="btn btn-sm" onclick="closeModal()">返回修改</button>
+      ${nSkip?`<span style="font-size:12px;color:#E65100">重複的 ${nSkip} 筆將略過</span>`:''}
     </div>`;
-  document.getElementById('due-modal').style.display='flex';
-};
+}
+window.impSetAct=function(i,v){const r=(window._impRows||[])[i];if(!r)return;r.act=v;renderImportPreview();};
+// 「補上」會做的事（預覽說明與實際寫入共用）
+function impFillPlan(r){
+  const t=r.dups[0],plan={t,note:null,due:null,dueMsg:''};
+  if(r.note&&!(t.note||'').includes(r.note))plan.note=t.note?`${t.note}／${r.note}`:r.note;
+  if(r.due){
+    const doc=dueGet(t.id),ents=((doc&&doc.entries)||[]).map(e=>({...e}));
+    if(!ents.length){ents.push({id:dueNewId(),kind:'out',date:r.due,qty:null,to:'',note:'',delivered:false,createdAt:new Date().toISOString()});plan.due=ents;plan.dueMsg=`新增交期 ${dueFmt(r.due)}`;}
+    else if(ents.some(e=>e.date===r.due))plan.dueMsg=`交期 ${dueFmt(r.due)} 已存在，不變`;
+    else if(ents.length===1){
+      const e=ents[0],now=new Date().toISOString();
+      e.origDate=e.origDate||e.date;e.changes=[...(e.changes||[]),{from:e.date,to:r.due,at:now}];e.date=r.due;
+      plan.due=ents;plan.dueMsg=`交期改為 ${dueFmt(r.due)}（原 ${dueFmt(e.origDate)}）`;
+    }else plan.dueMsg=`已有 ${ents.length} 批交期，不自動修改，請到交期欄確認`;
+  }
+  return plan;
+}
+function impFillText(r){
+  const p=impFillPlan(r),t=[];
+  if(r.note)t.push(p.note?`備註補上「${r.note}」`:'備註已有，不變');
+  if(r.due)t.push(p.dueMsg);
+  return`補到 ${p.t.orderno} ${p.t.name}（接單 ${p.t.date||'-'}）：${t.join('；')}`;
+}
 window.confirmOrderImport=async function(){
-  const rows=(window._impRows||[]).filter(r=>!r.errs.length);if(!rows.length)return;
-  const skipped=(window._impRows||[]).length-rows.length;
+  const all=(window._impRows||[]).filter(r=>!r.errs.length);
+  const rows=all.filter(r=>r.act==='new'),fills=all.filter(r=>r.act==='fill');
+  if(!rows.length&&!fills.length)return;
+  const skipped=(window._impRows||[]).length-all.length,nSkip=all.filter(r=>r.act==='skip').length;
   window._impRows=null;closeModal();
+  // 補上交期／備註：只更新備註欄位與交期文件，不動數量、單價、派工紀錄
+  let nFill=0;const fillWarn=[];
+  for(const r of fills){
+    try{
+      const p=impFillPlan(r);
+      if(p.note)await db.collection('orders').doc(p.t.id).update({note:p.note});
+      if(p.due)await dueSave(p.t.id,p.due,{...p.t,note:p.note||p.t.note});
+      else if(r.due&&p.dueMsg.startsWith('已有'))fillWarn.push(`${p.t.orderno} ${p.t.name}`);
+      nFill++;
+    }catch(e){console.warn('[匯入] 補上失敗',r,e);fillWarn.push(`${r.orderno} ${r.name}（寫入失敗）`);}
+  }
   const imported=[],dueOf=new Map(),base=Date.now().toString(36).toUpperCase(),now=new Date().toISOString();
   rows.forEach((r,i)=>{
     const uid=`ORD-${base}-${String(i).padStart(3,'0')}`;
@@ -1993,45 +2095,14 @@ window.confirmOrderImport=async function(){
     imported.push(o);
     if(r.due)dueOf.set(uid,r.due);
   });
-  await importOrdersCommit(imported,skipped,dueOf);
+  const extra=[nFill?`補上 ${nFill} 筆`:'',nSkip?`略過重複 ${nSkip} 筆`:'',skipped?`略過有錯誤的 ${skipped} 列`:''].filter(Boolean).join('，');
+  if(imported.length)await importOrdersCommit(imported,dueOf,extra);
+  else{closePanel('order-paste-panel');document.getElementById('order-paste-input').value='';toast(`完成：${extra}`);}
+  if(fillWarn.length)setTimeout(()=>alert(`以下訂單已有多批交期（或寫入失敗），交期沒有自動修改，請到訂單的「交期」欄確認：\n\n${fillWarn.map(x=>'・'+x).join('\n')}`),300);
+  dueRerender();
 };
-// 以下沿用原本的重複偵測與寫入流程；新增：覆蓋時一併刪除舊訂單的交期、寫入新訂單的交期
-async function importOrdersCommit(imported,skipped,dueOf){
-  // 偵測重複：以訂單號+品名+規格比對
-  const duplicates=imported.filter(imp=>
-    window.DB.orders.some(o=>
-      o.orderno&&imp.orderno&&o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||'')
-    )
-  );
-
-  let toImport=imported;
-  if(duplicates.length>0){
-    const dupList=duplicates.map(d=>`${d.orderno} ${d.name}${d.spec?' '+d.spec:''}`).join('\n');
-    const dupOld=window.DB.orders.filter(o=>duplicates.some(imp=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''))).map(o=>o.id);
-    if(!rsGuard(dupOld,false,()=>importOrdersCommit(imported,skipped,dueOf)))return;
-    const choice=confirm(`發現 ${duplicates.length} 筆重複訂單：\n${dupList}\n\n點「確定」→ 覆蓋重複的訂單\n點「取消」→ 跳過重複，只匯入新訂單`);
-    if(choice){
-      // 覆蓋：刪除舊的重複訂單，全部匯入
-      for(const imp of duplicates){
-        const old=window.DB.orders.find(o=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''));
-        if(old){
-          await db.collection('orders').doc(old.id).delete();
-          const toDelete=window.DB.dispatches.filter(d=>d.orderId===old.id);
-          for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
-          await dueDelete(old.id);
-        }
-      }
-    }else{
-      // 跳過：排除重複的
-      toImport=imported.filter(imp=>
-        !window.DB.orders.some(o=>
-          o.orderno&&imp.orderno&&o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||'')
-        )
-      );
-    }
-  }
-
-  if(!toImport.length){toast('無新訂單需要匯入');return;}
+// 寫入新訂單與交期（重複已在預覽處理，這裡不再詢問）
+async function importOrdersCommit(toImport,dueOf,extra){
   toast(`匯入中，共 ${toImport.length} 筆，請稍候...`);
   let count=0,dueN=0;
   const now=new Date().toISOString();
@@ -2046,7 +2117,7 @@ async function importOrdersCommit(imported,skipped,dueOf){
     if(count%5===0)toast(`匯入中 ${count}/${toImport.length}...`);
   }
   closePanel('order-paste-panel');document.getElementById('order-paste-input').value='';
-  toast(`成功匯入 ${toImport.length} 筆${dueN?`（含交期 ${dueN} 筆）`:''}${skipped?`，略過有錯誤的 ${skipped} 列`:''}${duplicates.length?`，處理重複 ${duplicates.length} 筆`:''}${prodImportEstText(toImport)}`)
+  toast(`成功新增 ${toImport.length} 筆${dueN?`（含交期 ${dueN} 筆）`:''}${extra?'，'+extra:''}${prodImportEstText(toImport)}`);
 }
 window.toggleSortByDue=function(btn){
   sortByDue=!sortByDue;
@@ -2059,7 +2130,7 @@ window.toggleSortByDue=function(btn){
 // 全部批次都完成（出貨量足夠或手動完成）→ open=false，之後不再常駐讀取。
 // 只在資料「足夠」時往 false 寫：出貨資料還沒讀完只會讓數量偏少，不會誤判成已完成。
 // 刪除出貨、改訂單數量時，把訂單放進 DUE_RECHECK，重新確認是否要改回 open=true。
-const DUE_WRITING=new Set(),DUE_RECHECK=new Map(); // 訂單 id → 資料已更新到位的判斷
+const DUE_WRITING=new Set(),DUE_RECHECK=new Map(),DUE_ORPHAN_CHECK=new Set(); // 訂單 id → 資料已更新到位的判斷
 function dueWriteState(id,patch,base){
   DUE_WRITING.add(id);patch.updatedAt=new Date().toISOString();
   if(patch.open===false){DUE.delete(id);DUE_EXTRA.set(id,{...base,...patch});}
@@ -2075,7 +2146,16 @@ function dueReconcile(){
       // 訂單沒在畫面上（例如已結案）：讀一次那張訂單；確定不存在才標記 open=false（資料保留）
       if(RS.mode==='scoped'&&RS.ready.get('o:open')){
         if(!RS.sticky.has(id)){RS.sticky.add(id);rsMark('orders');}
-        else{const k=RS.ordChunkOf.get(id);if(k&&RS.ready.get(k))dueWriteState(id,{open:false,orphan:true},d);}
+        else{
+          const k=RS.ordChunkOf.get(id);
+          // 訂單在切換載入範圍時（例如剛結案）可能短暫不在畫面資料裡，不能就此判定不存在：直接向伺服器確認一次
+          if(k&&RS.ready.get(k)&&!DUE_ORPHAN_CHECK.has(id)){
+            DUE_ORPHAN_CHECK.add(id);
+            db.collection('orders').doc(id).get().then(sn=>{
+              if(!sn.exists&&DUE.has(id)&&!DUE_WRITING.has(id))dueWriteState(id,{open:false,orphan:true},DUE.get(id));
+            }).catch(e=>{console.warn('[交期] 確認訂單失敗',e);DUE_ORPHAN_CHECK.delete(id);});
+          }
+        }
       }
       continue;
     }
