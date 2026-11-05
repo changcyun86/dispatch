@@ -139,6 +139,7 @@ textarea{resize:vertical;min-height:70px}
       </div>
       <button class="mismatch-toggle-btn" id="btn-price-mismatch" onclick="togglePriceMismatchFilter(this)" title="只顯示訂單單價與品名單價資料庫不一致的訂單">⚠ 單價不符</button>
       <button class="group-toggle-btn" id="btn-group-product" onclick="toggleGroupByProduct(this)" title="依品名＋規格合併顯示，點開看個別訂單明細">🗂 分組顯示</button>
+      <button class="group-toggle-btn" id="btn-sort-due" onclick="toggleSortByDue(this)" title="有缺口的訂單依最早交期排在前面；沒有交期的排最後">📅 依交期排序</button>
     </div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <span id="order-sel-info" style="font-size:12px;color:#888;display:none"></span>
@@ -151,7 +152,7 @@ textarea{resize:vertical;min-height:70px}
   <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
     <div style="display:flex;align-items:center;gap:8px">
       <span style="font-size:13px;color:#888;white-space:nowrap">🔍 搜尋：</span>
-      <input type="text" id="order-search" placeholder="輸入訂單號或品名..." style="flex:1;max-width:400px" oninput="onOrderSearch()">
+      <input type="text" id="order-search" placeholder="輸入訂單號、品名或備註..." style="flex:1;max-width:400px" oninput="onOrderSearch()">
       <button class="btn btn-sm" onclick="document.getElementById('order-search').value='';onOrderSearch()">清除</button>
     </div>
   </div>
@@ -170,10 +171,10 @@ textarea{resize:vertical;min-height:70px}
   </div>
   <div id="order-paste-panel" class="card" style="display:none">
     <div class="card-title">從 Excel 貼上訂單</div>
-    <div class="info-box">欄位順序：<strong>接單日期 / 訂單號 / 品名 / 規格 / 數量 / 加工單價</strong>（單價欄空白時自動從品名資料庫帶入）</div>
+    <div class="info-box">欄位順序：<strong>接單日期 / 訂單號 / 品名 / 規格 / 數量 / 備註 / 交期</strong>（備註、交期可省略；單價自動從品名資料庫帶入）。按「預覽」先檢查，確認無誤再匯入。</div>
     <textarea class="paste-area" id="order-paste-input" placeholder="在此貼上 Excel 複製的資料..."></textarea>
     <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn btn-primary btn-sm" onclick="parseOrderPaste()">匯入</button>
+      <button class="btn btn-primary btn-sm" onclick="parseOrderPaste()">預覽</button>
       <button class="btn btn-sm" onclick="closePanel('order-paste-panel')">取消</button>
     </div>
   </div>
@@ -193,6 +194,8 @@ textarea{resize:vertical;min-height:70px}
       <div>
         <label>規格</label><input type="text" id="m-spec" placeholder="例：M3×10" oninput="prodManualEst()">
         <label>數量</label><input type="number" id="m-qty" min="1" placeholder="0" oninput="calcManualAmt()">
+        <label>交期（選填）</label><input type="date" id="m-due">
+        <label>備註（選填）</label><input type="text" id="m-note" placeholder="例：未回廠">
       </div>
       <div>
         <label>加工單價</label><input type="number" id="m-price" min="0" step="0.01" placeholder="0.00" oninput="calcManualAmt()">
@@ -212,13 +215,13 @@ textarea{resize:vertical;min-height:70px}
       <table class="tbl">
         <thead><tr>
           <th style="width:36px"><input type="checkbox" id="order-check-all" onclick="toggleAllOrders(this)" style="cursor:pointer;accent-color:#185FA5"></th>
-          <th>接單日期</th><th>訂單號</th><th>品名</th><th>規格</th>
+          <th>接單日期</th><th>訂單號</th><th>交期</th><th>品名</th><th>規格</th>
           <th class="col-num">數量</th><th class="col-num">單價</th><th class="col-num">加工金額</th>
           <th class="col-num">已加工</th><th class="col-num">未加工</th>
           <th class="col-num">不良品</th><th class="col-num">來料不足</th>
           <th>狀態</th><th>進度</th><th></th>
         </tr></thead>
-        <tbody id="order-tbody"><tr><td colspan="15" style="text-align:center;padding:2rem;color:#aaa">載入中...</td></tr></tbody>
+        <tbody id="order-tbody"><tr><td colspan="16" style="text-align:center;padding:2rem;color:#aaa">載入中...</td></tr></tbody>
       </table>
     </div>
   </div>
@@ -322,6 +325,7 @@ textarea{resize:vertical;min-height:70px}
         <div class="card-title" style="margin:0">待派工訂單</div>
         <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12px;color:#555;cursor:pointer"><input type="checkbox" id="d-show-inprogress" style="width:auto;margin:0" onchange="renderDispatchOrders()"> 顯示加工中（預派用）</label>
       </div>
+      <div id="d-due-alert" style="display:none;font-size:12px;margin-top:6px;padding:6px 10px;background:#FFF8F8;border:1px solid #F5C6C6;border-radius:8px;max-height:170px;overflow-y:auto"></div>
       <div id="d-order-list" style="max-height:280px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;background:#fafafa;margin-top:4px"></div>
       <div id="d-order-info" style="font-size:12px;color:#888;margin-top:8px;line-height:1.8;background:#E3F2FD;border:1px solid #90CAF9;border-radius:8px;padding:8px 10px;display:none"></div>
       <label style="margin-top:12px">指派員工（可多選）</label>
@@ -384,6 +388,13 @@ textarea{resize:vertical;min-height:70px}
     <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7" onclick="exportShippingXlsx()">↓ 匯出 Excel</button>
   </div>
   <div id="rs-note-shipping" style="display:none;font-size:12px;color:#555;background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;padding:6px 12px;margin-bottom:8px"></div>
+  <div style="display:flex;gap:0;background:#fff;border:1px solid #e0e0e0;border-radius:10px;overflow:hidden;margin-bottom:0.75rem;max-width:460px">
+    <button id="ship-mode-order" onclick="setShipMode('order')" style="flex:1;padding:9px;border:none;background:#185FA5;color:#fff;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">依訂單</button>
+    <button id="ship-mode-due" onclick="setShipMode('due')" style="flex:1;padding:9px;border:none;background:#fff;color:#555;font-family:inherit;font-size:13px;cursor:pointer">每日出貨（依交期）</button>
+    <button id="ship-mode-cal" onclick="setShipMode('cal')" style="flex:1;padding:9px;border:none;background:#fff;color:#555;font-family:inherit;font-size:13px;cursor:pointer">月曆</button>
+  </div>
+  <div id="ship-due-view" style="display:none"></div>
+  <div id="ship-order-view">
   <!-- 篩選列 -->
   <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem">
     <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -422,6 +433,7 @@ textarea{resize:vertical;min-height:70px}
       </table>
     </div>
   </div>
+  </div><!-- ship-order-view -->
 </div>
 
 <!-- 打卡記錄 -->
@@ -715,6 +727,14 @@ textarea{resize:vertical;min-height:70px}
   <div class="modal-box">
     <div class="modal-title"><span id="modal-title-txt">派工詳情</span><button class="modal-close" onclick="closeModal()">×</button></div>
     <div id="modal-content"></div>
+  </div>
+</div>
+
+<!-- 交期編輯／匯入預覽 Modal -->
+<div class="modal-overlay" id="due-modal">
+  <div class="modal-box" style="max-width:900px">
+    <div class="modal-title"><span id="due-modal-title">交期</span><button class="modal-close" onclick="closeModal()">×</button></div>
+    <div id="due-modal-content"></div>
   </div>
 </div>
 
@@ -1337,6 +1357,7 @@ function rsFlush(){
   if(RS.mode==='scoped')rsCascade();
   for(const col of cols){try{RS_RENDER[col]();}catch(e){console.error(e);}}
   rsRenderNotes();
+  if(cols.includes('shipments'))dueRerender();else if(cols.includes('orders'))dueLight(); // 交期：出貨／完工量變動
   if(RS.mode==='scoped'){rsReconcile();ldTallyReconcile();}
 }
 // 依 id 清單分批（每批 30 個）開監聽；已開過的 id 不重開
@@ -1613,7 +1634,714 @@ async function rsStart(){
   }
   rsRenderNotes();
 }
+// ══ 交期（2026/11 新增）════════════════════════════════════════════════
+// 資料放在獨立集合 orderDueDates，文件 id = 訂單 id，不改動 orders 原有資料。
+// 每筆交期：{id, kind:'out'(交出；預留 'return' 預計回廠、'customer' 交客戶), date, qty(空=其餘全部), to(交給誰), note, delivered(已交), origDate(第一次的日期), changes:[{from,to,at}]}
+// 缺口計算：依交期由早到晚累計需求量，和訂單「已回報量」（完工＋不良＋來料不足，同訂單列表的「未加工」算法）比較。
+// 讀取：只常駐監聽「還有未交批次」的文件（open==true）；全部已交的文件點開才讀。
+const DUE_ORANGE_DAYS=3,DUE_YELLOW_DAYS=7;
+let sortByDue=false; // 訂單列表：依交期排序
+window.DUE=new Map();        // 常駐：open==true
+const DUE_EXTRA=new Map();   // 按需：已全部交貨（或剛從常駐移出）
+const DUE_FETCHED=new Set(); // 已向伺服器查過（不論有沒有文件）
+let _dueRenderTimer=null;
+function dueGet(orderId){const k=String(orderId);return DUE.get(k)||DUE_EXTRA.get(k)||null;}
+function dueEsc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function dueRerender(){
+  if(_dueRenderTimer)return;
+  _dueRenderTimer=setTimeout(()=>{_dueRenderTimer=null;
+    for(const f of [renderOrders,renderDispatchOrders,()=>{if(_shipMode!=='order')renderShipping();},dueReconcile]){try{f();}catch(e){console.error(e);}}
+  },50);
+}
+function dueListen(){
+  let tries=0;
+  const start=()=>{
+    db.collection('orderDueDates').where('open','==',true).onSnapshot(snap=>{
+      snap.docChanges().forEach(ch=>{
+        const d={id:ch.doc.id,...ch.doc.data()};
+        if(ch.type==='removed'){
+          // 移出常駐（全部已交或被刪除）：這裡帶的是舊資料，不能直接用；本機剛存的較新版本保留，否則重讀一次
+          DUE.delete(d.id);
+          const ex=DUE_EXTRA.get(d.id);
+          if(!ex||(ex.updatedAt||'')<=(d.updatedAt||'')){DUE_EXTRA.delete(d.id);DUE_FETCHED.delete(d.id);dueEnsure(d.id).then(dueRerender);}
+        }
+        else{DUE.set(d.id,d);DUE_EXTRA.delete(d.id);}
+      });
+      tries=0;dueRerender();
+    },err=>{
+      console.warn('[交期] 監聽失敗，稍後重試',err);
+      const wait=Math.min(300000,30000*Math.pow(2,tries++));
+      setTimeout(start,wait);
+    });
+  };
+  start();
+}
+// 沒有常駐的訂單（例如已全部交貨），點開時才讀一次
+async function dueEnsure(orderId){
+  const k=String(orderId);
+  if(DUE.has(k)||DUE_EXTRA.has(k)||DUE_FETCHED.has(k))return;
+  try{
+    const s=await db.collection('orderDueDates').doc(k).get();
+    DUE_FETCHED.add(k);
+    if(s.exists)DUE_EXTRA.set(k,{id:k,...s.data()});
+  }catch(e){console.warn('[交期] 讀取失敗',e);}
+}
+function dueDocMeta(entries,o){
+  const dates=entries.map(e=>e.date).filter(Boolean).sort();
+  const m={maxDate:dates[dates.length-1]||'',months:[...new Set(dates.map(d=>d.slice(0,7)))]};
+  if(o)m.snap={orderno:o.orderno||'',name:o.name||'',spec:o.spec||'',qty:o.qty||0};
+  return m;
+}
+async function dueSave(orderId,entries,oHint){
+  const k=String(orderId),ref=db.collection('orderDueDates').doc(k);
+  if(!entries.length){await ref.delete();DUE.delete(k);DUE_EXTRA.delete(k);DUE_FETCHED.add(k);return;}
+  const o=oHint||window.DB.orders.find(x=>x.id===k);
+  const open=o?dueCalc(o,{entries}).some(e=>!e.finished):entries.some(e=>!e.delivered);
+  const doc={orderId:k,entries,open,...dueDocMeta(entries,o),updatedAt:new Date().toISOString()};
+  await ref.set(doc);
+  if(doc.open){DUE.set(k,{id:k,...doc});DUE_EXTRA.delete(k);}else{DUE.delete(k);DUE_EXTRA.set(k,{id:k,...doc});}
+}
+// 訂單被刪除時一併刪除交期（沒有交期文件時不會出錯）
+async function dueDelete(orderId){
+  const k=String(orderId);
+  try{await db.collection('orderDueDates').doc(k).delete();}catch(e){console.warn('[交期] 刪除失敗',e);}
+  DUE.delete(k);DUE_EXTRA.delete(k);
+}
+function dueNewId(i){return 'E'+Date.now().toString(36).toUpperCase()+(i==null?'':String(i).padStart(3,'0'));}
+// 日期解析：2026/11/9、2026-11-09、2026.11.9、115/11/9（民國）、11/9（自動補年份）、Excel 日期序號
+function dueParseDate(raw){
+  const s=String(raw==null?'':raw).trim();if(!s)return null;
+  let y,m,d,mt;
+  if((mt=s.match(/^(\d{3,4})[\/\-.](\d{1,2})[\/\-.](\d{1,2})$/))){y=+mt[1];m=+mt[2];d=+mt[3];if(y<1911)y+=1911;}
+  else if((mt=s.match(/^(\d{1,2})[\/\-.](\d{1,2})$/))){
+    m=+mt[1];d=+mt[2];
+    const today=twToday();y=+today.slice(0,4);
+    const cand=`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    if(dueDaysBetween(today,cand)<-180)y++; // 例如 12 月輸入 1/5 → 明年
+  }else if(/^\d{5}$/.test(s)&&+s>40000&&+s<60000){ // Excel 日期序號
+    const dt=new Date(Date.UTC(1899,11,30)+(+s)*864e5);return dt.toISOString().slice(0,10);
+  }else return null;
+  if(m<1||m>12||d<1||d>31)return null;
+  const dt=new Date(Date.UTC(y,m-1,d));
+  if(dt.getUTCMonth()!==m-1||dt.getUTCDate()!==d)return null; // 例如 2/30
+  return dt.toISOString().slice(0,10);
+}
+function dueDaysBetween(from,to){return Math.round((Date.parse(to+'T00:00:00Z')-Date.parse(from+'T00:00:00Z'))/864e5);}
+function dueFmt(date){if(!date)return'';return date.slice(0,4)===twToday().slice(0,4)?date.slice(5).replace('-','/'):date.replace(/-/g,'/');}
+function dueDaysTxt(n){return n<0?`逾期 ${-n} 天`:n===0?'今天':`剩 ${n} 天`;}
+// 依交期由早到晚分配已回報量，算出每一筆的缺口
+function dueCalc(o,doc){
+  const ents=((doc&&doc.entries)||[]).map((e,i)=>({...e,_i:i}))
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||'')||a._i-b._i);
+  const qty=(o&&o.qty)||0;
+  const fixed=ents.reduce((s,e)=>s+(e.qty>0?e.qty:0),0);
+  let avail=o?(o.done||0)+(o.defect||0)+(o.shortage||0):0;   // 派工角度：已回報量
+  let availDone=o?(o.done||0):0;                                   // 出貨角度：完工（好的成品）
+  let availShip=o?dueShippedQty(o.id):0;                           // 出貨紀錄
+  const today=twToday();
+  return ents.map(e=>{
+    const need=e.qty>0?e.qty:Math.max(0,qty-fixed);
+    const cov=Math.min(avail,need);avail-=cov;
+    const doneCov=Math.min(availDone,need);availDone-=doneCov;
+    let shipCov=0;if(!e.delivered){shipCov=Math.min(availShip,need);availShip-=shipCov;} // 手動完成的批次不分配出貨量
+    const shipped=!e.delivered&&need>0&&shipCov>=need;
+    const finished=!!e.delivered||need<=0||shipped;
+    return{...e,need,cov,gap:finished?0:need-cov,doneCov,shipCov,shipped,finished,days:dueDaysBetween(today,e.date)};
+  });
+}
+// 這張訂單的出貨總量（與出貨管理相同算法）
+function dueShippedQty(orderId){
+  let n=0;for(const s of window.DB.shipments)for(const a of (s.allocations||[]))if(a.orderId===orderId)n+=(a.qty||0);
+  return n;
+}
+// 出貨角度的狀態
+function dueShipState(e){
+  if(e.finished)return{k:'done',t:e.delivered?'✓ 已完成':'✓ 已出貨',c:'#9E9E9E',bg:'#F5F5F5'};
+  const remain=e.need-e.shipCov,made=Math.max(0,e.doneCov-e.shipCov);
+  if(made>=remain)return{k:'ready',t:'可出貨',c:'#2E7D32',bg:'#E8F5E9',made:remain,remain};
+  if(made>0)return{k:'part',t:`部分做好（可出 ${made}）`,c:'#1565C0',bg:'#E3F2FD',made,remain};
+  const red=e.days<=0;
+  return{k:'none',t:'未做好',c:red?'#C62828':'#E65100',bg:red?'#FFEBEE':'#FFF3E0',made:0,remain};
+}
+function dueSummary(o){
+  const doc=dueGet(o.id);if(!doc||!(doc.entries||[]).length)return null;
+  const list=dueCalc(o,doc),pend=list.filter(e=>!e.finished);
+  const gapE=pend.find(e=>e.gap>0);
+  return{list,pend,next:gapE||pend[0]||null,hasGap:!!gapE};
+}
+// 急迫程度：red 逾期或今天、orange 3 天內、yellow 7 天內、normal 之後、ready 已做齊待交、done 全部已交
+function dueLevel(s){
+  if(!s)return null;
+  if(!s.next)return'done';
+  if(!s.hasGap)return'ready';
+  const n=s.next.days;
+  return n<=0?'red':n<=DUE_ORANGE_DAYS?'orange':n<=DUE_YELLOW_DAYS?'yellow':'normal';
+}
+const DUE_STYLE={red:['#C62828','#FFEBEE'],orange:['#E65100','#FFF3E0'],yellow:['#8D6E00','#FFF8E1'],normal:['#455A64','#ECEFF1'],ready:['#2E7D32','#E8F5E9'],done:['#9E9E9E','#F5F5F5']};
+// 排序用：有缺口的依最早缺口日期、已做齊待交的其次、沒有交期的最後
+function dueSortKey(o){
+  const s=dueSummary(o);
+  if(s&&s.hasGap)return'0'+s.next.date;
+  if(s&&s.next)return'1'+s.next.date;
+  return'2';
+}
+// 訂單列表的「交期」欄
+function dueCellHtml(o){
+  const s=dueSummary(o),lv=dueLevel(s);
+  const click=`onclick="openDueEditor('${o.id}')" style="cursor:pointer;white-space:nowrap;min-width:92px" title="點擊編輯交期"`;
+  if(!s){
+    const st=getOrderStatus(o);
+    return`<td ${click}><span style="color:#bbb;font-size:12px">${st==='已完成'?'—':'＋交期'}</span></td>`;
+  }
+  const [c,bg]=DUE_STYLE[lv];
+  if(lv==='done'){
+    const last=s.list[s.list.length-1];
+    return`<td ${click}><span style="color:${c};font-size:12px">✓ ${s.list.some(x=>x.shipped)?'已出貨':'已完成'} ${dueFmt(last.date)}</span></td>`;
+  }
+  const e=s.next;
+  // 比這批更早、已做齊但還沒勾「已交」的批次：提醒要交貨
+  const readyBefore=s.pend.filter(x=>x!==e&&x.gap<=0&&(x.date||'')<=(e.date||''));
+  const more=s.pend.length-1-readyBefore.length;
+  const readyH=readyBefore.length?`<div style="font-size:10px;color:#2E7D32">${readyBefore.map(x=>dueFmt(x.date)).join('、')} 已做齊待交</div>`:'';
+  const orig=e.origDate&&e.origDate!==e.date?`<div style="font-size:10px;color:#999">（原 ${dueFmt(e.origDate)}）</div>`:'';
+  const line2=lv==='ready'?'已做齊・待交':`缺 ${e.gap}`;
+  return`<td ${click}>
+    <div style="display:inline-block;padding:2px 6px;border-radius:6px;background:${bg};color:${c};font-weight:600;font-size:12px">${dueFmt(e.date)}・${dueDaysTxt(e.days)}</div>
+    <div style="font-size:11px;color:${c}">${line2}${e.to?`・交${dueEsc(e.to)}`:''}</div>
+    ${e.note?`<div style="font-size:11px;color:#E65100">${dueEsc(e.note)}</div>`:''}${orig}
+    ${readyH}${more>0?`<div style="font-size:10px;color:#888">另有 ${more} 批</div>`:''}
+  </td>`;
+}
+// 分組列：顯示組內最急的一筆
+function dueGroupCellHtml(orders){
+  let best=null,bestKey='3';
+  for(const o of orders){const k=dueSortKey(o);if(k<bestKey){bestKey=k;best=o;}}
+  if(!best||bestKey==='2')return'<td></td>';
+  const s=dueSummary(best),lv=dueLevel(s),[c,bg]=DUE_STYLE[lv],e=s.next;
+  return`<td style="white-space:nowrap"><span style="display:inline-block;padding:2px 6px;border-radius:6px;background:${bg};color:${c};font-weight:600;font-size:12px">${dueFmt(e.date)}・${dueDaysTxt(e.days)}</span></td>`;
+}
+// 訂單詳情裡的交期摘要
+function dueDetailHtml(o){
+  const s=dueSummary(o);
+  const noteH=o.note?`<div style="color:#E65100">📝 備註：${dueEsc(o.note)}</div>`:'';
+  const btn=`<button class="btn btn-sm" onclick="openDueEditor('${o.id}')" style="font-size:11px;padding:3px 8px">編輯交期／備註</button>`;
+  if(!s)return`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">${noteH}<span style="color:#aaa">尚未設定交期</span>${btn}</div>`;
+  const rows=s.list.map(e=>{
+    const ss=dueShipState(e);
+    const st=e.finished?`<span style="color:#9E9E9E">${ss.t}</span>`:(e.gap>0?`<span style="color:#C62828">缺 ${e.gap}</span>・`:'')+`<span style="color:${ss.c}">${ss.t}</span>${e.shipCov?`<span style="color:#888">（已出 ${e.shipCov}）</span>`:''}`;
+    return`<div>📅 <b>${dueFmt(e.date)}</b>${e.origDate&&e.origDate!==e.date?`<span style="color:#999">（原 ${dueFmt(e.origDate)}）</span>`:''}　${e.qty>0?e.qty+' 件':'其餘全部（'+e.need+' 件）'}${e.to?'・交'+dueEsc(e.to):''}　${st}${e.note?`　<span style="color:#E65100">${dueEsc(e.note)}</span>`:''}</div>`;
+  }).join('');
+  return`<div style="display:grid;gap:3px">${noteH}${rows}<div>${btn}</div></div>`;
+}
+
+// ── 交期編輯視窗 ──
+window._dueEdit=null;
+window.openDueEditor=async function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  const content=document.getElementById('due-modal-content');
+  document.getElementById('due-modal-title').textContent='交期／備註';
+  content.innerHTML='<div style="text-align:center;color:#888;padding:1rem">⏳ 載入中...</div>';
+  document.getElementById('due-modal').style.display='flex';
+  await dueEnsure(orderId);
+  const doc=dueGet(orderId);
+  const calc=new Map(dueCalc(o,doc).map(e=>[e.id,e]));
+  const entries=((doc&&doc.entries)||[]).map(e=>({...e}))
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  window._dueEdit={orderId,orig:new Map(entries.map(e=>[e.id,e]))};
+  const toList=new Set();for(const m of [DUE,DUE_EXTRA])for(const d of m.values())(d.entries||[]).forEach(e=>{if(e.to)toList.add(e.to);});
+  const reported=(o.done||0)+(o.defect||0)+(o.shortage||0);
+  content.innerHTML=`
+    <div style="font-size:13px;margin-bottom:10px">
+      <div style="font-size:15px;font-weight:700">${dueEsc(o.name)}${o.spec?` <span style="font-weight:400;color:#888">(${dueEsc(o.spec)})</span>`:''}</div>
+      <div style="color:#666">訂單號 ${dueEsc(o.orderno||'-')}・數量 <b>${o.qty}</b>・已回報 <b>${reported}</b>（完工 ${o.done||0}）</div>
+    </div>
+    <label style="margin-top:0">訂單備註</label>
+    <input type="text" id="due-order-note" value="${dueEsc(o.note||'')}" placeholder="例：未回廠、已磨待振">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:14px 0 6px">
+      <span style="font-size:13px;font-weight:600">交期（可分批）</span>
+      <button class="btn btn-sm" onclick="dueAddRow()">＋ 新增一批</button>
+    </div>
+    <div class="tbl-wrap"><table class="tbl"><thead><tr>
+      <th>交期</th><th class="col-num">數量</th><th>交給</th><th>註記</th><th title="通常不用勾：出貨後會自動完成">手動完成</th><th>目前狀態</th><th></th>
+    </tr></thead><tbody id="due-rows"></tbody></table></div>
+    <datalist id="due-to-list">${[...toList].sort().map(t=>`<option value="${dueEsc(t)}">`).join('')}</datalist>
+    <div style="font-size:11px;color:#888;margin-top:6px">數量空白＝訂單其餘全部（只能有一筆空白）。改日期時會自動保留原交期。<b>出貨管理按「出貨」後會自動依交期先後完成各批</b>；「手動完成」只在取消這批、或沒經過出貨紀錄就交貨時才勾。</div>
+    <div id="due-err" style="color:#C62828;font-size:12px;margin-top:6px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-sm" onclick="dueSaveEditor()">儲存</button>
+      <button class="btn btn-sm" onclick="closeModal()">取消</button>
+    </div>`;
+  const tb=document.getElementById('due-rows');
+  tb.innerHTML=entries.map(e=>dueRowHtml(e,calc.get(e.id))).join('');
+  if(!entries.length)dueAddRow();
+};
+function dueRowHtml(e,c){
+  let st='<span style="color:#aaa">新增</span>';
+  if(c){const ss=dueShipState(c);st=c.finished?`<span style="color:#9E9E9E">${ss.t}</span>`:(c.gap>0?`<span style="color:#C62828">缺 ${c.gap}</span>・`:'')+`<span style="color:${ss.c}">${ss.t}</span>・已出 ${c.shipCov}/${c.need}`;}
+  return`<tr data-id="${e.id||''}">
+    <td><input type="date" class="due-date" value="${e.date||''}" style="width:140px">${e.origDate&&e.origDate!==e.date?`<div style="font-size:10px;color:#999">原 ${dueFmt(e.origDate)}</div>`:''}</td>
+    <td class="col-num"><input type="number" class="due-qty" min="1" value="${e.qty>0?e.qty:''}" placeholder="其餘全部" style="width:90px;text-align:right"></td>
+    <td><input type="text" class="due-to" list="due-to-list" value="${dueEsc(e.to||'')}" placeholder="例：富" style="width:80px"></td>
+    <td><input type="text" class="due-note" value="${dueEsc(e.note||'')}" placeholder="選填" style="width:140px"></td>
+    <td style="text-align:center"><input type="checkbox" class="due-done" ${e.delivered?'checked':''} style="accent-color:#185FA5;width:18px;height:18px"></td>
+    <td style="font-size:12px;white-space:nowrap">${st}</td>
+    <td><button class="btn btn-sm btn-danger" onclick="this.closest('tr').remove()" title="刪除這一批">🗑</button></td>
+  </tr>`;
+}
+window.dueAddRow=function(){
+  const tb=document.getElementById('due-rows');if(!tb)return;
+  tb.insertAdjacentHTML('beforeend',dueRowHtml({},null));
+};
+window.dueSaveEditor=async function(){
+  const ed=window._dueEdit;if(!ed)return;
+  const o=window.DB.orders.find(x=>x.id===ed.orderId);if(!o)return;
+  const errEl=document.getElementById('due-err');errEl.textContent='';
+  const now=new Date().toISOString(),out=[];let blankQty=0,i=0;
+  for(const tr of document.querySelectorAll('#due-rows tr')){
+    const date=tr.querySelector('.due-date').value,qRaw=tr.querySelector('.due-qty').value.trim();
+    const to=tr.querySelector('.due-to').value.trim(),note=tr.querySelector('.due-note').value.trim();
+    const delivered=tr.querySelector('.due-done').checked;
+    if(!date&&!qRaw&&!to&&!note)continue; // 空白列略過
+    if(!date){errEl.textContent='有一批沒有填交期日期';return;}
+    let qty=null;
+    if(qRaw){qty=Number(qRaw);if(!Number.isInteger(qty)||qty<1){errEl.textContent=`數量「${qRaw}」不正確（需為正整數，或空白代表其餘全部）`;return;}}
+    else blankQty++;
+    const old=ed.orig.get(tr.dataset.id);
+    const e=old?{...old}:{id:dueNewId(i),kind:'out',createdAt:now};
+    if(old&&old.date&&old.date!==date){
+      e.origDate=old.origDate||old.date;
+      e.changes=[...(old.changes||[]),{from:old.date,to:date,at:now}];
+    }
+    Object.assign(e,{date,qty,to,note,delivered});
+    if(delivered&&!(old&&old.delivered))e.deliveredAt=now;
+    if(!delivered)delete e.deliveredAt;
+    out.push(e);i++;
+  }
+  if(blankQty>1){errEl.textContent='只能有一批的數量空白（代表其餘全部），其他批請填數量';return;}
+  const fixed=out.reduce((s,e)=>s+(e.qty||0),0);
+  if(fixed>(o.qty||0)&&!confirm(`各批數量合計 ${fixed}，超過訂單數量 ${o.qty}。仍要儲存？`))return;
+  setSS('syncing');
+  try{
+    const note=document.getElementById('due-order-note').value.trim();
+    if(note!==(o.note||'')){
+      await db.collection('orders').doc(o.id).update({note:note?note:firebase.firestore.FieldValue.delete()});
+    }
+    await dueSave(o.id,out,{...o,note});
+    setSS('ok');closeModal();toast('交期已儲存');dueRerender();
+  }catch(e){console.error(e);setSS('err');errEl.textContent='儲存失敗：'+(e.message||e);}
+};
+
+// ── Excel 貼上匯入（含預覽）──
+// 欄位固定：接單日期 / 訂單號 / 品名 / 規格 / 數量 / 備註 / 交期（後兩欄可省略）；單價一律從品名資料庫帶入
+window._impRows=null;
+window.parseOrderPaste=function(){
+  const raw=document.getElementById('order-paste-input').value.replace(/\r/g,'');
+  if(!raw.trim()){alert('請先貼上資料');return;}
+  const lines=raw.split('\n').filter(l=>l.trim());
+  const rows=[];
+  lines.forEach((line,idx)=>{
+    const cols=line.split('\t').map(c=>c.trim());
+    while(cols.length>5&&cols[cols.length-1]==='')cols.pop(); // 行尾多餘的空白欄
+    const [dateVal='',orderno='',name='',spec='',qtyRaw='',note='',dueRaw='']=cols;
+    if(idx===0&&(name.includes('品名')||dateVal.includes('日期')))return; // 標題列
+    const r={line:idx+1,dateVal,orderno,name,spec,qtyRaw,note,dueRaw,errs:[],warns:[]};
+    if(cols.length>7)r.errs.push(`有 ${cols.length} 欄（最多 7 欄），請確認欄位順序`);
+    if(!name)r.errs.push('沒有品名');
+    const q=Number(String(qtyRaw).replace(/,/g,''));
+    if(!qtyRaw||!Number.isFinite(q)||q<=0)r.errs.push(`數量「${qtyRaw}」不正確`);else r.qty=q;
+    if(dateVal){r.date=dueParseDate(dateVal);if(!r.date)r.errs.push(`接單日期「${dateVal}」看不懂`);}else r.date='';
+    if(dueRaw){r.due=dueParseDate(dueRaw);if(!r.due)r.errs.push(`交期「${dueRaw}」不是日期`);}
+    const p=lookupProductBySpec(name,spec)||lookupProduct(name);
+    r.price=p?p.price:0;
+    if(name&&!p)r.warns.push('資料庫無此品名，單價 0（匯入後可修改）');
+    if(note){
+      const ds=[...note.matchAll(/(\d{1,2})\/(\d{1,2})/g)].map(m=>dueParseDate(m[0])).filter(Boolean);
+      const other=ds.filter(d=>d!==r.due);
+      if(other.length)r.warns.push(`備註含日期 ${other.map(dueFmt).join('、')}，是否要分批交期？（匯入後到「交期」欄加一批）`);
+    }
+    if(!r.errs.length&&orderno&&window.DB.orders.some(o=>o.orderno===orderno&&o.name===name&&(o.spec||'')===(spec||'')))r.warns.push('與現有訂單重複（匯入時會詢問覆蓋或跳過）');
+    rows.push(r);
+  });
+  if(!rows.length){alert('無法解析資料，請確認格式');return;}
+  window._impRows=rows;
+  const ok=rows.filter(r=>!r.errs.length).length,bad=rows.length-ok;
+  document.getElementById('due-modal-title').textContent='匯入預覽';
+  document.getElementById('due-modal-content').innerHTML=`
+    <div style="font-size:13px;margin-bottom:8px">共 ${rows.length} 列：<b style="color:#2E7D32">可匯入 ${ok}</b>${bad?`・<b style="color:#C62828">有錯誤 ${bad}（不會匯入）</b>`:''}</div>
+    <div class="tbl-wrap"><table class="tbl" style="font-size:12px"><thead><tr>
+      <th>列</th><th>接單日期</th><th>訂單號</th><th>品名</th><th>規格</th><th class="col-num">數量</th><th class="col-num">單價</th><th>備註</th><th>交期</th><th>說明</th>
+    </tr></thead><tbody>${rows.map(r=>{
+      const bg=r.errs.length?'#FFEBEE':r.warns.length?'#FFF8E1':'';
+      const msg=[...r.errs.map(m=>`<div style="color:#C62828">✕ ${dueEsc(m)}</div>`),...r.warns.map(m=>`<div style="color:#8D6E00">⚠ ${dueEsc(m)}</div>`)].join('')||'<span style="color:#2E7D32">✓</span>';
+      return`<tr style="background:${bg}"><td>${r.line}</td><td style="white-space:nowrap">${dueEsc(r.date||r.dateVal)}</td><td>${dueEsc(r.orderno)}</td><td style="font-weight:600">${dueEsc(r.name)}</td><td>${dueEsc(r.spec)}</td><td class="col-num">${dueEsc(r.qtyRaw)}</td><td class="col-num">${r.price?'$'+r.price:'<span style="color:#8D6E00">0</span>'}</td><td>${dueEsc(r.note)}</td><td style="white-space:nowrap">${r.due?dueFmt(r.due):dueEsc(r.dueRaw)}</td><td>${msg}</td></tr>`;
+    }).join('')}</tbody></table></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-sm" onclick="confirmOrderImport()" ${ok?'':'disabled'}>確認匯入 ${ok} 筆</button>
+      <button class="btn btn-sm" onclick="closeModal()">返回修改</button>
+    </div>`;
+  document.getElementById('due-modal').style.display='flex';
+};
+window.confirmOrderImport=async function(){
+  const rows=(window._impRows||[]).filter(r=>!r.errs.length);if(!rows.length)return;
+  const skipped=(window._impRows||[]).length-rows.length;
+  window._impRows=null;closeModal();
+  const imported=[],dueOf=new Map(),base=Date.now().toString(36).toUpperCase(),now=new Date().toISOString();
+  rows.forEach((r,i)=>{
+    const uid=`ORD-${base}-${String(i).padStart(3,'0')}`;
+    const o={id:uid,date:r.date,orderno:r.orderno,name:r.name,spec:r.spec,qty:r.qty,price:r.price,done:0,defect:0,shortage:0,closed:false,createdAt:now};
+    if(r.note)o.note=r.note;
+    imported.push(o);
+    if(r.due)dueOf.set(uid,r.due);
+  });
+  await importOrdersCommit(imported,skipped,dueOf);
+};
+// 以下沿用原本的重複偵測與寫入流程；新增：覆蓋時一併刪除舊訂單的交期、寫入新訂單的交期
+async function importOrdersCommit(imported,skipped,dueOf){
+  // 偵測重複：以訂單號+品名+規格比對
+  const duplicates=imported.filter(imp=>
+    window.DB.orders.some(o=>
+      o.orderno&&imp.orderno&&o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||'')
+    )
+  );
+
+  let toImport=imported;
+  if(duplicates.length>0){
+    const dupList=duplicates.map(d=>`${d.orderno} ${d.name}${d.spec?' '+d.spec:''}`).join('\n');
+    const dupOld=window.DB.orders.filter(o=>duplicates.some(imp=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''))).map(o=>o.id);
+    if(!rsGuard(dupOld,false,()=>importOrdersCommit(imported,skipped,dueOf)))return;
+    const choice=confirm(`發現 ${duplicates.length} 筆重複訂單：\n${dupList}\n\n點「確定」→ 覆蓋重複的訂單\n點「取消」→ 跳過重複，只匯入新訂單`);
+    if(choice){
+      // 覆蓋：刪除舊的重複訂單，全部匯入
+      for(const imp of duplicates){
+        const old=window.DB.orders.find(o=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''));
+        if(old){
+          await db.collection('orders').doc(old.id).delete();
+          const toDelete=window.DB.dispatches.filter(d=>d.orderId===old.id);
+          for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
+          await dueDelete(old.id);
+        }
+      }
+    }else{
+      // 跳過：排除重複的
+      toImport=imported.filter(imp=>
+        !window.DB.orders.some(o=>
+          o.orderno&&imp.orderno&&o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||'')
+        )
+      );
+    }
+  }
+
+  if(!toImport.length){toast('無新訂單需要匯入');return;}
+  toast(`匯入中，共 ${toImport.length} 筆，請稍候...`);
+  let count=0,dueN=0;
+  const now=new Date().toISOString();
+  for(const o of toImport){
+    await saveOrder(o);
+    const due=dueOf&&dueOf.get(o.id);
+    if(due){
+      try{await dueSave(o.id,[{id:dueNewId(count),kind:'out',date:due,qty:null,to:'',note:'',delivered:false,createdAt:now}],o);dueN++;}
+      catch(e){console.warn('[交期] 匯入寫入失敗',o.id,e);}
+    }
+    count++;
+    if(count%5===0)toast(`匯入中 ${count}/${toImport.length}...`);
+  }
+  closePanel('order-paste-panel');document.getElementById('order-paste-input').value='';
+  toast(`成功匯入 ${toImport.length} 筆${dueN?`（含交期 ${dueN} 筆）`:''}${skipped?`，略過有錯誤的 ${skipped} 列`:''}${duplicates.length?`，處理重複 ${duplicates.length} 筆`:''}${prodImportEstText(toImport)}`)
+}
+window.toggleSortByDue=function(btn){
+  sortByDue=!sortByDue;
+  btn.classList.toggle('active',sortByDue);
+  renderOrders();
+};
+
+
+// ══ 交期：自動維護 open（決定哪些交期文件要常駐讀取）══════════════════
+// 全部批次都完成（出貨量足夠或手動完成）→ open=false，之後不再常駐讀取。
+// 只在資料「足夠」時往 false 寫：出貨資料還沒讀完只會讓數量偏少，不會誤判成已完成。
+// 刪除出貨、改訂單數量時，把訂單放進 DUE_RECHECK，重新確認是否要改回 open=true。
+const DUE_WRITING=new Set(),DUE_RECHECK=new Map(); // 訂單 id → 資料已更新到位的判斷
+function dueWriteState(id,patch,base){
+  DUE_WRITING.add(id);patch.updatedAt=new Date().toISOString();
+  if(patch.open===false){DUE.delete(id);DUE_EXTRA.set(id,{...base,...patch});}
+  db.collection('orderDueDates').doc(id).update(patch).catch(e=>console.warn('[交期] 狀態更新失敗',e)).finally(()=>DUE_WRITING.delete(id));
+}
+function dueReconcile(){
+  if(RS.mode==='loading')return;
+  const om=new Map(window.DB.orders.map(o=>[String(o.id),o]));
+  for(const [id,d] of [...DUE]){
+    if(DUE_WRITING.has(id))continue;
+    const o=om.get(id);
+    if(!o){
+      // 訂單沒在畫面上（例如已結案）：讀一次那張訂單；確定不存在才標記 open=false（資料保留）
+      if(RS.mode==='scoped'&&RS.ready.get('o:open')){
+        if(!RS.sticky.has(id)){RS.sticky.add(id);rsMark('orders');}
+        else{const k=RS.ordChunkOf.get(id);if(k&&RS.ready.get(k))dueWriteState(id,{open:false,orphan:true},d);}
+      }
+      continue;
+    }
+    const list=dueCalc(o,d);
+    if(list.length&&list.every(e=>e.finished))dueWriteState(id,{open:false,...dueDocMeta(d.entries||[],o)},d);
+  }
+  for(const [id,readyFn] of [...DUE_RECHECK]){
+    if(DUE.has(id)){DUE_RECHECK.delete(id);continue;}
+    const d=DUE_EXTRA.get(id),o=om.get(id);
+    if(!d){if(DUE_FETCHED.has(id))DUE_RECHECK.delete(id);continue;}
+    if(!o||DUE_WRITING.has(id))continue;
+    if(readyFn&&!readyFn(o))continue; // 刪除的出貨／新數量還沒反映到畫面資料：等下一次
+    DUE_RECHECK.delete(id);
+    if(dueCalc(o,d).some(e=>!e.finished))dueWriteState(id,{open:true},d);
+  }
+}
+// 訂單變動（完工量等）：訂單與派工清單已由原本流程重繪，這裡只更新出貨的交期檢視與 open 狀態
+let _dueLightTimer=null;
+function dueLight(){
+  if(_dueLightTimer)return;
+  _dueLightTimer=setTimeout(()=>{_dueLightTimer=null;try{if(_shipMode!=='order')renderShipping();dueReconcile();}catch(e){console.error(e);}},60);
+}
+function dueRecheck(orderIds,readyFn){
+  for(const raw of orderIds){const id=String(raw);DUE_RECHECK.set(id,readyFn||null);dueEnsure(id).then(dueRerender);}
+}
+
+// ══ 出貨管理：依訂單／每日出貨（依交期）／月曆 ══════════════════════════
+let _shipMode='order';
+let _calMonth='';
+const DUE_HIST=new Map(); // 月份 → {state:'loading'|'loaded', ids:Set, at}
+window.setShipMode=function(m){
+  _shipMode=m;
+  ['order','due','cal'].forEach(k=>{
+    const b=document.getElementById('ship-mode-'+k);
+    if(b){b.style.background=k===m?'#185FA5':'#fff';b.style.color=k===m?'#fff':'#555';b.style.fontWeight=k===m?'600':'400';}
+  });
+  document.getElementById('ship-order-view').style.display=m==='order'?'':'none';
+  document.getElementById('ship-due-view').style.display=m==='order'?'none':'';
+  renderShipping();
+};
+const DUE_WD='日一二三四五六';
+function dueWeekday(date){return DUE_WD[new Date(date+'T00:00:00Z').getUTCDay()];}
+function dueDayLabel(date){
+  const n=dueDaysBetween(twToday(),date);
+  const rel=n===0?'今天':n===1?'明天':n===2?'後天':'';
+  return`${dueFmt(date)}（${dueWeekday(date)}）${rel?' '+rel:''}`;
+}
+// 所有已載入訂單的交期批次
+function dueShipItems(){
+  const items=[];
+  for(const o of window.DB.orders){
+    const doc=dueGet(o.id);if(!doc)continue;
+    for(const e of dueCalc(o,doc))items.push({o,e,st:dueShipState(e)});
+  }
+  return items;
+}
+function dueShipKw(){const el=document.getElementById('ship-due-kw');return el?el.value.trim().toLowerCase():'';}
+function dueItemMatch(it,kw){
+  if(!kw)return true;
+  return matchOrder(it.o,kw)||(it.e.to||'').toLowerCase().includes(kw)||(it.o.note||'').toLowerCase().includes(kw);
+}
+function dueShipRow(it){
+  const {o,e,st}=it;
+  const btn=(!e.finished&&st.made>0)?`<button class="btn btn-sm btn-primary" style="font-size:12px" onclick="openShipModal('${o.id}',${st.made},'${dueEsc(('交期 '+dueFmt(e.date)+(e.to?' 交'+e.to:'')).replace(/'/g,''))}')">出貨</button>`:'';
+  return`<tr style="${e.finished?'opacity:0.55':''}">
+    <td style="color:#185FA5;font-weight:600;white-space:nowrap">${dueEsc(o.orderno||'-')}</td>
+    <td><span style="font-weight:600;cursor:pointer" onclick="openDueEditor('${o.id}')" title="編輯交期">${dueEsc(o.name)}</span>${o.spec?` <span style="color:#888">(${dueEsc(o.spec)})</span>`:''}
+      ${o.note?`<div style="font-size:11px;color:#E65100">📝 ${dueEsc(o.note)}</div>`:''}${e.note?`<div style="font-size:11px;color:#E65100">${dueEsc(e.note)}</div>`:''}</td>
+    <td>${dueEsc(e.to||'')}</td>
+    <td class="col-num" style="font-weight:600">${e.need}</td>
+    <td class="col-num" style="color:#2E7D32">${Math.min(e.doneCov,e.need)}</td>
+    <td class="col-num" style="color:#185FA5">${e.delivered?'—':e.shipCov}</td>
+    <td style="white-space:nowrap"><span style="padding:2px 8px;border-radius:12px;font-size:11px;background:${st.bg};color:${st.c};font-weight:600">${st.t}</span>${(!e.finished&&e.gap>0)?`<div style="font-size:11px;color:#C62828">缺 ${e.gap} 待派工</div>`:''}</td>
+    <td>${btn}</td>
+  </tr>`;
+}
+function dueShipTable(rows){
+  return`<div class="tbl-wrap"><table class="tbl" style="min-width:760px;table-layout:fixed"><colgroup><col style="width:11%"><col style="width:27%"><col style="width:8%"><col style="width:8%"><col style="width:9%"><col style="width:9%"><col style="width:19%"><col style="width:9%"></colgroup><thead><tr>
+    <th>訂單號</th><th>品名／規格</th><th>交給</th><th class="col-num">這批</th><th class="col-num" style="color:#2E7D32">已做好</th><th class="col-num" style="color:#185FA5">已出貨</th><th>狀態</th><th></th>
+  </tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function renderShipDue(){
+  const box=document.getElementById('ship-due-view');if(!box)return;
+  if(_shipMode==='cal'){renderShipCal(box);return;}
+  const today=twToday(),kw=dueShipKw();
+  const showDone=!!document.getElementById('ship-due-showdone')?.checked;
+  const items=dueShipItems().filter(it=>dueItemMatch(it,kw));
+  const over=items.filter(it=>!it.e.finished&&it.e.date<today);
+  const byDate=new Map();
+  for(const it of items){
+    if(it.e.date<today)continue;
+    if(it.e.finished&&!showDone&&it.e.date!==today)continue; // 今天已出的保留顯示
+    if(!byDate.has(it.e.date))byDate.set(it.e.date,[]);
+    byDate.get(it.e.date).push(it);
+  }
+  const ord=(a,b)=>(a.e.finished-b.e.finished)||(a.o.orderno||'').localeCompare(b.o.orderno||'');
+  const sec=(title,list,color)=>{
+    const ready=list.filter(x=>x.st.k==='ready').length,todo=list.filter(x=>!x.e.finished).length;
+    return`<div class="card" style="padding:0;overflow:hidden;margin-bottom:10px">
+      <div style="padding:8px 14px;background:${color};font-weight:700;font-size:13px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">${title}
+        <span style="font-weight:400;font-size:12px;color:#555">待出 ${todo} 批${ready?`・<b style="color:#2E7D32">可出貨 ${ready}</b>`:''}</span></div>
+      ${dueShipTable(list.sort(ord).map(dueShipRow).join(''))}</div>`;
+  };
+  let html='';
+  if(over.length)html+=sec(`⚠ 逾期未出（${over.length} 批）`,over.sort((a,b)=>a.e.date.localeCompare(b.e.date)),'#FFEBEE');
+  for(const d of [...byDate.keys()].sort())html+=sec(`📅 ${dueDayLabel(d)}`,byDate.get(d),d===today?'#E3F2FD':'#F5F7FA');
+  // 沒有交期、但有可出貨的訂單
+  const noDue=window.DB.orders.filter(o=>!dueGet(o.id)&&matchOrder(o,kw)).map(o=>({o,info:getOrderShipStatus(o)})).filter(x=>x.info&&x.info.pending>0);
+  if(noDue.length){
+    html+=`<div class="card" style="padding:0;overflow:hidden;margin-bottom:10px">
+      <div style="padding:8px 14px;background:#FFF8E1;font-weight:700;font-size:13px">未設交期、但有可出貨（${noDue.length}）</div>
+      <div class="tbl-wrap"><table class="tbl" style="min-width:560px"><thead><tr><th>訂單號</th><th>品名／規格</th><th class="col-num">訂單量</th><th class="col-num">可出貨</th><th class="col-num">已出貨</th><th></th></tr></thead><tbody>
+      ${noDue.map(({o,info})=>`<tr><td style="color:#185FA5;font-weight:600">${dueEsc(o.orderno||'-')}</td><td><span style="font-weight:600;cursor:pointer" onclick="openDueEditor('${o.id}')">${dueEsc(o.name)}</span>${o.spec?` <span style="color:#888">(${dueEsc(o.spec)})</span>`:''}</td><td class="col-num">${o.qty}</td><td class="col-num" style="color:#2E7D32">${info.pending}</td><td class="col-num">${info.shipped}</td><td><button class="btn btn-sm" onclick="openDueEditor('${o.id}')" style="font-size:12px">＋交期</button> <button class="btn btn-sm btn-primary" onclick="openShipModal('${o.id}')" style="font-size:12px">出貨</button></td></tr>`).join('')}
+      </tbody></table></div></div>`;
+  }
+  if(!html)html='<div class="card" style="text-align:center;color:#aaa">目前沒有待出貨的交期</div>';
+  const top=document.getElementById('ship-due-body');
+  if(!top){
+    box.innerHTML=`<div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:13px;color:#888">🔍</span><input type="text" id="ship-due-kw" placeholder="品名／訂單號／交給誰..." style="flex:1;max-width:260px;font-size:13px" oninput="clearTimeout(window._sdkT);window._sdkT=setTimeout(renderShipping,300)">
+      <label style="display:flex;align-items:center;gap:6px;margin:0;font-size:12px;color:#555;cursor:pointer"><input type="checkbox" id="ship-due-showdone" style="width:auto;margin:0" onchange="renderShipping()"> 顯示之後已出貨的批次</label>
+      <span style="flex:1"></span>
+      <span style="font-size:12px;color:#888">列印日期</span><input type="date" id="ship-print-date" value="${today}" style="font-size:13px;width:150px">
+      <button class="btn btn-sm" onclick="printShipList()">🖨 列印出貨清單</button>
+    </div><div id="ship-due-body"></div>`;
+  }
+  document.getElementById('ship-due-body').innerHTML=html;
+}
+// 列印：選定日期（含之前逾期未出）的待出貨批次
+window.printShipList=function(){
+  const d=document.getElementById('ship-print-date')?.value||twToday();
+  const items=dueShipItems().filter(it=>!it.e.finished&&it.e.date<=d)
+    .sort((a,b)=>a.e.date.localeCompare(b.e.date)||(a.e.to||'').localeCompare(b.e.to||'')||(a.o.orderno||'').localeCompare(b.o.orderno||''));
+  if(!items.length)return alert(`${dueFmt(d)} 以前沒有待出貨的批次`);
+  const rows=items.map(it=>{const {o,e,st}=it;return`<tr><td>${dueFmt(e.date)}${e.date<d?' <b>逾期</b>':''}</td><td>${dueEsc(e.to||'')}</td><td>${dueEsc(o.orderno||'')}</td><td><b>${dueEsc(o.name)}</b></td><td>${dueEsc(o.spec||'')}</td><td class="n">${st.remain}</td><td class="n">${st.made}</td><td>${st.t}</td><td>${dueEsc([o.note,e.note].filter(Boolean).join('／'))}</td><td class="c">□</td></tr>`;}).join('');
+  const w=window.open('','_blank');
+  if(!w)return alert('瀏覽器擋住了新視窗，請允許此網站開啟彈出視窗');
+  w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>出貨清單 ${d}</title><style>
+    body{font-family:"Noto Sans TC","Microsoft JhengHei",sans-serif;padding:16px;font-size:13px}h2{margin:0 0 8px}
+    table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:5px 6px;text-align:left}th{background:#eee}
+    .n{text-align:right}.c{text-align:center;font-size:16px}@media print{button{display:none}}</style></head><body>
+    <h2>出貨清單　${d.replace(/-/g,'/')}（${dueWeekday(d)}）</h2>
+    <div style="margin-bottom:8px;color:#555">共 ${items.length} 批（含之前逾期未出）・列印時間 ${toTW(new Date().toISOString())}</div>
+    <table><thead><tr><th>交期</th><th>交給</th><th>訂單號</th><th>品名</th><th>規格</th><th class="n">待出數量</th><th class="n">已做好可出</th><th>狀態</th><th>備註</th><th>✓</th></tr></thead><tbody>${rows}</tbody></table>
+    <button onclick="print()" style="margin-top:12px;padding:6px 16px">列印</button></body></html>`);
+  w.document.close();
+};
+// ── 月曆 ──
+window.calMove=function(n){
+  const [y,m]=_calMonth.split('-').map(Number);
+  _calMonth=n===0?twToday().slice(0,7):new Date(Date.UTC(y,m-1+n,1)).toISOString().slice(0,7);
+  renderShipping();
+};
+// 讀取某月份「已全部完成」的交期（點選才讀；讀取次數＝該月有交期的訂單數）
+window.calLoadDone=async function(){
+  const mon=_calMonth,h=DUE_HIST.get(mon);
+  if(h&&(h.state==='loading'||(h.state==='loaded'&&Date.now()-h.at<RS_COLD_TTL)))return;
+  DUE_HIST.set(mon,{state:'loading',ids:new Set(),at:Date.now()});renderShipping();
+  try{
+    const sn=await db.collection('orderDueDates').where('months','array-contains',mon).get();
+    const ids=new Set();
+    sn.docs.forEach(d=>{if(DUE.has(d.id))return;DUE_EXTRA.set(d.id,{id:d.id,...d.data()});DUE_FETCHED.add(d.id);ids.add(d.id);});
+    DUE_HIST.set(mon,{state:'loaded',ids,at:Date.now()});
+  }catch(e){console.warn(e);DUE_HIST.delete(mon);toast('載入失敗，請稍後再試');}
+  renderShipping();
+};
+function renderShipCal(box){
+  if(!_calMonth)_calMonth=twToday().slice(0,7);
+  const today=twToday(),mon=_calMonth,[y,m]=mon.split('-').map(Number);
+  const items=dueShipItems();
+  const loadedIds=new Set(window.DB.orders.map(o=>String(o.id)));
+  // 已全部完成、訂單沒載入的：用交期文件裡的訂單快照顯示
+  const h=DUE_HIST.get(mon);
+  if(h&&h.state==='loaded')for(const id of h.ids){
+    if(loadedIds.has(id))continue;const d=DUE_EXTRA.get(id);if(!d||!d.snap)continue;
+    const fixed=(d.entries||[]).reduce((a,e)=>a+(e.qty>0?e.qty:0),0);
+    for(const e of (d.entries||[]))items.push({o:{id,orderno:d.snap.orderno,name:d.snap.name,spec:d.snap.spec,qty:d.snap.qty,_snap:true},e:{...e,need:e.qty>0?e.qty:Math.max(0,(d.snap.qty||0)-fixed),finished:true},st:{k:'done',t:'✓ 已出貨',c:'#9E9E9E',bg:'#F5F5F5'}});
+  }
+  const byDate=new Map();
+  for(const it of items){if(!it.e.date||it.e.date.slice(0,7)!==mon)continue;if(!byDate.has(it.e.date))byDate.set(it.e.date,[]);byDate.get(it.e.date).push(it);}
+  const first=new Date(Date.UTC(y,m-1,1)),startOff=(first.getUTCDay()+6)%7; // 週一開始
+  const days=new Date(Date.UTC(y,m,0)).getUTCDate();
+  const cells=[];
+  for(let i=0;i<startOff;i++)cells.push('<div class="cal-cell cal-empty"></div>');
+  for(let d=1;d<=days;d++){
+    const ds=`${mon}-${String(d).padStart(2,'0')}`;
+    const list=(byDate.get(ds)||[]).sort((a,b)=>(a.e.finished-b.e.finished)||(a.e.to||'').localeCompare(b.e.to||''));
+    const chips=list.map(({o,e,st})=>{
+      const lbl=`${e.to||''}${o.name}${o.spec?'-'+o.spec:''}-${e.need!=null?e.need:'?'}`;
+      const click=o._snap?`toast('此訂單已結案；要修改請先在訂單管理按「載入已結案訂單」')`:`openDueEditor('${o.id}')`;
+      const tip=`${o.orderno||''} ${st.t}${e.gap>0?'・缺 '+e.gap:''}${o.note?'・'+o.note:''}${e.note?'・'+e.note:''}`;
+      return`<div class="cal-chip" onclick="${click}" title="${dueEsc(tip)}" style="background:${e.finished?'#EEEEEE':st.bg};color:${e.finished?'#9E9E9E':st.c};${e.finished?'text-decoration:line-through;':''}">${dueEsc(lbl)}</div>`;
+    }).join('');
+    cells.push(`<div class="cal-cell${ds===today?' cal-today':''}"><div class="cal-d">${d}</div>${chips}</div>`);
+  }
+  while(cells.length%7)cells.push('<div class="cal-cell cal-empty"></div>');
+  const overN=items.filter(it=>!it.e.finished&&it.e.date<today).length;
+  const hs=h?(h.state==='loading'?'載入中...':'已載入本月已完成的交期'):'';
+  box.innerHTML=`<style>
+    .cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:#e0e0e0;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden}
+    .cal-h{background:#fafafa;text-align:center;font-size:12px;color:#888;padding:6px 0}
+    .cal-cell{background:#fff;min-height:96px;padding:4px}.cal-empty{background:#fafafa}.cal-today{background:#F3F8FF}
+    .cal-d{font-size:12px;color:#666;text-align:center;margin-bottom:3px}.cal-today .cal-d{color:#fff;background:#185FA5;border-radius:10px;width:22px;margin:0 auto 3px}
+    .cal-chip{font-size:11px;padding:2px 5px;border-radius:4px;margin-bottom:2px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}
+  </style>
+  <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button class="btn btn-sm" onclick="calMove(-1)">‹</button><strong style="font-size:15px;min-width:110px;text-align:center">${y} 年 ${m} 月</strong><button class="btn btn-sm" onclick="calMove(1)">›</button>
+    <button class="btn btn-sm" onclick="calMove(0)">今天</button>
+    ${overN?`<span style="color:#C62828;font-size:12px;font-weight:600">⚠ 逾期未出 ${overN} 批</span>`:''}
+    <span style="flex:1"></span>
+    <span style="font-size:11px;display:flex;gap:6px;flex-wrap:wrap">
+      <span style="padding:1px 6px;border-radius:4px;background:#FFEBEE;color:#C62828">未做好・逾期</span><span style="padding:1px 6px;border-radius:4px;background:#FFF3E0;color:#E65100">未做好</span>
+      <span style="padding:1px 6px;border-radius:4px;background:#E3F2FD;color:#1565C0">部分做好</span><span style="padding:1px 6px;border-radius:4px;background:#E8F5E9;color:#2E7D32">可出貨</span>
+      <span style="padding:1px 6px;border-radius:4px;background:#EEE;color:#9E9E9E;text-decoration:line-through">已出貨</span></span>
+    <button class="btn btn-sm" onclick="calLoadDone()" title="已全部出貨的訂單不會自動讀取；按這裡才讀本月的紀錄">${hs||'顯示本月已全部出貨的訂單'}</button>
+  </div>
+  <div class="cal-grid">${[...'一二三四五六日'].map(w=>`<div class="cal-h">週${w}</div>`).join('')}${cells.join('')}</div>
+  <div style="font-size:11px;color:#888;margin-top:6px">格式：交給＋品名-規格-數量（同 Google 行事曆的寫法）。點一下可編輯交期。</div>`;
+}
+
+// ══ 派工：交期提醒 ════════════════════════════════════════════════════
+function dueDispatchLine(o){
+  const s=dueSummary(o);
+  const note=o.note?`<span style="color:#E65100">📝 ${dueEsc(o.note)}</span>`:'';
+  if(!s||!s.next)return note?`<div style="font-size:11px;margin-top:2px">${note}</div>`:'';
+  const lv=dueLevel(s),[c,bg]=DUE_STYLE[lv],e=s.next;
+  const txt=lv==='ready'?`交期 ${dueFmt(e.date)}・已做齊待出貨`:`交期 ${dueFmt(e.date)}・${dueDaysTxt(e.days)}・缺 ${e.gap}${e.to?'・交'+dueEsc(e.to):''}`;
+  return`<div style="font-size:11px;margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span style="padding:1px 6px;border-radius:6px;background:${bg};color:${c};font-weight:600">${txt}</span>${note}</div>`;
+}
+// 7 天內到期、還有缺口的訂單（不論是否已派工）
+function dueUrgentOrders(maxDays){
+  const out=[];
+  for(const o of window.DB.orders){
+    const s=dueSummary(o);
+    if(s&&s.hasGap&&s.next.days<=maxDays)out.push({o,s});
+  }
+  return out.sort((a,b)=>a.s.next.date.localeCompare(b.s.next.date));
+}
+function renderDueAlert(pendingIds){
+  const el=document.getElementById('d-due-alert');if(!el)return;
+  const list=dueUrgentOrders(DUE_YELLOW_DAYS);
+  if(!list.length){el.style.display='none';el.innerHTML='';return;}
+  el.style.display='block';
+  el.innerHTML=`<div style="font-weight:700;color:#C62828;margin-bottom:4px">⏰ ${DUE_YELLOW_DAYS} 天內交期還有缺口（${list.length}）</div>`+
+    list.map(({o,s})=>{
+      const e=s.next,lv=dueLevel(s),[c,bg]=DUE_STYLE[lv],canPick=pendingIds.has(o.id),on=window._selectedOrderIds.has(o.id);
+      return`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding:2px 0;border-bottom:1px dashed #f0d0d0">
+        <span style="padding:0 6px;border-radius:6px;background:${bg};color:${c};font-weight:600;white-space:nowrap">${dueFmt(e.date)}・${dueDaysTxt(e.days)}</span>
+        <b>${dueEsc(o.name)}</b>${o.spec?`<span style="color:#888">(${dueEsc(o.spec)})</span>`:''}<span style="color:#C62828">缺 ${e.gap}</span>${e.to?`<span style="color:#666">交${dueEsc(e.to)}</span>`:''}
+        ${o.note?`<span style="color:#E65100">📝 ${dueEsc(o.note)}</span>`:''}
+        <span style="flex:1"></span>${orderDispatchBadge(o)}
+        ${canPick?`<button class="btn btn-sm" style="font-size:11px;padding:1px 8px" onclick="toggleDispatchOrder('${o.id}')">${on?'取消選取':'選取'}</button>`:''}
+      </div>`;
+    }).join('');
+}
+// 派工前的輕提醒：有交期更近（3 天內）、還沒派的訂單沒被選到
+function dueDispatchCheck(ids){
+  const sel=new Set(ids);
+  const selMin=ids.map(id=>{const o=window.DB.orders.find(x=>x.id===id);const s=o&&dueSummary(o);return s&&s.hasGap?s.next.date:'9999';}).sort()[0]||'9999';
+  const miss=dueUrgentOrders(DUE_ORANGE_DAYS).filter(({o,s})=>!sel.has(o.id)&&s.next.date<selMin&&!isInProgressOrder(o));
+  if(!miss.length)return true;
+  return confirm(`以下訂單交期比較近、還沒派工：\n\n${miss.map(({o,s})=>`・${dueFmt(s.next.date)}（${dueDaysTxt(s.next.days)}）${o.name}${o.spec?' '+o.spec:''}　缺 ${s.next.gap}`).join('\n')}\n\n仍要派目前選的訂單？`);
+}
+
 rsStart();
+dueListen();
 
 async function saveOrder(o){setSS('syncing');try{await db.collection('orders').doc(o.id).set(o);setSS('ok');}catch(e){setSS('err');toast('儲存失敗');}}
 async function saveDispatch(d){setSS('syncing');try{await db.collection('dispatches').doc(String(d.id)).set(d);setSS('ok');}catch(e){setSS('err');}}
@@ -1657,72 +2385,15 @@ window.setOrderFilter=function(f,btn){
   renderOrders();
 }
 
-window.parseOrderPaste=async function(){
-  const raw=document.getElementById('order-paste-input').value.trim();
-  if(!raw){alert('請先貼上資料');return;}
-  const lines=raw.split('\n').map(l=>l.trim()).filter(l=>l);
-  const imported=[];let skipped=0;
-  lines.forEach((line,idx)=>{
-    const cols=line.split('\t').map(c=>c.trim());
-    if(cols.length<2)return;
-    const dateVal=cols[0]||'',orderno=cols[1]||'',name=cols[2]||'',spec=cols[3]||'';
-    const qty=parseFloat(cols[4])||0;let price=parseFloat(cols[5])||0;
-    if(!name||qty<=0){if(idx===0&&(name.includes('品名')||dateVal.includes('日期')))return;skipped++;return;}
-    if(!price){const f=lookupProduct(name);if(f)price=f.price;}
-    let ds=dateVal.replace(/\//g,'-').replace(/(\d{4})-(\d{1,2})-(\d{1,2})/,(_,y,m,d)=>`${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`);
-    const uid=`ORD-${Date.now().toString(36).toUpperCase()}-${String(imported.length).padStart(3,'0')}`;
-    imported.push({id:uid,date:ds,orderno,name,spec,qty,price,done:0,defect:0,shortage:0,closed:false,createdAt:new Date().toISOString()});
-  });
-  if(!imported.length){alert('無法解析資料，請確認格式');return;}
-
-  // 偵測重複：以訂單號+品名+規格比對
-  const duplicates=imported.filter(imp=>
-    window.DB.orders.some(o=>
-      o.orderno&&imp.orderno&&o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||'')
-    )
-  );
-
-  let toImport=imported;
-  if(duplicates.length>0){
-    const dupList=duplicates.map(d=>`${d.orderno} ${d.name}${d.spec?' '+d.spec:''}`).join('\n');
-    const dupOld=window.DB.orders.filter(o=>duplicates.some(imp=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''))).map(o=>o.id);
-    if(!rsGuard(dupOld,false,()=>parseOrderPaste()))return;
-    const choice=confirm(`發現 ${duplicates.length} 筆重複訂單：\n${dupList}\n\n點「確定」→ 覆蓋重複的訂單\n點「取消」→ 跳過重複，只匯入新訂單`);
-    if(choice){
-      // 覆蓋：刪除舊的重複訂單，全部匯入
-      for(const imp of duplicates){
-        const old=window.DB.orders.find(o=>o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||''));
-        if(old){
-          await db.collection('orders').doc(old.id).delete();
-          const toDelete=window.DB.dispatches.filter(d=>d.orderId===old.id);
-          for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
-        }
-      }
-    }else{
-      // 跳過：排除重複的
-      toImport=imported.filter(imp=>
-        !window.DB.orders.some(o=>
-          o.orderno&&imp.orderno&&o.orderno===imp.orderno&&o.name===imp.name&&(o.spec||'')===(imp.spec||'')
-        )
-      );
-    }
-  }
-
-  if(!toImport.length){toast('無新訂單需要匯入');return;}
-  toast(`匯入中，共 ${toImport.length} 筆，請稍候...`);
-  let count=0;
-  for(const o of toImport){
-    await saveOrder(o);
-    count++;
-    if(count%5===0)toast(`匯入中 ${count}/${toImport.length}...`);
-  }
-  closePanel('order-paste-panel');document.getElementById('order-paste-input').value='';
-  toast(`成功匯入 ${toImport.length} 筆${skipped?`，跳過${skipped}列`:''}${duplicates.length?`，處理重複 ${duplicates.length} 筆`:''}${prodImportEstText(toImport)}`)
-}
 window.saveManual=async function(){
   const name=document.getElementById('m-name').value.trim(),qty=parseFloat(document.getElementById('m-qty').value)||0;
   if(!name)return alert('請輸入品名');if(qty<=0)return alert('請輸入有效數量');
-  await saveOrder({id:genId('ORD'),date:document.getElementById('m-date').value,orderno:document.getElementById('m-orderno').value.trim(),name,spec:document.getElementById('m-spec').value.trim(),qty,price:parseFloat(document.getElementById('m-price').value)||0,done:0,defect:0,shortage:0,closed:false,createdAt:new Date().toISOString()});
+  const note=(document.getElementById('m-note').value||'').trim(),due=document.getElementById('m-due').value;
+  const o={id:genId('ORD'),date:document.getElementById('m-date').value,orderno:document.getElementById('m-orderno').value.trim(),name,spec:document.getElementById('m-spec').value.trim(),qty,price:parseFloat(document.getElementById('m-price').value)||0,done:0,defect:0,shortage:0,closed:false,createdAt:new Date().toISOString()};
+  if(note)o.note=note;
+  await saveOrder(o);
+  if(due){try{await dueSave(o.id,[{id:dueNewId(),kind:'out',date:due,qty:null,to:'',note:'',delivered:false,createdAt:o.createdAt}],o);}catch(e){console.warn(e);toast('訂單已新增，但交期儲存失敗，請到交期欄重新設定');closePanel('manual-panel');return;}}
+  document.getElementById('m-note').value='';document.getElementById('m-due').value='';
   closePanel('manual-panel');toast('訂單已新增');
 }
 window.setOrderDateRange=function(range){
@@ -1779,6 +2450,7 @@ window.delSelectedOrders=async function(){
   const dispatchIdsToDelete=new Set();
   for(const id of ids){
     await db.collection('orders').doc(id).delete();
+    await dueDelete(id);
     findRelatedDispatches(id).forEach(d=>dispatchIdsToDelete.add(String(d.id)));
   }
   for(const did of dispatchIdsToDelete){
@@ -1805,7 +2477,8 @@ function renderOrders(){
   if(kw){
     list=list.filter(o=>
       (o.name||'').toLowerCase().includes(kw)||
-      (o.orderno||'').toLowerCase().includes(kw)
+      (o.orderno||'').toLowerCase().includes(kw)||
+      (o.note||'').toLowerCase().includes(kw)
     );
   }else{
     // 無關鍵字：套用日期與狀態篩選
@@ -1829,13 +2502,14 @@ function renderOrders(){
   const mismatchBtn=document.getElementById('btn-price-mismatch');
   if(mismatchBtn)mismatchBtn.textContent=mismatchIds.size?`⚠ 單價不符 (${mismatchIds.size})`:'⚠ 單價不符';
   if(showPriceMismatchOnly)list=list.filter(o=>mismatchIds.has(o.id));
+  if(sortByDue){const k=new Map(list.map(o=>[o.id,dueSortKey(o)]));list.sort((a,b)=>k.get(a.id).localeCompare(k.get(b.id)));} // 穩定排序：同順位維持原本的接單日期順序
   const hlRe=kw?new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'):null;
   const hl=(str)=>{
     if(!hlRe||!str)return str||'';
     return str.replace(hlRe,m=>`<mark style="background:#FFF176;border-radius:2px;padding:0 1px">${m}</mark>`);
   };
   if(!list.length){
-    tb.innerHTML=`<tr><td colspan="15" style="text-align:center;padding:2rem;color:#aaa">${kw?`無符合「${kw}」的訂單`:'查無符合條件的訂單'}</td></tr>`;
+    tb.innerHTML=`<tr><td colspan="16" style="text-align:center;padding:2rem;color:#aaa">${kw?`無符合「${kw}」的訂單`:'查無符合條件的訂單'}</td></tr>`;
     updateOrderSelUI();return;
   }
   function orderRowHtml(o,indent){
@@ -1850,12 +2524,14 @@ function renderOrders(){
     const priceMismatchHint=(dbP&&((o.price||0)!==dbP.price))?`<div class="price-mismatch-hint" title="品名單價資料庫目前為 $${dbP.price}，此訂單為 $${o.price||0}" onclick="applyDbPrice('${o.id}')">⚠ 資料庫 $${dbP.price} <u>套用</u></div>`:'';
     const estH=(st!=='已完成'&&undone>0)?prodEstLine(o.name,o.spec,undone,'剩 '+undone+' 件'):'';
     const mt=missedTag(orderMissedCount(o));
-    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${mt}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${mt}${estH}</td>`;
+    const noteH=o.note?`<div style="font-size:11px;font-weight:400;color:#E65100">📝 ${hl(dueEsc(o.note))}</div>`:'';
+    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${mt}${noteH}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${mt}${noteH}${estH}</td>`;
     return`<tr style="background:${isSel?'#FFF8E1':''}">
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
       <td style="white-space:nowrap">${o.date||'-'}</td>
       <td><span style="color:#888;cursor:pointer;text-decoration:underline dotted" title="點擊編輯訂單號" onclick="editOrderNo('${o.id}','${(o.orderno||'').replace(/'/g,"\'")}')">
         ${hl(o.orderno)||'<span style="color:#ccc">點擊輸入</span>'}</span></td>
+      ${dueCellHtml(o)}
       ${nameCell}<td style="color:#888">${o.spec||'-'}</td>
       <td class="col-num" style="padding:2px 4px">
         <input type="number" min="1" value="${o.qty||0}"
@@ -1910,6 +2586,7 @@ function renderOrders(){
     html.push(`<tr style="background:#F5F7FA;cursor:pointer" onclick="toggleOrderGroup('${key.replace(/'/g,"\\'")}')">
       <td></td>
       <td colspan="2" style="color:#888;font-size:12px">${isOpen?'▼':'▶'} 共 ${g.orders.length} 筆訂單</td>
+      ${dueGroupCellHtml(g.orders)}
       <td style="font-weight:700">${hl(g.name)}${missedTag(g.orders.reduce((a,o)=>a+orderMissedCount(o),0))}${totalUndone>0?prodEstLine(g.name,g.spec,totalUndone,'剩 '+totalUndone+' 件'):''}</td><td style="color:#888">${g.spec||'-'}</td>
       <td class="col-num" style="font-weight:700">${totalQty}</td>
       <td></td>
@@ -1942,6 +2619,7 @@ window.openOrderDetail=function(orderId){
         <span>訂單數量：<strong>${o.qty}</strong></span>
         <span>單價：<strong>$${o.price||0}</strong></span>
       </div>
+      <div id="due-detail-box" style="padding:8px;background:#FAFAFA;border-radius:6px">${dueDetailHtml(o)}</div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;color:#666">
         <span>已完工：<strong style="color:#2E7D32">${o.done||0}</strong></span>
         <span>不良品：<strong style="color:#C62828">${o.defect||0}</strong></span>
@@ -1977,6 +2655,8 @@ window.openOrderDetail=function(orderId){
     :'<div style="color:#aaa;text-align:center;padding:1rem">尚無派工記錄</div>'}
   `;
   document.getElementById('dispatch-modal').style.display='flex';
+  // 全部已交的交期沒有常駐，打開詳情時才讀
+  dueEnsure(o.id).then(()=>{const b=document.getElementById('due-detail-box');if(b)b.innerHTML=dueDetailHtml(o);});
 }
 window.forceCompleteOrder=async function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
@@ -2023,6 +2703,7 @@ window.editOrderQty=async function(orderId,newVal,inputEl){
     for(const d of related){
       await saveDispatch({...d,assignQty:qty});
     }
+    dueRecheck([orderId],x=>x.qty===qty);
     toast(`訂單數量已更新為 ${qty}${related.length?'，同步 '+related.length+' 筆派工記錄':''}`);
   }catch(e){setSS('err');toast('更新失敗，請重試');}
   setSS('ok');
@@ -2091,6 +2772,7 @@ window.delOrder=async function(id){
   if(!rsGuard([id],false,()=>delOrder(id)))return;
   if(!confirm('確定刪除此訂單？'))return;
   await db.collection('orders').doc(id).delete();
+  await dueDelete(id);
   const toDelete=findRelatedDispatches(id);
   for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
   toast('已刪除');
@@ -2203,6 +2885,9 @@ function renderDispatchOrders(){
     if(showIP)return matchOrder(o,kw);
     return false;
   });
+  // 交期：有缺口的依最早交期排前面（同順位維持收單日期順序）
+  {const k=new Map(pendingOrders.map(o=>[o.id,dueSortKey(o)]));pendingOrders.sort((a,b)=>k.get(a.id).localeCompare(k.get(b.id)));}
+  renderDueAlert(new Set(pendingOrders.map(o=>o.id)));
   if(!pendingOrders.length){
     el.innerHTML=`<div style="padding:12px;color:#aaa;font-size:13px;text-align:center">${kw?`無符合「${kw}」的待派工訂單`:'目前無待派工訂單'}</div>`;
     updateSelectedInfo();
@@ -2225,6 +2910,7 @@ function renderDispatchOrders(){
           <span style="font-weight:600;font-size:13px">${highlight(o.name)}${o.spec?` <span style="color:#888;font-weight:400">(${highlight(o.spec)})</span>`:''}</span>
           ${orderDispatchBadge(o)}
         </div>
+        ${dueDispatchLine(o)}
         <div style="font-size:11px;color:#888">
           ${o.orderno?`${highlight(o.orderno)} · `:''}收單 ${o.date||'-'} ／ 總量 ${o.qty} ／ 已完成 ${(o.done||0)+(o.defect||0)+(o.shortage||0)} ／ 剩 <strong style="color:#C62828">${remaining}</strong> ／ $${o.price}
         </div>
@@ -2327,6 +3013,7 @@ window.createDispatch=async function(){
   if(!rsGuard(ids,false,()=>createDispatch()))return;
   if(window.DB.orders.some(o=>ids.includes(o.id)&&(o.name||'').trim()===DRINK_NAME))return alert('「代訂飲料」是薪資扣款項目，不能派工');
   if(!selectedWorkers.length)return alert('請選擇至少一名員工');
+  if(!dueDispatchCheck(ids))return;
   const note=document.getElementById('d-note').value;
   const effectiveDate=document.getElementById('d-effective-date').value||toTW(new Date().toISOString(),false);
   {
@@ -3374,7 +4061,7 @@ window.doFullBackup=async function(){
   try{
     // ── 0. 備份一律向資料庫讀取完整資料（管理端平常只載入未結案資料，畫面上的資料不完整）──
     toast('備份：讀取完整資料中...');
-    const cols=['orders','dispatches','checkins','shipments','materialRequests','payslips','system','reportEvents']; // reportEvents：回報事件紀錄（工時分析用，遺失無法補回）
+    const cols=['orders','dispatches','checkins','shipments','materialRequests','payslips','system','reportEvents','orderDueDates']; // reportEvents：回報事件紀錄（工時分析用，遺失無法補回）
     const snaps=await Promise.all(cols.map(c=>db.collection(c).get()));
     const ALL={};cols.forEach((c,i)=>ALL[c]=snaps[i].docs.map(d=>({id:d.id,...d.data()})));
     // ── 1. JSON 完整備份 ──
@@ -4135,12 +4822,13 @@ window.clearCompleted=async function(){
   if(!confirm(`確定刪除 ${completed.length} 筆已完成訂單及其派工記錄？此操作無法復原！`))return;
   for(const o of completed){
     await db.collection('orders').doc(o.id).delete();
+    await dueDelete(o.id);
     const toDelete=window.DB.dispatches.filter(d=>d.orderId===o.id);
     for(const d of toDelete)await db.collection('dispatches').doc(String(d.id)).delete();
   }
   toast(`已刪除 ${completed.length} 筆已完成訂單`);
 }
-window.clearAll=async function(){if(!confirm('確定清除所有訂單與派工記錄？'))return;const oSnap=await db.collection('orders').get();for(const d of oSnap.docs)await d.ref.delete();const dSnap=await db.collection('dispatches').get();for(const d of dSnap.docs)await d.ref.delete();toast('已清除');}
+window.clearAll=async function(){if(!confirm('確定清除所有訂單與派工記錄？'))return;const oSnap=await db.collection('orders').get();for(const d of oSnap.docs)await d.ref.delete();const uSnap=await db.collection('orderDueDates').get();for(const d of uSnap.docs)await d.ref.delete();DUE.clear();DUE_EXTRA.clear();const dSnap=await db.collection('dispatches').get();for(const d of dSnap.docs)await d.ref.delete();toast('已清除');}
 
 // ── 頁面切換 ──
 // ── 出貨管理 ──
@@ -4182,6 +4870,7 @@ function inShipDateRange(s,from,to){
   return true;
 }
 function renderShipping(){
+  if(_shipMode!=='order'){renderShipDue();return;}
   const tb=document.getElementById('shipping-tbody');if(!tb)return;
   const kw=getShippingKeyword();
   const shipFrom=document.getElementById('ship-from')?.value||'';
@@ -4266,7 +4955,7 @@ window.toggleShipOrder=function(id){
   else _shipExpanded.add(id);
   renderShipping();
 }
-window.openShipModal=function(orderId){
+window.openShipModal=function(orderId,preQty,preNote){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   const info=getOrderShipStatus(o);if(!info)return;
   const today=twToday();
@@ -4280,9 +4969,9 @@ window.openShipModal=function(orderId){
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
       <div><label>出貨日期</label><input type="date" id="ship-date" value="${today}"></div>
-      <div><label>出貨數量</label><input type="number" id="ship-qty" min="1" value="${info.pending}"></div>
+      <div><label>出貨數量</label><input type="number" id="ship-qty" min="1" value="${preQty>0?Math.min(preQty,info.pending):info.pending}"></div>
     </div>
-    <div style="margin-bottom:14px"><label>備註（可不填）</label><input type="text" id="ship-note" placeholder="如：第一批、客戶自取..."></div>
+    <div style="margin-bottom:14px"><label>備註（可不填）</label><input type="text" id="ship-note" placeholder="如：第一批、客戶自取..." value="${preNote?dueEsc(preNote):''}"></div>
     <div style="display:flex;gap:8px">
       <button class="btn btn-primary" style="flex:1" onclick="submitShipment('${orderId}')">確認出貨</button>
       <button class="btn" onclick="closeModal()">取消</button>
@@ -4315,7 +5004,9 @@ window.deleteShipment=async function(id){
   if(!confirm('確定刪除此出貨記錄？'))return;
   setSS('syncing');
   try{
+    const sh=window.DB.shipments.find(x=>x.id===id);
     await db.collection('shipments').doc(id).delete();
+    if(sh)dueRecheck((sh.allocations||[]).map(a=>a.orderId).filter(Boolean),()=>!window.DB.shipments.some(x=>x.id===id)); // 交期：可能要改回未完成
     setSS('ok');toast('已刪除出貨記錄');
   }catch(e){setSS('err');toast('刪除失敗');}
 }
