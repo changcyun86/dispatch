@@ -210,6 +210,7 @@ textarea{resize:vertical;min-height:70px}
       <button class="btn btn-sm" onclick="closePanel('manual-panel')">取消</button>
     </div>
   </div>
+  <div id="done-check-note" style="display:none;font-size:13px;color:#C62828;background:#FFEBEE;border:1px solid #F5C6C6;border-radius:8px;padding:8px 12px;margin-bottom:8px"></div>
   <div class="card" style="padding:0;overflow:hidden">
     <div class="tbl-wrap">
       <table class="tbl">
@@ -2420,6 +2421,46 @@ function dueDispatchCheck(ids){
   return confirm(`以下訂單交期比較近、還沒派工：\n\n${miss.map(({o,s})=>`・${dueFmt(s.next.date)}（${dueDaysTxt(s.next.days)}）${o.name}${o.spec?' '+o.spec:''}　缺 ${s.next.gap}`).join('\n')}\n\n仍要派目前選的訂單？`);
 }
 
+// ══ 完工數檢查（2026/11）══════════════════════════════════════════════
+// 訂單上的完工／不良／來料不足，應等於這張訂單所有派工回報的合計。
+// 只在這張訂單的派工都已從伺服器讀完時才比對（不額外讀取）；不符時標示，按「重新計算」才寫入。
+function doneCheck(o){
+  if(RS.mode!=='scoped'||!ldOrderLive(o.id))return null; // 舊讀取模式無法確認派工是否讀完，不比對
+  const ds=window.DB.dispatches.filter(d=>d.orderId===o.id);
+  // 舊版合併派工（一筆含多張訂單）無法依訂單拆分，不比對
+  if(window.DB.dispatches.some(d=>Array.isArray(d.mergedOrderIds)&&d.mergedOrderIds.length&&(d.orderId===o.id||d.mergedOrderIds.includes(o.id))))return null;
+  const sum={done:Math.min(o.qty||0,ds.reduce((a,d)=>a+(d.doneQty||0),0)),defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)};
+  const bad=(o.done||0)!==sum.done||(o.defect||0)!==sum.defect||(o.shortage||0)!==sum.shortage;
+  return bad?sum:null;
+}
+function doneCheckHtml(o){
+  const sum=doneCheck(o);if(!sum)return'';
+  const parts=[];
+  if((o.done||0)!==sum.done)parts.push(`完工 ${o.done||0}→${sum.done}`);
+  if((o.defect||0)!==sum.defect)parts.push(`不良 ${o.defect||0}→${sum.defect}`);
+  if((o.shortage||0)!==sum.shortage)parts.push(`來料不足 ${o.shortage||0}→${sum.shortage}`);
+  return`<div style="font-size:11px;font-weight:600;color:#C62828">⚠ 完工數與派工回報不符（${parts.join('、')}）<a href="javascript:void(0)" onclick="event.stopPropagation();fixOrderTotals(['${o.id}'])" style="color:#185FA5;margin-left:4px">重新計算</a></div>`;
+}
+// 依伺服器上這張訂單的全部派工重新加總（手動按才執行；讀取次數＝該訂單派工筆數）
+window.fixOrderTotals=async function(ids){
+  if(!ids.length)return;
+  if(!confirm(`將依派工回報重新計算 ${ids.length} 張訂單的完工／不良／來料不足，確定？`))return;
+  setSS('syncing');let n=0;
+  try{
+    for(const id of ids){
+      const o=window.DB.orders.find(x=>x.id===id);if(!o)continue;
+      const sn=await db.collection('dispatches').where('orderId','==',id).get();
+      const ds=sn.docs.map(d=>d.data());
+      await db.collection('orders').doc(id).update({
+        done:Math.min(o.qty||0,ds.reduce((a,d)=>a+(d.doneQty||0),0)),
+        defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),
+        shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)});
+      n++;
+    }
+    setSS('ok');toast(`已重新計算 ${n} 張訂單`);
+  }catch(e){console.error(e);setSS('err');toast('重新計算失敗：'+(e.message||e));}
+};
+
 rsStart();
 dueListen();
 
@@ -2582,6 +2623,9 @@ function renderOrders(){
   const mismatchBtn=document.getElementById('btn-price-mismatch');
   if(mismatchBtn)mismatchBtn.textContent=mismatchIds.size?`⚠ 單價不符 (${mismatchIds.size})`:'⚠ 單價不符';
   if(showPriceMismatchOnly)list=list.filter(o=>mismatchIds.has(o.id));
+  {const bad=window.DB.orders.filter(o=>doneCheck(o)).map(o=>o.id),el=document.getElementById('done-check-note');
+   if(el){el.style.display=bad.length?'block':'none';
+     el.innerHTML=bad.length?`⚠ 有 ${bad.length} 張訂單的完工數與派工回報合計不符（訂單名稱下方有標示）。<button class="btn btn-sm" style="margin-left:8px" onclick='fixOrderTotals(${JSON.stringify(bad)})'>全部重新計算</button>`:'';}}
   if(sortByDue){const k=new Map(list.map(o=>[o.id,dueSortKey(o)]));list.sort((a,b)=>k.get(a.id).localeCompare(k.get(b.id)));} // 穩定排序：同順位維持原本的接單日期順序
   const hlRe=kw?new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'):null;
   const hl=(str)=>{
@@ -2605,7 +2649,8 @@ function renderOrders(){
     const estH=(st!=='已完成'&&undone>0)?prodEstLine(o.name,o.spec,undone,'剩 '+undone+' 件'):'';
     const mt=missedTag(orderMissedCount(o));
     const noteH=o.note?`<div style="font-size:11px;font-weight:400;color:#E65100">📝 ${hl(dueEsc(o.note))}</div>`:'';
-    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${mt}${noteH}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${mt}${noteH}${estH}</td>`;
+    const chkH=doneCheckHtml(o);
+    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${mt}${noteH}${chkH}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${mt}${noteH}${chkH}${estH}</td>`;
     return`<tr style="background:${isSel?'#FFF8E1':''}">
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
       <td style="white-space:nowrap">${o.date||'-'}</td>
@@ -2692,13 +2737,14 @@ window.openOrderDetail=function(orderId){
   document.getElementById('modal-title-txt').textContent=`訂單詳情`;
   document.getElementById('modal-content').innerHTML=`
     <div style="font-size:13px;display:grid;gap:6px;margin-bottom:14px">
-      <div style="font-size:15px;font-weight:700">${o.name}${o.spec?' <span style="font-weight:400;color:#888">(${o.spec})</span>':''}</div>
+      <div style="font-size:15px;font-weight:700">${o.name}${o.spec?` <span style="font-weight:400;color:#888">(${o.spec})</span>`:''}</div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;color:#666">
         <span>訂單號：<strong>${o.orderno||'-'}</strong></span>
         <span>收單日期：<strong>${o.date||'-'}</strong></span>
         <span>訂單數量：<strong>${o.qty}</strong></span>
         <span>單價：<strong>$${o.price||0}</strong></span>
       </div>
+      ${doneCheckHtml(o)}
       <div id="due-detail-box" style="padding:8px;background:#FAFAFA;border-radius:6px">${dueDetailHtml(o)}</div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;color:#666">
         <span>已完工：<strong style="color:#2E7D32">${o.done||0}</strong></span>

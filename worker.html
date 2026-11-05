@@ -1371,16 +1371,7 @@ window.saveEdit=async function(id){
       adminConfirmed:false,adjustStatus:null,adjustRejectReason:null,needConfirm:done+def+sho>0,
       status:done+def+sho>0?'回報中':'待完成',
       lastReportAt:new Date().toISOString()};
-    await db.collection('dispatches').doc(String(id)).set(updated);
-    const o=orders.find(x=>x.id===d.orderId);
-    if(o){
-      const allDisp=[...dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId),updated];
-      await db.collection('orders').doc(o.id).update({
-        done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
-        defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
-        shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
-      });
-    }
+    await writeReports([updated]);
     editingId=null;setSS('ok');toast('已儲存 / Đã lưu ✓');
   }catch(e){setSS('err');toast('儲存失敗，請重試');}
 }
@@ -2036,20 +2027,41 @@ window.grpUpdate=function(prefix,gid){
   if(err){err.style.display=over?'block':'none';err.innerHTML=over?GRP_OVER(res.cap):'';}
   return!over;
 };
-// 依分配結果寫回派工與訂單（訂單加總：同訂單所有派工，本次的以新值計算）
-async function grpWrite(updatedList){
-  for(const u of updatedList)await db.collection('dispatches').doc(String(u.id)).set(u);
-  const byId=new Map(updatedList.map(u=>[u.id,u]));
-  const orderIds=[...new Set(updatedList.map(u=>u.orderId))];
-  for(const oid of orderIds){
-    const o=orders.find(x=>x.id===oid);if(!o)continue;
-    const all=dispatches.filter(x=>x.orderId===oid&&!byId.has(x.id)).concat(updatedList.filter(u=>u.orderId===oid));
-    await db.collection('orders').doc(o.id).update({
-      done:Math.min(o.qty,all.reduce((a,x)=>a+(x.doneQty||0),0)),
-      defect:all.reduce((a,x)=>a+(x.defectQty||0),0),
-      shortage:all.reduce((a,x)=>a+(x.shortageQty||0),0)
+// 2026/11 修正：兩人同時回報同一張訂單，訂單完工數會互相覆蓋。
+// 原因：各自用手機上「別人的回報」加總後寫回訂單，同時送出時看不到對方剛寫的數量。
+// 改法：用 transaction 讀這次的派工與訂單最新資料，依「這次增減的數量」更新訂單；
+// 若有人同時寫入，Firestore 會自動重讀重算，不會再蓋掉別人的數量。每次回報多讀「派工＋訂單」各 1 次。
+async function writeReports(updatedList){
+  const orderIds=[...new Set(updatedList.map(u=>u.orderId).filter(x=>x!=null&&x!=='').map(String))];
+  await db.runTransaction(async tx=>{
+    const dRefs=updatedList.map(u=>db.collection('dispatches').doc(String(u.id)));
+    const oRefs=orderIds.map(id=>db.collection('orders').doc(id));
+    const dSnaps=[];for(const r of dRefs)dSnaps.push(await tx.get(r));
+    const oSnaps=[];for(const r of oRefs)oSnaps.push(await tx.get(r));
+    const delta=new Map(orderIds.map(id=>[id,{done:0,def:0,sho:0}]));
+    updatedList.forEach((u,i)=>{
+      const old=dSnaps[i].exists?dSnaps[i].data():{};
+      const dd=delta.get(String(u.orderId));if(!dd)return;
+      dd.done+=(u.doneQty||0)-(old.doneQty||0);
+      dd.def+=(u.defectQty||0)-(old.defectQty||0);
+      dd.sho+=(u.shortageQty||0)-(old.shortageQty||0);
     });
-  }
+    updatedList.forEach((u,i)=>tx.set(dRefs[i],u));
+    oSnaps.forEach((sn,i)=>{
+      if(!sn.exists)return;
+      const o=sn.data(),dd=delta.get(orderIds[i]);
+      if(!dd.done&&!dd.def&&!dd.sho)return;
+      tx.update(oRefs[i],{
+        done:Math.max(0,Math.min(o.qty||0,(o.done||0)+dd.done)),
+        defect:Math.max(0,(o.defect||0)+dd.def),
+        shortage:Math.max(0,(o.shortage||0)+dd.sho)
+      });
+    });
+  });
+}
+// 依分配結果寫回派工與訂單
+async function grpWrite(updatedList){
+  await writeReports(updatedList);
 }
 const _submittingGroup=new Set();
 window.submitGroupRpt=async function(dispIds,gid){
@@ -2154,15 +2166,7 @@ window.submitRpt=async function(id){
     const updated={...d,doneQty:done,defectQty:def,shortageQty:sho,
       workerNote,status:done+def+sho>0?'回報中':'待完成',needConfirm:done+def+sho>0,
       lastReportAt:new Date().toISOString()};
-    await db.collection('dispatches').doc(String(id)).set(updated);
-    if(o){
-      const allDisp=[...dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId),updated];
-      await db.collection('orders').doc(o.id).update({
-        done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
-        defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
-        shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
-      });
-    }
+    await writeReports([updated]);
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
     logReportEvent([d],'report',{done,def,sho});
     autoClockOut();
