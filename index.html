@@ -3690,8 +3690,10 @@ window.openAdjust=function(id){
         <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:#C62828"><input type="checkbox" id="adj-until-must" style="width:auto;margin:0" ${d.untilMust?'checked':''}> 必須做完</label></span>
       ${dispWorkDate(d)>twToday()?`<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:#3949AB"><input type="checkbox" id="adj-preview" style="width:auto;margin:0" ${d.preview?'checked':''}> 👁 讓員工提前看到</label>`:''}
       <span style="display:flex;align-items:center;gap:6px">排列順序 <input type="number" id="adj-priority" min="1" value="${d.priority||''}" placeholder="不排" style="width:70px;margin:0"></span>
-      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定、幾點開始、做到幾點、必須做完、提前看到、排列順序會套用到同一張合併卡片的其他訂單）</span>`:''}
+      ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定、幾點開始、做到幾點、必須做完、提前看到、排列順序、派工備註會套用到同一張合併卡片的其他訂單）</span>`:''}
     </div>
+    <label>派工備註 <span style="color:#aaa;font-weight:400">（員工端卡片上會顯示）</span></label>
+    <textarea id="adj-note" placeholder="填寫備註說明...（可不填）" style="min-height:56px">${dueEsc(d.note||'')}</textarea>
     <label>加工完成數量</label>
     <input type="number" id="adj-done" value="${d.doneQty||0}" min="0" max="${remain}">
     <label>不良品數量</label>
@@ -3755,6 +3757,18 @@ window.submitAdjust=async function(id){
     if(Object.keys(patch).length&&d.isMerged){
       const mates=window.DB.dispatches.filter(x=>x.id!==d.id&&x.isMerged&&x.batchId===d.batchId&&x.worker===d.worker&&(x.groupName||x.orderName)===(d.groupName||d.orderName));
       for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update(patch).catch(e=>console.warn('時間設定同步失敗',m.id,e));
+    }
+  }
+  // 派工備註：有變更才處理；清空 → 移除欄位；合併卡片同一張卡的其他訂單一起改（員工端卡片才不會出現兩種備註）
+  {
+    const noteEl=document.getElementById('adj-note');
+    const newNote=noteEl?noteEl.value.trim():(d.note||'');
+    if(newNote!==(d.note||'')){
+      if(newNote)d.note=newNote;else delete d.note;
+      if(d.isMerged){
+        const mates=window.DB.dispatches.filter(x=>x.id!==d.id&&x.isMerged&&x.batchId===d.batchId&&x.worker===d.worker&&(x.groupName||x.orderName)===(d.groupName||d.orderName));
+        for(const m of mates)await db.collection('dispatches').doc(String(m.id)).update({note:newNote?newNote:firebase.firestore.FieldValue.delete()}).catch(e=>console.warn('派工備註同步失敗',m.id,e));
+      }
     }
   }
   // 多日設定有變更才寫入（沒勾、原本也不是多日 → 不新增欄位）
