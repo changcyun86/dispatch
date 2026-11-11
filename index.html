@@ -3010,7 +3010,7 @@ window.openOrderDetail=function(orderId){
           <span>完工：<strong style="color:#2E7D32">${d.doneQty||0}</strong></span>
           <span>不良：<strong style="color:#C62828">${d.defectQty||0}</strong></span>
           <span>來料不足：<strong style="color:#E65100">${d.shortageQty||0}</strong></span>
-          <span>指派：${d.assignQty}</span>
+          <span>指派：${d.groupQty>0?`每人合併卡片總量 ${d.groupQty}`:d.assignQty}</span>
         </div>
         ${d.lastReportAt?`<div style="color:#aaa;margin-top:3px">回報時間：${toTW(d.lastReportAt)}</div>`:''}
         ${d.workerNote?`<div style="color:#1565C0;margin-top:4px;padding:4px 8px;background:#E3F2FD;border-radius:4px">💬 ${d.workerNote}</div>`:''}
@@ -3442,7 +3442,9 @@ window.createDispatch=async function(){
           orderNo:o.orderno||'',
           itemPrice:o.price||0,
           worker,
-          assignQty:customAssignQty!==null?customAssignQty:remaining,
+          // 2026/11：多張同品名合併時，派工數量＝每人在這張合併卡片的總量（groupQty）；各訂單仍以剩餘量為上限，回報依接單日期分配
+          assignQty:(customAssignQty!==null&&!isSameNameGroup)?customAssignQty:remaining,
+          ...((customAssignQty!==null&&isSameNameGroup)?{groupQty:customAssignQty}:{}),
           batchId,
           groupName:isSameNameGroup?g.name:'', // 群組品名，供 worker.html grouped 顯示用
           doneQty:0,defectQty:0,shortageQty:0,
@@ -3504,7 +3506,7 @@ function renderScheduledDispatches(){
             ${d.sequence?`<span style="background:#FFF3E0;color:#E65100;padding:1px 6px;border-radius:10px;font-size:11px">第 ${d.sequence} 張</span>`:''}
           </div>
           <div style="color:#aaa;font-size:11px">
-            ${d.orderNo?`${d.orderNo} ／ `:''}指派 ${d.assignQty} 件
+            ${d.orderNo?`${d.orderNo} ／ `:''}${d.groupQty>0?`合併卡片每人 ${d.groupQty} 件`:`指派 ${d.assignQty} 件`}
             ${d.note?` ／ 備註：${d.note}`:''}
           </div>
         </div>
@@ -6061,14 +6063,14 @@ function prodDispatchEst(){
   const clear=()=>{spans.forEach(sp=>sp.textContent='');if(combo)combo.style.display='none';};
   if(!PROD_UI||!PROD_UI.summary||!ids.length){clear();return;}
   const custom=parseInt(document.getElementById('d-assign-qty')?.value)||0;
-  // 同品名＋規格合併數量（派工數量有填時，每張訂單以填的數量計，不超過剩餘）
+  // 同品名＋規格合併數量（派工數量有填時：每人在這組的總量＝填的數量，不超過這組剩餘合計）
   const groups={};
   window.DB.orders.filter(o=>ids.includes(o.id)).forEach(o=>{
     const rem=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
-    const q=custom>0?Math.min(custom,rem):rem;
     const k=PROD.keyOf((o.name||'').trim(),(o.spec||'').trim());
-    (groups[k]=groups[k]||{name:o.name,spec:o.spec||'',qty:0}).qty+=q;
+    (groups[k]=groups[k]||{name:o.name,spec:o.spec||'',qty:0}).qty+=rem;
   });
+  if(custom>0)Object.values(groups).forEach(g=>{g.qty=Math.min(custom,g.qty);});
   const gl=Object.values(groups).filter(g=>g.qty>0);
   if(!gl.length){clear();return;}
   const per={};

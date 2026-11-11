@@ -1201,7 +1201,7 @@ function renderHistory(){
       const othersRep=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==d.id)
         .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
       // 有指定派工數量（小於訂單數量）→ 最多只能報到指定數量（和第一次回報同一規則）
-      const remain=Math.min(Math.max(0,(o?o.qty:d.assignQty)-othersRep),(o&&d.assignQty&&d.assignQty<o.qty)?d.assignQty:Infinity);
+      const remain=Math.min(Math.max(0,(o?o.qty:d.assignQty)-othersRep),(o&&d.assignQty&&d.assignQty<o.qty)?d.assignQty:Infinity,grpQtyLeft(d));
       el.innerHTML=`<div class="card" style="border:1.5px solid #185FA5;padding:0.875rem;margin-bottom:10px">
         <div style="font-weight:600;margin-bottom:4px">${d.orderName}${d.orderSpec?' '+d.orderSpec:''}</div>
         <div style="font-size:11px;color:#888;margin-bottom:10px">
@@ -1362,7 +1362,7 @@ window.validateEdit=function(id){
   const othersReported=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==id)
     .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
   // 有指定派工數量（小於訂單數量）→ 修改時最多也只能報到指定數量（和第一次回報同一規則）
-  const avail=Math.min(Math.max(0,(o?o.qty:d.assignQty)-othersReported),(o&&d.assignQty&&d.assignQty<o.qty)?d.assignQty:Infinity);
+  const avail=Math.min(Math.max(0,(o?o.qty:d.assignQty)-othersReported),(o&&d.assignQty&&d.assignQty<o.qty)?d.assignQty:Infinity,grpQtyLeft(d));
   if(err){
     if(myTotal>avail){err.style.display='block';err.textContent=`超過可回報量 ${avail} / Vượt quá ${avail}`;return false;}
     err.style.display='none';
@@ -1429,7 +1429,21 @@ const NO_ACCESS_MSG=`<div class="card" style="text-align:center;padding:2.5rem;b
 </div>`;
 // ── 工單主畫面 ──
 // 計算單張訂單剩餘可回報量（全域，供多處使用）
+// 2026/11：合併卡片的每人總量（groupQty）。同一次派工、同品名的其他派工（自己的）已回報多少，剩下多少可報
+function grpSiblings(d){return dispatches.filter(x=>x.id!==d.id&&x.worker===d.worker&&x.batchId&&x.batchId===d.batchId&&(x.groupName||'')===(d.groupName||''));}
+function grpQtyLeft(d){
+  if(!(d&&d.groupQty>0))return Infinity;
+  const rep=grpSiblings(d).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+  return Math.max(0,d.groupQty-rep);
+}
 function getOrderRemain(o, excludeDispatchId){
+  const d0=dispatches.find(x=>x.id===excludeDispatchId);
+  const base=_getOrderRemainBase(o,excludeDispatchId);
+  if(!(d0&&d0.groupQty>0))return base;
+  const self=(d0.doneQty||0)+(d0.defectQty||0)+(d0.shortageQty||0);
+  return Math.min(base,Math.max(0,grpQtyLeft(d0)-self));
+}
+function _getOrderRemainBase(o, excludeDispatchId){
   const rep=dispatches.filter(x=>x.id!==excludeDispatchId&&x.orderId===o.id)
     .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
   const orderRemain=Math.max(0,o.qty-rep);
@@ -1494,6 +1508,9 @@ function renderWorkerMain(){
   function coWorkHtml(list){
     const ids=new Set();
     list.forEach(d=>{if(d.orderId!=null&&d.orderId!=='')ids.add(d.orderId);(d.mergedOrderIds||[]).forEach(x=>ids.add(x));});
+    // 合併卡片：同一次派工、同品名的所有訂單都算（有些訂單已做滿、不在卡片上，但同伴的回報可能在那裡）
+    list.forEach(d=>{if(!d.batchId||!d.groupName)return;
+      dispatches.forEach(x=>{if(x.batchId===d.batchId&&x.groupName===d.groupName&&x.orderId!=null)ids.add(x.orderId);});});
     const hit=x=>ids.has(x.orderId)||(x.mergedOrderIds||[]).some(y=>ids.has(y));
     const per=new Map();
     for(const x of dispatches){
@@ -1686,7 +1703,8 @@ function renderWorkerMain(){
         const first=group[0];
         const gid=String(first.id).replace(/[^A-Za-z0-9_-]/g,'_');
         const list=grpSort(group);
-        const totalRemain=list.reduce((a,d)=>a+grpCapNew(d),0);
+        const totalRemain=Math.min(list.reduce((a,d)=>a+grpCapNew(d),0),grpGroupLeft(list,false));
+        const gq=(list.find(d=>d.groupQty>0)||{}).groupQty||0;
         const prices=[...new Set(list.map(d=>d.itemPrice))];
         const inp=(k,label,color)=>`<div>
               <div style="font-size:11px;color:${color};font-weight:600;margin-bottom:3px">${label}</div>
@@ -1700,6 +1718,7 @@ function renderWorkerMain(){
           </div>
           ${coWorkHtml(list)}
           <div style="font-size:13px;color:#666;margin-bottom:10px;line-height:2">
+            ${gq?`<div>總量 / <span style="color:#aaa">Tổng</span>：<strong>${gq}</strong></div>`:''}
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>${prices.map(p=>'$'+p).join('、')}</strong>／件</div>
             <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5">${totalRemain}</strong></div>
             ${dispNoteBox(list)}
@@ -1778,7 +1797,7 @@ function previewHtml(){
       return A.t.localeCompare(B.t)||(ap?A.p-B.p:A.q-B.q);});
     let rank=0;
     const cards=gs.map(g=>{
-      const d=g[0],qty=g.reduce((a,x)=>a+(x.assignQty||0),0);
+      const d=g[0],qty=(g.find(x=>x.groupQty>0)||{}).groupQty||g.reduce((a,x)=>a+(x.assignQty||0),0);
       const pr=g.some(x=>x.priority>0)?++rank:0;
       const notes=[...new Set(g.map(x=>(x.note||'').trim()).filter(Boolean))];
       return`<div style="background:#F5F7FB;border:1px dashed #9FA8DA;border-radius:10px;padding:10px 12px;margin-bottom:8px">
@@ -2044,10 +2063,19 @@ function grpCapEdit(d){
   const others=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==d.id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
   return Math.max(0,(o?o.qty:(d.assignQty||0))-others);
 }
+// 合併卡片每人總量的剩餘：扣掉卡片外（同批次同品名）自己已回報的；新回報也扣掉卡片內已回報的，修改則不扣（自己的會退回重分配）
+function grpGroupLeft(list,isEdit){
+  const d0=list.find(d=>d.groupQty>0);if(!d0)return Infinity;
+  const ids=new Set(list.map(d=>d.id)),r=x=>(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0);
+  const outside=dispatches.filter(x=>!ids.has(x.id)&&x.worker===d0.worker&&x.batchId&&x.batchId===d0.batchId&&(x.groupName||'')===(d0.groupName||'')).reduce((a,x)=>a+r(x),0);
+  const own=isEdit?0:list.reduce((a,x)=>a+r(x),0);
+  return Math.max(0,d0.groupQty-outside-own);
+}
 function grpAllocate(list,done,def,sho,capFn){
   const sorted=grpSort(list);
   const left={};let cap=0;
   sorted.forEach(d=>{left[d.id]=Math.max(0,capFn(d));cap+=left[d.id];});
+  cap=Math.min(cap,grpGroupLeft(list,capFn===grpCapEdit));
   const alloc={};sorted.forEach(d=>alloc[d.id]={done:0,def:0,sho:0});
   for(const [k,amt] of [['done',done],['def',def],['sho',sho]]){
     let r=amt;
@@ -2106,7 +2134,7 @@ async function writeReports(updatedList){
       const o=sn.data(),dd=delta.get(orderIds[i]);
       if(!dd.done&&!dd.def&&!dd.sho)return;
       tx.update(oRefs[i],{
-        done:Math.max(0,Math.min(o.qty||0,(o.done||0)+dd.done)),
+        done:o.forceDone?(o.qty||0):Math.max(0,Math.min(o.qty||0,(o.done||0)+dd.done)), // 管理端強制完成的訂單維持總量
         defect:Math.max(0,(o.defect||0)+dd.def),
         shortage:Math.max(0,(o.shortage||0)+dd.sho)
       });
