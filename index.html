@@ -445,9 +445,11 @@ textarea{resize:vertical;min-height:70px}
   <!-- 待審核請假申請 -->
   <div id="leave-approval-section" style="margin-bottom:1rem"></div>
   <!-- 模式切換 -->
-  <div style="display:flex;gap:0;background:#fff;border:1px solid #e8e8e8;border-radius:10px;overflow:hidden;margin-bottom:1rem;max-width:320px">
+  <div style="display:flex;gap:0;background:#fff;border:1px solid #e8e8e8;border-radius:10px;overflow:hidden;margin-bottom:1rem;max-width:560px">
     <button class="tab-btn active" id="ci-tab-date" onclick="setCIMode('date')" style="flex:1;padding:9px;border:none;background:#185FA5;color:#fff;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">依日期查看</button>
     <button class="tab-btn" id="ci-tab-worker" onclick="setCIMode('worker')" style="flex:1;padding:9px;border:none;background:#fff;color:#666;font-family:inherit;font-size:13px;cursor:pointer">依員工查看</button>
+    <button class="tab-btn" id="ci-tab-matrix" onclick="setCIMode('matrix')" style="flex:1;padding:9px;border:none;background:#fff;color:#666;font-family:inherit;font-size:13px;cursor:pointer">月表格</button>
+    <button class="tab-btn" id="ci-tab-cal" onclick="setCIMode('cal')" style="flex:1;padding:9px;border:none;background:#fff;color:#666;font-family:inherit;font-size:13px;cursor:pointer">工作日曆</button>
   </div>
   <!-- 依日期篩選 -->
   <div id="ci-filter-date" class="card" style="padding:0.875rem 1.25rem;margin-bottom:1rem">
@@ -479,6 +481,8 @@ textarea{resize:vertical;min-height:70px}
     </div>
   </div>
 
+  <div id="ci-month-view" style="display:none"></div>
+  <div id="ci-list-view">
   <div class="grid4" id="ci-stats" style="margin-bottom:1rem"></div>
   <div class="card" style="padding:0;overflow:hidden">
     <div class="tbl-wrap">
@@ -489,6 +493,7 @@ textarea{resize:vertical;min-height:70px}
     </div>
     <div id="ci-summary" style="padding:10px 16px;border-top:1px solid #eee;font-size:13px;color:#888;display:none"></div>
   </div>
+  </div><!-- ci-list-view -->
 </div>
 
 <!-- 薪資 -->
@@ -785,6 +790,7 @@ if(sessionStorage.getItem('admin_auth')==='1')showAdminApp();
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="materials.js?v=2"></script>
+<script src="workcal.js?v=1"></script>
 <script src="productivity.js?v=1"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script>
@@ -1956,7 +1962,7 @@ window.parseOrderPaste=async function(){
     if(dateVal){r.date=dueParseDate(dateVal);if(!r.date)r.errs.push(`接單日期「${dateVal}」看不懂`);}else r.date='';
     if(dueRaw){r.due=dueParseDate(dueRaw);if(!r.due)r.errs.push(`交期「${dueRaw}」不是日期`);}
     const p=lookupProductBySpec(name,spec)||lookupProduct(name);
-    r.price=p?p.price:0;
+    r.price=p?p.price:0;r.found=!!p;
     if(name&&!p)r.warns.push('資料庫無此品名，單價 0（匯入後可修改）');
     if(note){
       const ds=[...note.matchAll(/(\d{1,2})\/(\d{1,2})/g)].map(m=>dueParseDate(m[0])).filter(Boolean);
@@ -2040,7 +2046,7 @@ function renderImportPreview(){
         </select>${r.act==='fill'?`<div style="font-size:11px;color:#1565C0">→ ${dueEsc(impFillText(r))}</div>`:''}`;
       }
       if(!msg)msg='<span style="color:#2E7D32">✓</span>';
-      return`<tr style="background:${bg}${r.act==='skip'&&!r.errs.length?';opacity:0.75':''}"><td>${r.line}</td><td style="white-space:nowrap">${dueEsc(r.date||r.dateVal)}</td><td>${dueEsc(r.orderno)}</td><td style="font-weight:600">${dueEsc(r.name)}</td><td>${dueEsc(r.spec)}</td><td class="col-num">${dueEsc(r.qtyRaw)}</td><td class="col-num">${r.price?'$'+r.price:'<span style="color:#8D6E00">0</span>'}</td><td>${dueEsc(r.note)}</td><td style="white-space:nowrap">${r.due?dueFmt(r.due):dueEsc(r.dueRaw)}</td><td>${msg}</td></tr>`;
+      return`<tr style="background:${bg}${r.act==='skip'&&!r.errs.length?';opacity:0.75':''}"><td>${r.line}</td><td style="white-space:nowrap">${dueEsc(r.date||r.dateVal)}</td><td>${dueEsc(r.orderno)}</td><td style="font-weight:600">${dueEsc(r.name)}</td><td>${dueEsc(r.spec)}</td><td class="col-num">${dueEsc(r.qtyRaw)}</td><td class="col-num">${r.found?'$'+r.price:'<span style="color:#8D6E00">0</span>'}</td><td>${dueEsc(r.note)}</td><td style="white-space:nowrap">${r.due?dueFmt(r.due):dueEsc(r.dueRaw)}</td><td>${msg}</td></tr>`;
     }).join('')}</tbody></table></div>
     <div style="display:flex;gap:8px;margin-top:12px;align-items:center;flex-wrap:wrap">
       <button class="btn btn-primary btn-sm" onclick="confirmOrderImport()" ${todo?'':'disabled'}>確認匯入（新增 ${nNew}${nFill?`、補上 ${nFill}`:''}）</button>
@@ -2430,9 +2436,12 @@ function doneCheck(o){
   // 舊版合併派工（一筆含多張訂單）無法依訂單拆分，不比對
   if(window.DB.dispatches.some(d=>Array.isArray(d.mergedOrderIds)&&d.mergedOrderIds.length&&(d.orderId===o.id||d.mergedOrderIds.includes(o.id))))return null;
   const sum={done:Math.min(o.qty||0,ds.reduce((a,d)=>a+(d.doneQty||0),0)),defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)};
+  // 強制完成：完工數＝訂單總量是刻意的，不算不符。舊版強制完成沒有標記 → 完工數剛好等於總量、且派工合計較少，也視為強制完成
+  if(doneForced(o,sum.done))sum.done=o.done||0;
   const bad=(o.done||0)!==sum.done||(o.defect||0)!==sum.defect||(o.shortage||0)!==sum.shortage;
   return bad?sum:null;
 }
+function doneForced(o,sumDone){return!!o.forceDone||((o.done||0)===(o.qty||0)&&(o.qty||0)>0&&sumDone<(o.qty||0));}
 function doneCheckHtml(o){
   const sum=doneCheck(o);if(!sum)return'';
   const parts=[];
@@ -2451,14 +2460,228 @@ window.fixOrderTotals=async function(ids){
       const o=window.DB.orders.find(x=>x.id===id);if(!o)continue;
       const sn=await db.collection('dispatches').where('orderId','==',id).get();
       const ds=sn.docs.map(d=>d.data());
+      const sumDone=Math.min(o.qty||0,ds.reduce((a,d)=>a+(d.doneQty||0),0));
       await db.collection('orders').doc(id).update({
-        done:Math.min(o.qty||0,ds.reduce((a,d)=>a+(d.doneQty||0),0)),
+        done:doneForced(o,sumDone)?(o.qty||0):sumDone, // 強制完成的維持總量
         defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),
         shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)});
       n++;
     }
     setSS('ok');toast(`已重新計算 ${n} 張訂單`);
   }catch(e){console.error(e);setSS('err');toast('重新計算失敗：'+(e.message||e));}
+};
+
+// ══ 打卡記錄：月表格與工作日曆（2026/11）══════════════════════════════
+// 工作日曆共用 workcal.js（WC）；調整過的日子存在 system/workCalendar，整份 1 次讀取（之後有變動才再讀）。
+// 平日加班時數由管理員逐日輸入，存在當天的打卡紀錄（checkins 的 otHours），系統不自動推算。
+let ciMonth='';
+let _wcSel=null; // 工作日曆多選：Set 或 null
+db.collection('system').doc('workCalendar').onSnapshot(s=>{
+  WC.setOverrides(s.exists?(s.data().days||{}):{});
+  try{if(document.getElementById('pg-checkin')?.classList.contains('active'))renderCheckins();}catch(e){}
+  try{if(document.getElementById('pg-payslip')?.classList.contains('active'))psRender();}catch(e){}
+},e=>console.warn('[工作日曆] 讀取失敗',e));
+function ciEsc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function ciCurMonth(){if(!ciMonth)ciMonth=twToday().slice(0,7);return ciMonth;}
+window.ciMoveMonth=function(n){
+  const[y,m]=ciCurMonth().split('-').map(Number);
+  ciMonth=n===0?twToday().slice(0,7):new Date(Date.UTC(y,m-1+n,1)).toISOString().slice(0,7);
+  renderCheckins();
+};
+const CI_WD='日一二三四五六';
+function ciMonthBar(extra){
+  const[y,m]=ciCurMonth().split('-').map(Number);
+  const warn=WC.hasHolidayData(ciCurMonth())?'':`<span style="font-size:12px;color:#E65100">⚠ 尚未內建 ${y} 年國定假日，只有週末預設休假，請在工作日曆手動設定</span>`;
+  return`<div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    <button class="btn btn-sm" onclick="ciMoveMonth(-1)">‹</button><strong style="font-size:15px;min-width:110px;text-align:center">${y} 年 ${m} 月</strong><button class="btn btn-sm" onclick="ciMoveMonth(1)">›</button>
+    <button class="btn btn-sm" onclick="ciMoveMonth(0)">本月</button>${warn}<span style="flex:1"></span>${extra||''}</div>`;
+}
+// ── 月表格 ──
+function renderCIMatrix(box){
+  const ym=ciCurMonth(),dates=WC.monthDates(ym),from=dates[0],to=dates[dates.length-1],today=twToday();
+  if(!rsEnsure('ci',from,to,()=>renderCheckins())){box.innerHTML=ciMonthBar()+'<div class="card" style="text-align:center;color:#888">⏳ 載入中...</div>';return;}
+  const cis=window.DB.checkins.filter(c=>c.date>=from&&c.date<=to);
+  const workers=[...window.DB.employees];
+  cis.forEach(c=>{if(c.worker&&!workers.includes(c.worker))workers.push(c.worker);});
+  const map=new Map();
+  for(const c of cis){
+    const k=c.worker+'|'+c.date,cur=map.get(k)||{};
+    if(c.leave){if(c.status!=='拒絕')cur.leave=c;}else if(c.inTime||c.outTime||c.otHours)cur.punch=c;
+    map.set(k,cur);
+  }
+  const head1=dates.map(d=>{const cf=WC.conf(d),wd=WC.weekday(d),wkWork=cf.work&&(wd===0||wd===6);
+    return`<th class="${cf.work?'':'cim-off'}" style="${wkWork?'color:#185FA5':''}" title="${ciEsc(cf.holiday||cf.note||'')}">${Number(d.slice(8))}<br>${CI_WD[wd]}</th>`;}).join('');
+  const head2=dates.map(d=>{const cf=WC.conf(d);return`<th class="${cf.work?'':'cim-off'}" style="font-size:10px;font-weight:400">${cf.work?'上班':(cf.holiday?ciEsc(cf.holiday.slice(0,3)):'休')}</th>`;}).join('');
+  const rows=workers.map(w=>{
+    let days=0,wkd=0,sat=0,sun=0;const ots=[];
+    const cells=dates.map(d=>{
+      const cf=WC.conf(d),wd=WC.weekday(d),e=map.get(w+'|'+d)||{},cls=cf.work?'':'cim-off';
+      if(e.punch&&e.punch.inTime){days++;if(wd===6)sat++;else if(wd===0)sun++;else wkd++;}
+      if(e.punch&&Number(e.punch.otHours)>0)ots.push({d,h:Number(e.punch.otHours)});
+      if(e.leave&&!(e.punch&&e.punch.inTime)){
+        const lv=e.leave;return`<td class="cim-lv" title="${ciEsc(lv.leaveNote||'')}">${ciEsc(lv.leaveType||'請假')}${lv.status&&lv.status!=='核准'?`<br><span style="font-size:10px">${ciEsc(lv.status)}</span>`:''}</td>`;
+      }
+      const p=e.punch;
+      if(!p||!p.inTime){
+        if(cf.work&&d<today)return`<td class="cim-miss">缺</td>`;
+        return`<td class="${cls}"></td>`;
+      }
+      const late=String(p.inTime).slice(0,5)>WC.onTime(d);
+      let out;
+      if(p.outTime){
+        const early=cf.work&&String(p.outTime).slice(0,5)<cf.end;
+        out=`<span style="${early?'color:#E65100;font-weight:600':''}${!p.outManual?';color:#999':''}" title="${p.outManual?'員工按下班打卡':'員工未按下班打卡，為最後一次回報時間'}">${ciEsc(p.outTime)}${p.outManual?'':'*'}</span>`;
+      }else out=d<today?'<span style="color:#E65100;font-size:10px">未下班</span>':'—';
+      const ot=Number(p.otHours)>0?`<br><span class="cim-ot">+${Number(p.otHours)}</span>`:'';
+      const canOT=wd>=1&&wd<=5;
+      return`<td class="${cls}${canOT?' cim-click':''}" ${canOT?`onclick="openOTEditor('${ciEsc(p.id)}')" title="點擊輸入平日加班時數"`:''}><span style="${late?'color:#C62828;font-weight:600':''}">${ciEsc(String(p.inTime).slice(0,5))}</span><br>${out}${ot}</td>`;
+    }).join('');
+    const otTotal=ots.reduce((a,x)=>a+x.h,0);
+    const otH=ots.length?ots.map(x=>`${Number(x.d.slice(5,7))}/${Number(x.d.slice(8))} ${x.h} 小時`).join('<br>')+`<br><b>共 ${Math.round(otTotal*100)/100} 小時</b>`:'<span style="color:#ccc">—</span>';
+    return`<tr><td class="cim-nm">${ciEsc(w)}</td>${cells}<td class="cim-s">${days}</td><td class="cim-s">${wkd}</td><td class="cim-s">${sat}</td><td class="cim-s">${sun}</td><td class="cim-ot-list">${otH}</td></tr>`;
+  }).join('');
+  box.innerHTML=ciMonthBar(`<span style="font-size:12px;color:#888">平日格子可點擊輸入加班時數</span>`)+`
+  <style>
+    .cim{border-collapse:collapse;font-size:12px}.cim th,.cim td{border:1px solid #eee;text-align:center;padding:4px 3px;line-height:1.35;min-width:42px;white-space:nowrap}
+    .cim th{background:#fafafa;color:#666;font-weight:600}.cim .cim-off{background:#f4f4f4;color:#aaa}
+    .cim-nm{position:sticky;left:0;background:#fff;text-align:left!important;font-weight:600;padding-left:8px!important;z-index:1;min-width:64px!important}
+    .cim-lv{background:#F3E5F5;color:#6A1B9A}.cim-miss{background:#FFEBEE;color:#C62828;font-weight:600}
+    .cim-ot{display:inline-block;padding:0 4px;border-radius:4px;background:#E3F2FD;color:#1565C0;font-size:11px;font-weight:600}
+    .cim-click{cursor:pointer}.cim-click:hover{outline:2px solid #90CAF9;outline-offset:-2px}
+    .cim-s{font-weight:700;background:#FAFAFA}.cim-ot-list{text-align:left!important;font-size:11px;color:#555;min-width:110px!important}
+  </style>
+  <div class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="cim">
+    <thead><tr><th class="cim-nm" rowspan="2" style="background:#fafafa">員工</th>${head1}<th rowspan="2">上班<br>總天數</th><th rowspan="2">平日</th><th rowspan="2">週六</th><th rowspan="2">週日</th><th rowspan="2">平日加班</th></tr><tr>${head2}</tr></thead>
+    <tbody>${rows||`<tr><td colspan="${dates.length+6}" style="color:#aaa;padding:2rem">沒有員工資料</td></tr>`}</tbody></table></div></div>
+  <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#666;margin-top:8px">
+    <span><span class="cim-ot">+2</span> 平日加班（點格子輸入）</span><span><span style="background:#FFEBEE;color:#C62828;padding:0 4px;border-radius:4px">缺</span> 日曆是上班日卻沒打卡、沒請假</span>
+    <span><span style="color:#C62828;font-weight:600">08:14</span> 遲到（上班時間＋10 分鐘後）</span><span><span style="color:#E65100;font-weight:600">16:40</span> 早退</span>
+    <span><span style="color:#999">16:30*</span> 員工沒按下班，為最後一次回報時間</span><span><span style="background:#F3E5F5;color:#6A1B9A;padding:0 4px;border-radius:4px">事假</span> 請假</span>
+    <span>灰底＝休假日；上班總天數、平日、週六、週日依實際打卡計算</span>
+  </div>`;
+}
+// ── 平日加班輸入 ──
+window.openOTEditor=function(id){
+  const c=window.DB.checkins.find(x=>x.id===id);if(!c)return;
+  const cf=WC.conf(c.date),wd=WC.weekday(c.date);
+  const src=c.outTime?(c.outManual?'員工按下班打卡':'<span style="color:#E65100">員工未按下班打卡，這是最後一次回報的時間（可能是晚回報，不代表加班）</span>'):'尚未下班';
+  document.getElementById('due-modal-title').textContent='平日加班時數';
+  document.getElementById('due-modal-content').innerHTML=`
+    <div style="font-size:14px;line-height:1.9">
+      <div><b>${ciEsc(c.worker)}</b>　${c.date}（${CI_WD[wd]}）</div>
+      <div>工作日曆：${cf.work?`上班 ${cf.start}–${cf.end}`:'休假日'}${cf.holiday?'（'+ciEsc(cf.holiday)+'）':''}</div>
+      <div>上班打卡：${ciEsc(c.inTime||'—')}</div>
+      <div>下班：${ciEsc(c.outTime||'—')}　<span style="font-size:12px">${src}</span></div>
+    </div>
+    <label>加班時數（小時，0 或空白＝不算加班）</label>
+    <input type="number" id="ot-hours" min="0" max="16" step="0.5" value="${Number(c.otHours)>0?Number(c.otHours):''}" style="width:140px">
+    <div id="ot-err" style="color:#C62828;font-size:12px;margin-top:4px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-sm" onclick="saveOT('${ciEsc(id)}')">儲存</button>
+      <button class="btn btn-sm" onclick="closeModal()">取消</button>
+    </div>`;
+  document.getElementById('due-modal').style.display='flex';
+  setTimeout(()=>document.getElementById('ot-hours')?.focus(),50);
+};
+window.saveOT=async function(id){
+  const raw=document.getElementById('ot-hours').value.trim(),err=document.getElementById('ot-err');
+  const h=raw===''?0:Number(raw);
+  if(!Number.isFinite(h)||h<0||h>16){err.textContent='請輸入 0～16 的數字';return;}
+  const v=Math.round(h*100)/100;
+  setSS('syncing');
+  try{
+    await db.collection('checkins').doc(id).update(v>0?{otHours:v,otUpdatedAt:new Date().toISOString()}:{otHours:firebase.firestore.FieldValue.delete(),otUpdatedAt:new Date().toISOString()});
+    const c=window.DB.checkins.find(x=>x.id===id);if(c){if(v>0)c.otHours=v;else delete c.otHours;}
+    setSS('ok');closeModal();toast(v>0?`已記錄加班 ${v} 小時`:'已清除加班時數');renderCheckins();
+  }catch(e){console.error(e);setSS('err');err.textContent='儲存失敗：'+(e.message||e);}
+};
+// ── 工作日曆 ──
+function renderWorkCal(box){
+  const ym=ciCurMonth(),dates=WC.monthDates(ym),today=twToday();
+  const startOff=(WC.weekday(dates[0])+6)%7;
+  const cells=[];for(let i=0;i<startOff;i++)cells.push('<div class="wc-cell wc-empty"></div>');
+  for(const d of dates){
+    const cf=WC.conf(d),sel=_wcSel&&_wcSel.has(d);
+    cells.push(`<div class="wc-cell ${cf.work?'wc-work':'wc-off'}${d===today?' wc-today':''}${sel?' wc-sel':''}" onclick="wcClick('${d}')">
+      <div style="display:flex;justify-content:space-between"><b>${Number(d.slice(8))}</b>${cf.custom?'<span style="font-size:10px;color:#185FA5">● 已調整</span>':''}</div>
+      ${cf.holiday?`<div style="font-size:11px;color:#C62828">${ciEsc(cf.holiday)}</div>`:''}
+      <div style="font-size:12px;margin-top:2px">${cf.work?`<span style="color:#2E7D32;font-weight:600">上班</span> ${cf.start}–${cf.end}${cf.lunch?'':'<br><span style="font-size:10px;color:#888">無午休</span>'}`:'<span style="color:#999">休</span>'}</div>
+      ${cf.note?`<div style="font-size:10px;color:#666">${ciEsc(cf.note)}</div>`:''}
+    </div>`);
+  }
+  while(cells.length%7)cells.push('<div class="wc-cell wc-empty"></div>');
+  const n=WC.workDaysInMonth(ym);
+  const multi=_wcSel?`<span style="font-size:12px;color:#185FA5">已選 ${_wcSel.size} 天</span><button class="btn btn-primary btn-sm" onclick="wcEditSelected()" ${_wcSel.size?'':'disabled'}>設定所選日期</button><button class="btn btn-sm" onclick="wcMulti(false)">取消多選</button>`:`<button class="btn btn-sm" onclick="wcMulti(true)">多選設定</button>`;
+  box.innerHTML=ciMonthBar(`<span style="font-size:13px">本月工作天 <b>${n}</b> 天</span>${multi}`)+`
+  <style>
+    .wc-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:#e0e0e0;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden}
+    .wc-h{background:#fafafa;text-align:center;font-size:12px;color:#888;padding:6px 0}
+    .wc-cell{background:#fff;min-height:78px;padding:5px 6px;cursor:pointer;font-size:12px}.wc-empty{background:#fafafa;cursor:default}
+    .wc-off{background:#f6f6f6}.wc-today{box-shadow:inset 0 0 0 2px #185FA5}.wc-sel{background:#E3F2FD!important;box-shadow:inset 0 0 0 2px #1565C0}
+    .wc-cell:not(.wc-empty):hover{background:#F3F8FF}
+  </style>
+  <div class="wc-grid">${[...'一二三四五六日'].map(w=>`<div class="wc-h">週${w}</div>`).join('')}${cells.join('')}</div>
+  <div style="font-size:12px;color:#888;margin-top:8px">預設：平日上班 08:00–17:00、午休 12:00–13:00；週六、週日與國定假日休假（依人事行政總處辦公日曆表）。點日期可修改；「多選設定」可一次設定多天。</div>`;
+}
+window.wcMulti=function(on){_wcSel=on?new Set():null;renderCheckins();};
+window.wcClick=function(d){
+  if(_wcSel){_wcSel.has(d)?_wcSel.delete(d):_wcSel.add(d);renderCheckins();return;}
+  openWCEditor([d]);
+};
+window.wcEditSelected=function(){if(_wcSel&&_wcSel.size)openWCEditor([..._wcSel].sort());};
+function openWCEditor(list){
+  const cf=WC.conf(list[0]);
+  const title=list.length===1?`${list[0]}（${CI_WD[WC.weekday(list[0])]}）`:`${list.length} 天：${list.map(d=>Number(d.slice(5,7))+'/'+Number(d.slice(8))).join('、')}`;
+  window._wcEdit=list;
+  document.getElementById('due-modal-title').textContent='工作日曆設定';
+  document.getElementById('due-modal-content').innerHTML=`
+    <div style="font-size:14px;font-weight:600;margin-bottom:4px">${title}</div>
+    ${list.length===1&&cf.holiday?`<div style="font-size:12px;color:#C62828">國定假日：${ciEsc(cf.holiday)}</div>`:''}
+    <div style="display:flex;gap:16px;margin:10px 0">
+      <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="radio" name="wc-type" value="work" ${cf.work?'checked':''} style="width:auto" onchange="wcTypeChg()"> 上班</label>
+      <label style="display:flex;align-items:center;gap:6px;margin:0;cursor:pointer"><input type="radio" name="wc-type" value="off" ${cf.work?'':'checked'} style="width:auto" onchange="wcTypeChg()"> 休假</label>
+    </div>
+    <div id="wc-time" style="display:${cf.work?'block':'none'}">
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div><label>上班時間</label><input type="time" id="wc-start" value="${cf.start}" style="width:130px"></div>
+        <div><label>下班時間</label><input type="time" id="wc-end" value="${cf.end}" style="width:130px"></div>
+      </div>
+      <label style="display:flex;align-items:center;gap:6px;margin-top:10px;cursor:pointer"><input type="checkbox" id="wc-lunch" ${cf.lunch?'checked':''} style="width:auto"> 午休 12:00–13:00</label>
+    </div>
+    <label>註記（選填）</label><input type="text" id="wc-note" value="${ciEsc(list.length===1?cf.note:'')}" placeholder="例：加班日、盤點">
+    <div id="wc-err" style="color:#C62828;font-size:12px;margin-top:4px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn btn-primary btn-sm" onclick="wcSave()">儲存</button>
+      ${list.some(d=>WC.overrides[d])?`<button class="btn btn-sm" onclick="wcReset()">恢復預設</button>`:''}
+      <button class="btn btn-sm" onclick="closeModal()">取消</button>
+    </div>`;
+  document.getElementById('due-modal').style.display='flex';
+}
+window.wcTypeChg=function(){const w=document.querySelector('input[name=wc-type]:checked')?.value==='work';document.getElementById('wc-time').style.display=w?'block':'none';};
+window.wcSave=async function(){
+  const list=window._wcEdit||[];if(!list.length)return;
+  const work=document.querySelector('input[name=wc-type]:checked')?.value==='work';
+  const start=document.getElementById('wc-start').value,end=document.getElementById('wc-end').value;
+  const lunch=document.getElementById('wc-lunch').checked,note=document.getElementById('wc-note').value.trim();
+  const err=document.getElementById('wc-err');
+  if(work&&(!start||!end||end<=start)){err.textContent='請確認上下班時間（下班要晚於上班）';return;}
+  const days={};list.forEach(d=>{days[d]=work?{work:true,start,end,lunch,note}:{work:false,note};});
+  setSS('syncing');
+  try{
+    await db.collection('system').doc('workCalendar').set({days,updatedAt:new Date().toISOString()},{merge:true});
+    Object.assign(WC.overrides,days);
+    setSS('ok');closeModal();if(_wcSel)_wcSel=new Set();toast(`已設定 ${list.length} 天`);renderCheckins();
+  }catch(e){console.error(e);setSS('err');err.textContent='儲存失敗：'+(e.message||e);}
+};
+window.wcReset=async function(){
+  const list=(window._wcEdit||[]).filter(d=>WC.overrides[d]);if(!list.length)return;
+  const patch={updatedAt:new Date().toISOString()};list.forEach(d=>{patch['days.'+d]=firebase.firestore.FieldValue.delete();});
+  setSS('syncing');
+  try{
+    await db.collection('system').doc('workCalendar').update(patch);
+    list.forEach(d=>delete WC.overrides[d]);
+    setSS('ok');closeModal();if(_wcSel)_wcSel=new Set();toast('已恢復預設');renderCheckins();
+  }catch(e){console.error(e);setSS('err');toast('恢復失敗：'+(e.message||e));}
 };
 
 rsStart();
@@ -2623,9 +2846,24 @@ function renderOrders(){
   const mismatchBtn=document.getElementById('btn-price-mismatch');
   if(mismatchBtn)mismatchBtn.textContent=mismatchIds.size?`⚠ 單價不符 (${mismatchIds.size})`:'⚠ 單價不符';
   if(showPriceMismatchOnly)list=list.filter(o=>mismatchIds.has(o.id));
-  {const bad=window.DB.orders.filter(o=>doneCheck(o)).map(o=>o.id),el=document.getElementById('done-check-note');
+  {const badO=window.DB.orders.map(o=>({o,sum:doneCheck(o)})).filter(x=>x.sum).sort((a,b)=>(a.o.date||'').localeCompare(b.o.date||'')||(a.o.orderno||'').localeCompare(b.o.orderno||''));
+   const bad=badO.map(x=>x.o.id),el=document.getElementById('done-check-note');
    if(el){el.style.display=bad.length?'block':'none';
-     el.innerHTML=bad.length?`⚠ 有 ${bad.length} 張訂單的完工數與派工回報合計不符（訂單名稱下方有標示）。<button class="btn btn-sm" style="margin-left:8px" onclick='fixOrderTotals(${JSON.stringify(bad)})'>全部重新計算</button>`:'';}}
+     // 列出不符的訂單（不受上方篩選與搜尋影響，已完成的也會列出）
+     const lines=badO.map(({o,sum})=>{
+       const d=[];
+       if((o.done||0)!==sum.done)d.push(`完工 ${o.done||0}→${sum.done}`);
+       if((o.defect||0)!==sum.defect)d.push(`不良 ${o.defect||0}→${sum.defect}`);
+       if((o.shortage||0)!==sum.shortage)d.push(`來料不足 ${o.shortage||0}→${sum.shortage}`);
+       return`<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:4px 0;border-top:1px dashed #F5C6C6;color:#333">
+         <span style="color:#888;min-width:84px">${dueEsc(o.date||'-')}</span>
+         <span style="color:#185FA5;font-weight:600;min-width:96px">${dueEsc(o.orderno||'-')}</span>
+         <a href="javascript:void(0)" onclick="openOrderDetail('${o.id}')" style="font-weight:600;color:#333">${dueEsc(o.name)}${o.spec?` <span style="font-weight:400;color:#888">(${dueEsc(o.spec)})</span>`:''}</a>
+         <span style="color:#C62828">${d.join('、')}</span>
+         <span style="flex:1"></span>
+         <button class="btn btn-sm" style="font-size:11px;padding:2px 8px" onclick="fixOrderTotals(['${o.id}'])">重新計算</button></div>`;
+     }).join('');
+     el.innerHTML=bad.length?`<div style="display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:4px">⚠ 有 ${bad.length} 張訂單的完工數與派工回報合計不符<button class="btn btn-sm" onclick='fixOrderTotals(${JSON.stringify(bad)})'>全部重新計算</button></div><div style="font-size:12px;max-height:220px;overflow-y:auto">${lines}</div>`:'';}}
   if(sortByDue){const k=new Map(list.map(o=>[o.id,dueSortKey(o)]));list.sort((a,b)=>k.get(a.id).localeCompare(k.get(b.id)));} // 穩定排序：同順位維持原本的接單日期順序
   const hlRe=kw?new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'gi'):null;
   const hl=(str)=>{
@@ -2744,6 +2982,7 @@ window.openOrderDetail=function(orderId){
         <span>訂單數量：<strong>${o.qty}</strong></span>
         <span>單價：<strong>$${o.price||0}</strong></span>
       </div>
+      ${o.forceDone?`<div style="font-size:12px;color:#6A1B9A">✔ 已強制完成（${(o.forceDone.at||'').slice(0,10)}，當時回報完工 ${o.forceDone.reported}）</div>`:''}
       ${doneCheckHtml(o)}
       <div id="due-detail-box" style="padding:8px;background:#FAFAFA;border-radius:6px">${dueDetailHtml(o)}</div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;color:#666">
@@ -2787,7 +3026,8 @@ window.openOrderDetail=function(orderId){
 window.forceCompleteOrder=async function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   if(!confirm(`確定強制完成「${o.name}」？\n將把已加工數量設為訂單總量 ${o.qty}。`))return;
-  await saveOrder({...o,done:o.qty});
+  // forceDone：標記為強制完成（之後依派工回報重新加總時，完工數維持訂單總量；完工數檢查也不會再提醒）
+  await saveOrder({...o,done:o.qty,forceDone:{at:new Date().toISOString(),reported:o.done||0}});
   closeModal();
   toast(`已強制完成：${o.name}`);
 }
@@ -2822,8 +3062,13 @@ window.editOrderQty=async function(orderId,newVal,inputEl){
   if(!rsGuard([orderId],false,()=>editOrderQty(orderId,newVal,inputEl)))return;
   setSS('syncing');
   try{
-    // 更新訂單數量
-    await saveOrder({...o,qty});
+    // 更新訂單數量（強制完成的訂單改數量 → 取消強制完成，完工數依派工回報重新加總）
+    if(o.forceDone){
+      const{forceDone,...rest}=o;
+      const sumDone=window.DB.dispatches.filter(x=>x.orderId===orderId).reduce((a,x)=>a+(x.doneQty||0),0);
+      await saveOrder({...rest,qty,done:Math.min(qty,sumDone)});
+      toast('已取消強制完成，完工數依派工回報重新計算');
+    }else await saveOrder({...o,qty});
     // 同步更新所有相關 dispatch 的 assignQty
     const related=findRelatedDispatches(orderId);
     for(const d of related){
@@ -3795,7 +4040,7 @@ window.submitAdjust=async function(id){
   if(o){
     const allDisp=window.DB.dispatches.filter(x=>x.orderId===d.orderId);
     await saveOrder({...o,
-      done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
+      done:o.forceDone?o.qty:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)), // 強制完成的維持總量
       defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
       shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
     });
@@ -3870,12 +4115,11 @@ window.setCIMode=function(mode){
   ciMode=mode;
   document.getElementById('ci-filter-date').style.display=mode==='date'?'block':'none';
   document.getElementById('ci-filter-worker').style.display=mode==='worker'?'block':'none';
-  document.getElementById('ci-tab-date').style.background=mode==='date'?'#185FA5':'#fff';
-  document.getElementById('ci-tab-date').style.color=mode==='date'?'#fff':'#666';
-  document.getElementById('ci-tab-date').style.fontWeight=mode==='date'?'600':'400';
-  document.getElementById('ci-tab-worker').style.background=mode==='worker'?'#185FA5':'#fff';
-  document.getElementById('ci-tab-worker').style.color=mode==='worker'?'#fff':'#666';
-  document.getElementById('ci-tab-worker').style.fontWeight=mode==='worker'?'600':'400';
+  const month=mode==='matrix'||mode==='cal';
+  document.getElementById('ci-list-view').style.display=month?'none':'';
+  document.getElementById('ci-month-view').style.display=month?'':'none';
+  ['date','worker','matrix','cal'].forEach(k=>{const b=document.getElementById('ci-tab-'+k);if(!b)return;
+    b.style.background=mode===k?'#185FA5':'#fff';b.style.color=mode===k?'#fff':'#666';b.style.fontWeight=mode===k?'600':'400';});
   renderCheckins();
 }
 
@@ -3912,6 +4156,11 @@ window.setCIWorkerMonth=function(offset,btn){
 }
 
 function renderCheckins(){
+  if(ciMode==='matrix'||ciMode==='cal'){
+    const box=document.getElementById('ci-month-view');
+    if(box){if(ciMode==='matrix')renderCIMatrix(box);else renderWorkCal(box);}
+    return;
+  }
   {const r=ciMode==='date'?[document.getElementById('ci-from')?.value||'',document.getElementById('ci-to')?.value||'']:[ciWorkerFrom||'',ciWorkerTo||''];
    const need=document.getElementById('pg-checkin')?.classList.contains('active')&&(ciMode==='date'||!!document.getElementById('ci-worker-w')?.value);
    if(need&&!rsEnsure('ci',r[0],r[1],()=>renderCheckins())){const tb=document.getElementById('ci-tbody');if(tb)tb.innerHTML='<tr><td colspan="8" style="text-align:center;padding:2rem;color:#888">⏳ 載入中...</td></tr>';return;}}
@@ -4522,7 +4771,7 @@ function psAttendance(worker,from,to){
   let present=0,punctual=0,leaves=0;
   cis.forEach(c=>{
     if(c.leave){if(c.status!=='拒絕')leaves++;return;}
-    if(c.inTime){present++;if(String(c.inTime).slice(0,5)<=PS.ON_TIME)punctual++;}
+    if(c.inTime){present++;if(String(c.inTime).slice(0,5)<=WC.onTime(c.date))punctual++;} // 準時：當天工作日曆的上班時間＋10 分鐘
   });
   return{present,punctual,late:present-punctual,leaves};
 }
@@ -4548,7 +4797,7 @@ function psCompute(worker){
   const punctual=ov.punctual!=null?Number(ov.punctual):att.punctual;
   const present=ov.present!=null?Number(ov.present):att.present;
   const late=Math.max(0,present-punctual);
-  const req=Number(doc.requiredDays)||0;
+  const req=Number(doc.requiredDays)||WC.workDaysInMonth(m); // 沒手動輸入 → 依工作日曆
   const fullAuto=req>0&&punctual>=req&&att.leaves===0;
   const fullReason=!req?'尚未輸入應出勤天數':`出勤 ${punctual}／應出勤 ${req}${att.leaves?`、請假 ${att.leaves} 天`:''}${late?`、遲到 ${late} 天`:''}${fullAuto?'，符合全勤':''}`;
   const full=ov.full!=null?Number(ov.full):(fullAuto?PS.FULL:0);
@@ -4651,17 +4900,19 @@ function _psRenderBody(body){
   const ws=psWorkers();
   const slips=ws.map(psCompute);
   const req=(PS.doc&&PS.doc.requiredDays)||'';
+  const calDays=WC.workDaysInMonth(PS.month);
   const dis=locked?'disabled':'';
   body.innerHTML=`<div class="card">
     <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
-      <div><label>應出勤天數（全員共用）</label><input type="number" min="0" step="1" value="${req}" ${dis} onchange="psSetRequired(this.value)" style="width:110px"></div>
+      <div><label>應出勤天數（全員共用）</label><input type="number" min="0" step="1" value="${req}" placeholder="${calDays}" ${dis} onchange="psSetRequired(this.value)" style="width:110px">
+        <div style="font-size:11px;color:${req?'#E65100':'#888'};margin-top:2px">${req?`已手動輸入（工作日曆：${calDays} 天，清空即恢復）`:`依工作日曆：${calDays} 天`}</div></div>
       <div style="font-size:13px">${locked?`<span style="color:#C62828">🔒 已鎖定（${(PS.doc.lockedAt||'').slice(0,10)}），顯示的是鎖定時的快照</span>`:'<span style="color:#2E7D32">草稿：修改會自動儲存</span>'}</div>
       <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-sm" onclick="psPrint()">🖨️ 列印全部個人月結明細</button>
         ${locked?`<button class="btn btn-sm" onclick="psUnlock()">解鎖</button>`:`<button class="btn btn-warn btn-sm" onclick="psLock()">🔒 鎖定本期</button>`}
       </div>
     </div>
-    ${!req&&!locked?'<div style="font-size:12px;color:#E65100;margin-top:6px">請先輸入本月應出勤天數，系統才能判斷全勤</div>':''}
+
   </div>
   ${slips.length?`<div class="card" style="padding:0"><div class="tbl-wrap"><table class="tbl" style="min-width:640px"><thead><tr>
     <th>員工</th><th class="col-num">出勤/到班</th><th class="col-num">加工金額</th><th class="col-num">全勤</th><th class="col-num">耗材</th><th class="col-num">應領</th><th class="col-num">實領</th><th class="col-num">匯款/現金</th><th></th></tr></thead><tbody>
@@ -4689,7 +4940,7 @@ function psEditor(s,locked){
     <div>
       ${num('punctual',s.punctual,s.autoPunctual,'出勤天數')}
       ${num('present',s.present,s.autoPresent,'到班天數')}
-      <div style="font-size:11px;color:#888;margin:-2px 0 6px 102px">出勤＝08:10 前打卡；到班含遲到，伙食 = 到班 × ${PS.MEAL}</div>
+      <div style="font-size:11px;color:#888;margin:-2px 0 6px 102px">出勤＝工作日曆上班時間＋10 分鐘內打卡（平日 08:10）；到班含遲到，伙食 = 到班 × ${PS.MEAL}</div>
       <label style="display:flex;gap:6px;align-items:center;margin-bottom:8px"><input type="checkbox" style="width:auto" ${s.showLate?'checked':''} ${dis} onchange="psSetLate('${w}',this.checked)">薪資單顯示遲到天數（${s.late} 天）</label>
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px"><label style="width:96px;margin:0">全勤</label>
         <input type="number" min="0" step="1" value="${(s.lines.find(l=>l.label==='全勤')||{}).amount||0}" ${dis} onchange="psSetNum('${w}','full',this.value)" style="width:90px">
@@ -4951,7 +5202,7 @@ window.parseProdPaste=async function(){
     alert(`儲存失敗：${e.message||e}\n\n請檢查網路連線後重試`);
   }
 }
-window.addProduct=async function(){const name=document.getElementById('np-name').value.trim(),spec=document.getElementById('np-spec').value.trim(),price=parseFloat(document.getElementById('np-price').value)||0;if(!name)return alert('請輸入品名');if(name===DRINK_NAME){if(price>=0)return alert('「代訂飲料」是扣款，單價請填負數（例如 -50）');}else if(price<=0)return alert('請輸入有效單價');const ei=window.DB.products.findIndex(p=>p.name===name&&(p.spec||'')===spec);if(ei>=0){if(!confirm(`「${name}」已存在，覆蓋單價嗎？`))return;window.DB.products[ei].price=price;}else window.DB.products.push({name,spec,price});document.getElementById('np-name').value='';document.getElementById('np-spec').value='';document.getElementById('np-price').value='';await saveProducts();toast('品名已儲存');}
+window.addProduct=async function(){const name=document.getElementById('np-name').value.trim(),spec=document.getElementById('np-spec').value.trim(),priceRaw=document.getElementById('np-price').value.trim(),price=parseFloat(priceRaw)||0;if(!name)return alert('請輸入品名');if(priceRaw===''||!Number.isFinite(Number(priceRaw)))return alert('請輸入單價（沒有加工費請填 0）');if(name===DRINK_NAME){if(price>=0)return alert('「代訂飲料」是扣款，單價請填負數（例如 -50）');}else if(price<0)return alert('單價不可為負數');/* 2026/11：單價可為 0 */const ei=window.DB.products.findIndex(p=>p.name===name&&(p.spec||'')===spec);if(ei>=0){if(!confirm(`「${name}」已存在，覆蓋單價嗎？`))return;window.DB.products[ei].price=price;}else window.DB.products.push({name,spec,price});document.getElementById('np-name').value='';document.getElementById('np-spec').value='';document.getElementById('np-price').value='';await saveProducts();toast('品名已儲存');}
 window.removeProd=async function(i){if(!confirm('確定移除？'))return;window.DB.products.splice(i,1);await saveProducts();}
 window.clearCompleted=async function(){
   const completed=window.DB.orders.filter(o=>{
@@ -5274,7 +5525,7 @@ window.confirmReport=async function(id){
       if(o){
         const allDisp=[...window.DB.dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId),{...d,...updateData}];
         await db.collection('orders').doc(o.id).update({
-          done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
+          done:o.forceDone?o.qty:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)), // 強制完成的維持總量
           defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
           shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
         });
@@ -5320,7 +5571,7 @@ window.confirmAllReports=async function(skipAsk){
         if(o){
           const allDisp=[...window.DB.dispatches.filter(x=>x.id!==d.id&&x.orderId===d.orderId),{...d,...updateData}];
           await db.collection('orders').doc(o.id).update({
-            done:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
+            done:o.forceDone?o.qty:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)), // 強制完成的維持總量
             defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
             shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
           });
@@ -5533,6 +5784,9 @@ function prodEsc(s){return String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':
 async function prodComputeAndSave(ALL){
   if(!window.PROD)throw new Error('productivity.js 未載入');
   const sysEx=(ALL.system||[]).find(x=>x.id==='prodExclude');
+  // 工作日曆：用這次讀到的最新設定（上班時間、午休影響工時計算）
+  const wcDoc=(ALL.system||[]).find(x=>x.id==='workCalendar');
+  if(wcDoc&&window.WC)WC.setOverrides(wcDoc.days||{});
   const res=PROD.compute({events:ALL.reportEvents||[],checkins:ALL.checkins||[],dispatches:ALL.dispatches||[],excludes:(sysEx&&sysEx.list)||[]});
   const at=new Date().toISOString();
   const summary=PROD.buildSummaryDoc(res,at);

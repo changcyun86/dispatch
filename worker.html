@@ -17,6 +17,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang TC','Micr
 .btn-sm{padding:5px 11px;font-size:12px}
 .btn-in{background:#2E7D32;color:#fff;border-color:#2E7D32;font-size:16px;font-weight:600;padding:16px;border-radius:12px}
 .btn-out{background:#C62828;color:#fff;border-color:#C62828;font-size:16px;font-weight:600;padding:16px;border-radius:12px}
+/* 已打過卡：按鈕變灰、不能按（保留原本顏色的外框） */
+.btn-in.ci-done,.btn-out.ci-done{background:#F4F4F4;color:#fff;cursor:default;opacity:1}
+.btn-in.ci-done{border:2px solid #2E7D32}.btn-out.ci-done{border:2px solid #C62828}
 input{width:100%;font-family:inherit;font-size:14px;padding:10px 12px;border:1px solid #d0d0d0;border-radius:8px;background:#fff;color:#1a1a1a;outline:none;transition:border-color 0.15s}
 input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 .metric{background:#f7f7f7;border-radius:10px;padding:0.875rem}
@@ -123,10 +126,10 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
         <div style="font-size:13px;color:#888">今日尚未上班 / Chưa chấm công hôm nay</div>
       </div>
       <div class="grid2" id="checkin-btns">
-        <button class="btn btn-in" onclick="doCheckin('in')">
+        <button class="btn btn-in" id="btn-ci-in" onclick="doCheckin('in')">
           上班打卡<br><span style="font-size:12px;font-weight:400">Vào ca</span>
         </button>
-        <button class="btn btn-out" onclick="doCheckin('out')">
+        <button class="btn btn-out" id="btn-ci-out" onclick="doCheckin('out')">
           下班打卡<br><span style="font-size:12px;font-weight:400">Ra ca</span>
         </button>
       </div>
@@ -217,6 +220,7 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <script src="materials.js?v=2"></script>
+<script src="workcal.js?v=1"></script>
 <script>
 
 const firebaseConfig={apiKey:"AIzaSyAV08Xn-bA1IZESSTdPqgZmjcUFSCFi5jc",authDomain:"changcyun-19b9b.firebaseapp.com",projectId:"changcyun-19b9b",storageBucket:"changcyun-19b9b.firebasestorage.app",messagingSenderId:"853660333384",appId:"1:853660333384:web:183107f8390c6c2ac92f7d"};
@@ -810,6 +814,7 @@ function showMain(name){
 }
 
 window.logoutWorker=function(){
+  try{_outRemHide();}catch(e){}
   stopScope();unmountMat();unmountReq();if(currentTab==='mat'||currentTab==='req')switchTab('pending');
   currentWorker=null;localStorage.removeItem('worker_name');renderAnnouncements();window._untilList=[];window._startList=[];untilCheck();
   document.getElementById('main-screen').style.display='none';
@@ -839,8 +844,17 @@ function getTodayCheckin(){
   const today=toTW(new Date().toISOString(),false);
   return checkins.find(c=>c.worker===currentWorker&&c.date===today)||null;
 }
+// 已打過的卡：按鈕變灰並停用。
+// 下班：回報數量會自動記下班時間（outTime），那不算按過；只有員工親自按過下班打卡（outManual）才變灰。
+function setCheckinBtns(ci){
+  const set=(id,done)=>{const b=document.getElementById(id);if(!b)return;b.classList.toggle('ci-done',done);b.disabled=done;};
+  set('btn-ci-in',!!(ci&&ci.inTime));
+  set('btn-ci-out',!!(ci&&ci.outTime&&ci.outManual));
+}
 function renderCheckinStatus(){
   const ci=getTodayCheckin();
+  setCheckinBtns(ci);
+  try{outRemindCheck();}catch(e){}
   const box=document.getElementById('checkin-status-box');
   const msg=document.getElementById('checkin-msg');
   if(ci&&ci.leave){
@@ -853,7 +867,8 @@ function renderCheckinStatus(){
       <div style="font-size:12px;font-weight:600;color:${statusColor[leaveStatus]};margin-top:4px">狀態：${leaveStatus}</div>
       ${ci.adminNote?`<div style="font-size:12px;color:#185FA5;margin-top:3px">管理員備註：${ci.adminNote}</div>`:''}`;
     msg.textContent='';
-  }else if(ci&&ci.outTime){
+  }else if(ci&&ci.outTime&&ci.outManual){
+    // 只有員工親自按過下班才顯示已下班；回報時自動記的下班時間不顯示，照「已上班」呈現
     box.className='checkin-status in';box.style.background='';box.style.borderColor='';
     box.innerHTML=`<div style="font-size:13px;color:#2E7D32;font-weight:600">今日已下班 / Đã ra ca</div><div style="font-size:12px;color:#666;margin-top:4px">上班 ${ci.inTime} → 下班 ${ci.outTime}</div>`;
     msg.textContent='';
@@ -956,7 +971,8 @@ window.doCheckin=async function(type){
     if(ci&&ci.inTime)return toast('今日已打過上班卡 / Đã vào ca hôm nay');
   }else{
     if(!ci||!ci.inTime)return toast('尚未打上班卡 / Chưa vào ca');
-    if(ci.outTime)return toast('今日已打過下班卡 / Đã ra ca hôm nay');
+    // 回報自動記的下班時間（沒有 outManual）可以再按下班打卡更新成實際離開時間
+    if(ci.outTime&&ci.outManual)return toast('今日已打過下班卡 / Đã ra ca hôm nay');
   }
 
   // 先取得定位再確認
@@ -997,7 +1013,12 @@ window.doCheckin=async function(type){
     if(type==='in'){
       // 寫入前直接向伺服器確認今天是否已打過上班卡（多 1 次讀取），避免手機上的資料不完整時覆蓋原本的上班時間
       let srv=null;
-      try{srv=await db.collection('checkins').doc(id).get({source:'server'});}catch(e){srv=null;}
+      try{srv=await db.collection('checkins').doc(id).get({source:'server'});}
+      catch(e){
+        // 確認不了（網路不穩）就不寫入，避免蓋掉原本的上班時間或存不進資料庫
+        setSS('err');
+        return alert('網路不穩，無法確認今天的打卡紀錄，請稍後再按一次。\nMạng không ổn định, vui lòng thử lại sau.');
+      }
       if(srv&&srv.exists&&srv.data().inTime){
         setSS('ok');
         return alert(`今天已經打過上班卡了（${srv.data().inTime}），不需要再打。\nHôm nay bạn đã vào ca lúc ${srv.data().inTime}.\n\n請按「🔄 重新整理」更新畫面。`);
@@ -1005,7 +1026,8 @@ window.doCheckin=async function(type){
       await db.collection('checkins').doc(id).set({worker:currentWorker,date:today,inTime:timeStr,inLat:lat,inLng:lng,inDist:distRound,outTime:null,outLat:null,outLng:null,outDist:null});
       setSS('ok');toast('上班打卡成功 / Vào ca thành công ✓');
     }else{
-      await db.collection('checkins').doc(id).set({...ci,outTime:timeStr,outLat:lat,outLng:lng,outDist:distRound});
+      // 只更新下班欄位（不用手機上的舊資料整筆覆蓋，避免蓋掉回報時寫入的欄位）；outManual 標記為員工親自按的
+      await db.collection('checkins').doc(id).update({outTime:timeStr,outLat:lat,outLng:lng,outDist:distRound,outManual:true});
       setSS('ok');toast('下班打卡成功 / Ra ca thành công ✓');
     }
   }catch(e){setSS('err');toast('打卡失敗，請重試');}
@@ -1466,6 +1488,36 @@ function renderWorkerMain(){
     );
     return latestBatchIds.has(d.batchId||d.id);
   }
+
+  // 一起加工：同一張訂單（含同批次合併的訂單）今天也在做的其他員工，與他在這張單的回報數量
+  // 資料來源：待辦訂單上所有人的派工本來就已讀進來（計算可回報量用），不增加讀取
+  function coWorkHtml(list){
+    const ids=new Set();
+    list.forEach(d=>{if(d.orderId!=null&&d.orderId!=='')ids.add(d.orderId);(d.mergedOrderIds||[]).forEach(x=>ids.add(x));});
+    const hit=x=>ids.has(x.orderId)||(x.mergedOrderIds||[]).some(y=>ids.has(y));
+    const per=new Map();
+    for(const x of dispatches){
+      if(x.worker===currentWorker||!x.worker||!hit(x))continue;
+      const eff=x.effectiveDate||toTW(x.createdAt,false);
+      if(eff>twToday||!isLatestBatch(x))continue;
+      const rep=(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0);
+      const reportedToday=rep>0&&x.lastReportAt&&toTW(x.lastReportAt,false)===twToday;
+      const still=!!x.multiDay&&rep===0&&!x.groupReportedAt&&stillList(x).some(s=>!s.rejected&&s.date>=_addDays(twToday,-7));
+      if(eff!==twToday&&!reportedToday&&!still)continue;
+      if(!per.has(x.worker))per.set(x.worker,{done:0,def:0,sho:0,rep:false});
+      const p=per.get(x.worker);
+      p.done+=x.doneQty||0;p.def+=x.defectQty||0;p.sho+=x.shortageQty||0;
+      if(rep>0||x.groupReportedAt)p.rep=true;
+    }
+    if(!per.size)return'';
+    const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const items=[...per.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([w,p])=>{
+      const q=p.rep?`<span style="color:#2E7D32">已回報 ${p.done}</span>${p.def?`<span style="color:#C62828">・不良 ${p.def}</span>`:''}${p.sho?`<span style="color:#E65100">・來料不足 ${p.sho}</span>`:''}`:'<span style="color:#999">尚未回報 / Chưa báo</span>';
+      return`<div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(w)}</b><span>${q}</span></div>`;
+    }).join('');
+    return`<div style="font-size:12px;background:#F1F8FF;border:1px solid #D6E8FA;border-radius:8px;padding:6px 10px;margin-bottom:8px;line-height:1.8">
+      <div style="color:#185FA5;font-weight:600">👥 一起加工 / Cùng làm（${per.size} 人）</div>${items}</div>`;
+  }
   function calcOrderRemain(o,excludeDispatchId){
     // 計算單一訂單的剩餘可回報量
     // 其他員工對此訂單的已回報量
@@ -1592,6 +1644,7 @@ function renderWorkerMain(){
             <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;color:#888">${d.orderNo||''}</span>
           </div>
+          ${coWorkHtml([d])}
           <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
             <div>總量 / <span style="color:#aaa">Tổng</span>：<strong>${d.assignQty}</strong></div>
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
@@ -1645,6 +1698,7 @@ function renderWorkerMain(){
             <div><span style="font-weight:600;font-size:15px">${first.orderName}</span>${first.orderSpec?` <span style="color:#aaa;font-size:12px">${first.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;background:#E3F2FD;color:#185FA5;padding:2px 8px;border-radius:12px">合併 ${list.length} 張 / Gộp ${list.length}</span>
           </div>
+          ${coWorkHtml(list)}
           <div style="font-size:13px;color:#666;margin-bottom:10px;line-height:2">
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>${prices.map(p=>'$'+p).join('、')}</strong>／件</div>
             <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5">${totalRemain}</strong></div>
@@ -2173,6 +2227,45 @@ window.submitRpt=async function(id){
   }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
   finally{_submitting.delete(id);}
 }
+
+// ══ 下班打卡提醒（2026/11）════════════════════════════════════════════
+// 到了當天工作日曆的下班時間（預設 17:00），今天有上班卡、還沒親自按下班打卡 → 跳出提醒；工作日曆的休假日不提醒。
+// 會加班到 6～8 點：按「還在加班」1 小時後再提醒（記在手機上，每天重新計算）。
+// 只在 App 開著時提醒（網頁無法在關閉時推播）；工作日曆整份 1 次讀取。
+db.collection('system').doc('workCalendar').onSnapshot(s=>{WC.setOverrides(s.exists?(s.data().days||{}):{});try{outRemindCheck();}catch(e){}},()=>{});
+function _twHM(){return new Date(Date.now()+8*3600e3).toISOString().slice(11,16);}
+function _outRemKey(){return'out-remind-'+currentWorker+'-'+_twToday();}
+function _outRemHide(){const el=document.getElementById('out-remind');if(el)el.remove();}
+function outRemindCheck(){
+  if(!currentWorker||!_ciReady){_outRemHide();return;}
+  const now=_twHM();
+  const ci=getTodayCheckin();
+  const cf=WC.conf(_twToday());
+  if(!cf.work||now<cf.end||!ci||!ci.inTime||ci.leave||ci.outManual){_outRemHide();return;}
+  let until='';try{until=localStorage.getItem(_outRemKey())||'';}catch(e){}
+  if(until&&now<until)return;
+  if(document.getElementById('out-remind'))return;
+  const el=document.createElement('div');
+  el.id='out-remind';
+  el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px';
+  el.innerHTML=`<div style="background:#fff;border-radius:16px;max-width:360px;width:100%;padding:20px;box-shadow:0 8px 30px rgba(0,0,0,.25)">
+    <div style="font-size:18px;font-weight:700;color:#C62828;margin-bottom:10px">⏰ 記得打卡下班</div>
+    <div style="font-size:14px;color:#333;line-height:1.7">已過下班時間 ${cf.end}，下班離開前請按「下班打卡」。<br><b style="color:#C62828">未確實打卡會影響餐費計算及獎金。</b></div>
+    <div style="font-size:13px;color:#666;line-height:1.6;margin-top:8px;padding-top:8px;border-top:1px dashed #ddd">Đã quá giờ tan ca ${cf.end}. Trước khi về, hãy bấm「Ra ca」.<br><b style="color:#C62828">Không chấm công đúng sẽ ảnh hưởng đến tiền ăn và tiền thưởng.</b></div>
+    <button class="btn btn-out" style="width:100%;margin-top:14px" onclick="outRemindGo()">下班打卡 / Ra ca</button>
+    <button class="btn" style="width:100%;margin-top:8px;padding:12px;font-size:14px" onclick="outRemindLater()">還在加班，1 小時後再提醒<br><span style="font-size:12px;color:#888">Đang tăng ca, nhắc lại sau 1 giờ</span></button>
+  </div>`;
+  document.body.appendChild(el);
+}
+window.outRemindLater=function(){
+  const [h,m]=_twHM().split(':').map(Number);
+  const t=Math.min(23*60+59,h*60+m+60);
+  try{localStorage.setItem(_outRemKey(),String(Math.floor(t/60)).padStart(2,'0')+':'+String(t%60).padStart(2,'0'));}catch(e){}
+  _outRemHide();
+};
+window.outRemindGo=function(){_outRemHide();doCheckin('out');};
+setInterval(outRemindCheck,30000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)outRemindCheck();});
 init();
 </script>
 </body>

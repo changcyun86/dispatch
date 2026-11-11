@@ -1,8 +1,9 @@
 // ══ 工時／產能分析：計算核心（productivity.js）══
 // 純計算，不讀寫資料庫。輸入：回報事件、打卡、派工、手動排除；輸出：每日切分結果與月份彙總。
 // 規則（2026/10/31 確認）：
-//  - 以「員工 × 日期」為單位，依回報時間切段：上班打卡（早於 08:00 以 08:00 計）→ 第一次回報 = 第一段，之後每兩次回報之間 = 後一筆的工時
-//  - 最後一次回報 = 當天結束；跨到 12:00–13:00 的段落扣午休
+//  - 以「員工 × 日期」為單位，依回報時間切段：上班打卡（早於當天上班時間以上班時間計）→ 第一次回報 = 第一段，之後每兩次回報之間 = 後一筆的工時
+//  - 最後一次回報 = 當天結束；跨到 12:00–13:00 的段落扣午休（工作日曆設定該天沒有午休則不扣）
+//  - 2026/11：上班時間與午休依工作日曆（workcal.js 的 WC）；沒有載入 WC 時照預設 08:00、有午休
 //  - 多日工作：「今天還在做」之前的時段記在該派工，跨日累加，最後一天回報數量時才計入
 //  - 5 分鐘內連續回報：同品名＋規格 → 合併成一段；不同品名 → 整串不列入
 //  - 一筆工作（同一次回報的派工、多日工作的各天）只要有一段不可靠，整筆不列入
@@ -19,6 +20,14 @@
   function twDate(iso){const t=Date.parse(iso);if(isNaN(t))return'';return new Date(t+8*3600e3).toISOString().slice(0,10);}
   function workDate(d){return d.effectiveDate||twDate(d.createdAt);}
   function lunchOverlap(s,e){return Math.max(0,Math.min(e,L1)-Math.max(s,L0));}
+  // 某天的上班時間（秒）與是否有午休：優先用 input.dayConf，其次工作日曆 WC，都沒有就用預設
+  function dayConfOf(input,d){
+    try{
+      const c=typeof input.dayConf==='function'?input.dayConf(d):(root.WC&&typeof root.WC.conf==='function'?root.WC.conf(d):null);
+      if(c){const st=hmSec(c.start);return{start:st===null?DAY_START:st,lunch:c.lunch!==false};}
+    }catch(e){}
+    return{start:DAY_START,lunch:true};
+  }
   function keyOf(n,s){return`${n||''}||${s||''}`;}
 
   // 並查集：同一次回報的派工、同品名合併的段落 → 同一筆工作
@@ -56,7 +65,8 @@
       const evs=byDay[k].slice().sort((a,b)=>a.at.localeCompare(b.at));
       const ci=ciMap[k];
       const inSec=ci?hmSec(ci.inTime):null;
-      const startSec=inSec===null?null:Math.max(inSec,DAY_START);
+      const cf=dayConfOf(input,d);
+      const startSec=inSec===null?null:Math.max(inSec,cf.start);
       const day={w,d,inTime:ci&&ci.inTime||null,start:startSec,flags:[],warns:[],segs:[]};
       if(manual[k])day.flags.push('手動排除'+(manual[k].note?`（${manual[k].note}）`:''));
       if(adminFill[k])day.flags.push(`管理端代填數量（${adminFill[k].map(x=>x.orderName).join('、')}）`);
@@ -104,7 +114,7 @@
         }
         if(!sg.ex&&day.flags.length)sg.ex=day.flags[0].startsWith('手動')?'手動排除這天':'這天有管理端代填數量';
         const ok=sg.s!==null&&sg.e!==null&&sg.e>sg.s;
-        sg.lunch=ok?lunchOverlap(sg.s,sg.e):0;
+        sg.lunch=ok&&cf.lunch?lunchOverlap(sg.s,sg.e):0;
         sg.sec=ok?Math.max(0,sg.e-sg.s-sg.lunch):0;
         sg.w=w;sg.d=d;
         day.segs.push(sg);allSegs.push(sg);
