@@ -1436,6 +1436,13 @@ function grpQtyLeft(d){
   const rep=grpSiblings(d).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
   return Math.max(0,d.groupQty-rep);
 }
+// 每人各自的派工量（合併卡片 groupQty，或單張訂單指定的派工數量小於訂單數量）→ 顯示成「你的派工量」，避免誤以為是大家共用的總數
+function myShareQty(list){
+  const g=list.find(d=>d.groupQty>0);if(g)return g.groupQty;
+  if(list.length===1){const d=list[0],o=orders.find(x=>x.id===d.orderId);if(o&&d.assignQty&&d.assignQty<o.qty)return d.assignQty;}
+  return 0;
+}
+function myShareHtml(q){return`<div style="background:#E8F5E9;border-radius:6px;padding:2px 8px;display:inline-block;color:#1B5E20">你的派工量 / <span style="color:#558B2F">Phần của bạn</span>：<strong style="font-size:15px">${q}</strong> <span style="font-size:11px;color:#558B2F">（每人各自 / mỗi người）</span></div>`;}
 function getOrderRemain(o, excludeDispatchId){
   const d0=dispatches.find(x=>x.id===excludeDispatchId);
   const base=_getOrderRemainBase(o,excludeDispatchId);
@@ -1521,15 +1528,18 @@ function renderWorkerMain(){
       const reportedToday=rep>0&&x.lastReportAt&&toTW(x.lastReportAt,false)===twToday;
       const still=!!x.multiDay&&rep===0&&!x.groupReportedAt&&stillList(x).some(s=>!s.rejected&&s.date>=_addDays(twToday,-7));
       if(eff!==twToday&&!reportedToday&&!still)continue;
-      if(!per.has(x.worker))per.set(x.worker,{done:0,def:0,sho:0,rep:false});
+      if(!per.has(x.worker))per.set(x.worker,{done:0,def:0,sho:0,rep:false,share:0,assign:0,custom:true});
       const p=per.get(x.worker);
+      if(x.groupQty>0)p.share=x.groupQty;
+      else{const ox=orders.find(y=>y.id===x.orderId);p.assign+=x.assignQty||0;if(!(ox&&x.assignQty&&x.assignQty<ox.qty))p.custom=false;}
       p.done+=x.doneQty||0;p.def+=x.defectQty||0;p.sho+=x.shortageQty||0;
       if(rep>0||x.groupReportedAt)p.rep=true;
     }
     if(!per.size)return'';
     const esc=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     const items=[...per.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([w,p])=>{
-      const q=p.rep?`<span style="color:#2E7D32">已回報 ${p.done}</span>${p.def?`<span style="color:#C62828">・不良 ${p.def}</span>`:''}${p.sho?`<span style="color:#E65100">・來料不足 ${p.sho}</span>`:''}`:'<span style="color:#999">尚未回報 / Chưa báo</span>';
+      const share=p.share||(p.custom&&p.assign?p.assign:0);
+      const q=p.rep?`<span style="color:#2E7D32">已回報 ${p.done}${share?`／${share}`:''}</span>${p.def?`<span style="color:#C62828">・不良 ${p.def}</span>`:''}${p.sho?`<span style="color:#E65100">・來料不足 ${p.sho}</span>`:''}`:`<span style="color:#999">尚未回報 / Chưa báo${share?`（派 ${share}）`:''}</span>`;
       return`<div style="display:flex;justify-content:space-between;gap:8px"><b>${esc(w)}</b><span>${q}</span></div>`;
     }).join('');
     return`<div style="font-size:12px;background:#F1F8FF;border:1px solid #D6E8FA;border-radius:8px;padding:6px 10px;margin-bottom:8px;line-height:1.8">
@@ -1663,7 +1673,7 @@ function renderWorkerMain(){
           </div>
           ${coWorkHtml([d])}
           <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
-            <div>總量 / <span style="color:#aaa">Tổng</span>：<strong>${d.assignQty}</strong></div>
+            ${myShareQty([d])?myShareHtml(myShareQty([d])):`<div>訂單總量 / <span style="color:#aaa">Tổng đơn hàng</span>：<strong>${o?o.qty:d.assignQty}</strong></div>`}
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
             <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5">${remain}</strong></div>
             ${dispNoteBox([d])}
@@ -1718,7 +1728,7 @@ function renderWorkerMain(){
           </div>
           ${coWorkHtml(list)}
           <div style="font-size:13px;color:#666;margin-bottom:10px;line-height:2">
-            ${gq?`<div>總量 / <span style="color:#aaa">Tổng</span>：<strong>${gq}</strong></div>`:''}
+            ${gq?myShareHtml(gq):''}
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>${prices.map(p=>'$'+p).join('、')}</strong>／件</div>
             <div>目前可回報 / <span style="color:#aaa">Có thể báo cáo</span>：<strong style="color:#185FA5">${totalRemain}</strong></div>
             ${dispNoteBox(list)}
@@ -1806,7 +1816,7 @@ function previewHtml(){
           <span style="font-weight:600;font-size:15px">${esc(d.groupName||d.orderName)}</span>${d.orderSpec?`<span style="color:#888;font-size:12px">${esc(d.orderSpec)}</span>`:''}
           ${d.sequence?`<span style="background:#EDE7F6;color:#5E35B1;border-radius:10px;padding:1px 8px;font-size:11px">第 ${d.sequence} 張 / Thứ ${d.sequence}</span>`:''}
         </div>
-        <div style="font-size:13px;color:#555;margin-top:4px">數量 / Số lượng：<b>${qty}</b></div>
+        <div style="font-size:13px;color:#555;margin-top:4px">${myShareQty(g)?`你的派工量 / Phần của bạn：<b>${myShareQty(g)}</b>（每人各自 / mỗi người）`:`數量 / Số lượng：<b>${qty}</b>`}</div>
         ${d.startTime?`<div style="font-size:13px;font-weight:700;color:#1565C0;margin-top:4px">▶ ${d.startTime} 開始 / Bắt đầu lúc ${d.startTime}</div>`:''}
         ${d.untilTime?`<div style="font-size:13px;font-weight:700;color:${d.untilMust?'#C62828':'#E65100'};margin-top:4px">⏰ ${d.untilMust?`${d.untilTime} 前必須完成 / Phải hoàn thành trước ${d.untilTime}`:`做到 ${d.untilTime} / Làm đến ${d.untilTime}`}</div>`:''}
         ${notes.length?`<div style="font-size:12px;color:#E65100;font-weight:600;margin-top:4px;white-space:pre-wrap">📌 ${esc(notes.join('\n'))}</div>`:''}
