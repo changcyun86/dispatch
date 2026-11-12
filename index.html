@@ -2684,6 +2684,134 @@ window.wcReset=async function(){
   }catch(e){console.error(e);setSS('err');toast('恢復失敗：'+(e.message||e));}
 };
 
+// ══ 最近派工記錄：同品名合併派工顯示成一張卡片（2026/11）══════════════
+// 合併派工在資料上是「每張訂單各一筆」，這裡依 batchId＋群組品名併成一張卡，每人一行（數量為各訂單合計），▶明細看各張訂單。
+let _dlOpen=new Set();
+window._dlG=[];
+function dlMergedKey(d){return(d.isMerged&&d.batchId&&d.groupName)?`M|${d.batchId}|${d.groupName}`:null;}
+window.dlToggle=function(k){_dlOpen.has(k)?_dlOpen.delete(k):_dlOpen.add(k);renderDispatchLog();};
+function dlMergedHtml(g,hl,gi){
+  const orderIds=[...new Set(g.dispatches.map(d=>d.orderId))];
+  const ords=orderIds.map(id=>window.DB.orders.find(o=>o.id===id)).filter(Boolean).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const qty=ords.reduce((a,o)=>a+(o.qty||0),0),rep=ords.reduce((a,o)=>a+(o.done||0)+(o.defect||0)+(o.shortage||0),0);
+  const nos=ords.length?ords.map(o=>o.orderno||'-'):[...new Set(g.dispatches.map(d=>d.orderNo||'-'))];
+  const byW=new Map();g.dispatches.forEach(d=>{if(!byW.has(d.worker))byW.set(d.worker,[]);byW.get(d.worker).push(d);});
+  const ordDate=id=>(window.DB.orders.find(o=>o.id===id)||{}).date||'';
+  const rows=[...byW.entries()].map(([w,list])=>{
+    list.sort((a,b)=>ordDate(a.orderId).localeCompare(ordDate(b.orderId)));
+    const first=list[0],gq=(list.find(d=>d.groupQty>0)||{}).groupQty||0;
+    const s=k=>list.reduce((a,d)=>a+(d[k]||0),0);
+    const st=list.some(d=>d.status==='回報中')?'回報中':list.every(d=>d.status==='已完成')?'已完成':(first.status||'待完成');
+    const notes=[...new Set(list.map(d=>String(d.note||'').trim()).filter(Boolean))];
+    const wnotes=[...new Set(list.map(d=>String(d.workerNote||'').trim()).filter(Boolean))];
+    const ok=`${gi}|${w}`,open=_dlOpen.has(g.key+'|'+w);
+    const detail=open?`<div style="margin:6px 0 0 8px;padding:6px 8px;background:#FAFAFA;border-radius:6px">${list.map(d=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:3px 0;font-size:11px;border-bottom:1px dashed #eee">
+        <span><b style="color:#185FA5">${dueEsc(d.orderNo||'-')}</b>${ordDate(d.orderId)?` <span style="color:#aaa">${ordDate(d.orderId).slice(5)}</span>`:''}　完 ${d.doneQty||0} ／ 不良 ${d.defectQty||0} ／ 來料不足 ${d.shortageQty||0}　<span style="color:#aaa">此張上限 ${d.assignQty}</span></span>
+        <span style="display:flex;gap:4px"><button class="btn btn-sm btn-warn" onclick="openAdjust('${d.id}')" style="font-size:10px;padding:2px 6px">調整</button><button class="btn btn-sm btn-danger" onclick="deleteDispatch('${d.id}')" style="font-size:10px;padding:2px 6px">刪除</button></span>
+      </div>`).join('')}</div>`:'';
+    return`<div style="padding:7px 10px;border-bottom:1px solid #f5f5f5">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
+        <div>
+          <span style="font-weight:600;font-size:13px">${dueEsc(w)}</span>${seqBadge(first)}
+          <span style="font-size:11px;color:#185FA5;margin-left:6px;white-space:nowrap">${dispDateLabel(first)}</span>${gq?` <span style="background:#E8F5E9;color:#1B5E20;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap" title="這個人在這張合併卡片上的總量">派 ${gq}</span>`:''}
+          <span style="color:#888;font-size:11px;margin-left:8px">完 ${s('doneQty')} ／ 不良 ${s('defectQty')} ／ 來料不足 ${s('shortageQty')}</span>
+          ${notes.length?`<div style="font-size:11px;color:#E65100;font-weight:600;margin-top:2px;white-space:pre-wrap">📌 派工備註：${dueEsc(notes.join('／'))}</div>`:''}
+          ${wnotes.length?`<div style="font-size:11px;color:#1565C0;margin-top:2px">💬 ${dueEsc(wnotes.join('／'))}</div>`:''}
+        </div>
+        <div style="display:flex;gap:4px;align-items:center;flex-shrink:0">
+          <button class="btn btn-sm" onclick="dlToggle(${JSON.stringify(g.key+'|'+w).replace(/"/g,'&quot;')})" style="font-size:11px;padding:3px 8px">${open?'▼':'▶'} 明細</button>
+          <button class="btn btn-sm btn-warn" onclick="openAdjust('${first.id}')" style="font-size:11px;padding:3px 8px" title="生效日期、順序、多日、備註等設定會套用到整組；回報數量請在明細裡逐張調整">調整</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteWorkerGroup(${gi},${JSON.stringify(w).replace(/"/g,'&quot;')})" style="font-size:11px;padding:3px 8px">刪除</button>
+          <span class="badge ${st==='已完成'?'bd':st==='回報中'?'ba':'bp'}" style="font-size:10px">${st}</span>
+        </div>
+      </div>${detail}</div>`;
+  }).join('');
+  return`<div style="margin-bottom:12px;border:1px solid #D6E8FA;border-radius:8px;overflow:hidden">
+    <div style="background:#F1F8FF;padding:8px 10px;font-size:12px;font-weight:600;display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span>${hl(g.groupName)}${g.orderSpec?' ('+hl(g.orderSpec)+')':''}
+        <span style="background:#E3F2FD;color:#185FA5;padding:1px 8px;border-radius:10px;font-size:11px;margin-left:4px">合併 ${nos.length} 張</span>
+        <span style="color:#888;font-weight:400;margin-left:4px">${nos.map(n=>hl(dueEsc(n))).join('、')}</span>
+        ${ords.length?`<div style="font-weight:400;color:#666;font-size:11px;margin-top:2px">訂單合計 ${qty}／已回報 ${rep}／<b style="color:#185FA5">剩餘 ${Math.max(0,qty-rep)}</b></div>`:''}</span>
+      <button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 8px;flex-shrink:0" onclick="addWorkerToGroup(${gi})">+ 新增人員</button>
+    </div>${rows}</div>`;
+}
+// 刪除某人在整組合併派工（各張訂單）的紀錄
+window.deleteWorkerGroup=async function(gi,worker){
+  const g=window._dlG[gi];if(!g)return;
+  const list=g.dispatches.filter(d=>d.worker===worker);if(!list.length)return;
+  const orderIds=[...new Set(list.map(d=>d.orderId))];
+  if(!rsGuard(orderIds,false,()=>deleteWorkerGroup(gi,worker)))return;
+  if(!confirm(`確定刪除「${worker}」在「${g.groupName}」合併派工（${list.length} 張訂單）的派工記錄？\n（已回報的數量也會從訂單中扣除）`))return;
+  const del=new Set(list.map(d=>d.id));
+  setSS('syncing');
+  try{
+    for(const oid of orderIds){
+      const o=window.DB.orders.find(x=>x.id===oid);if(!o)continue;
+      const others=window.DB.dispatches.filter(x=>x.orderId===oid&&!del.has(x.id));
+      await saveOrder({...o,
+        done:o.forceDone?o.qty:Math.min(o.qty,others.reduce((a,x)=>a+(x.doneQty||0),0)),
+        defect:others.reduce((a,x)=>a+(x.defectQty||0),0),
+        shortage:others.reduce((a,x)=>a+(x.shortageQty||0),0)});
+    }
+    for(const d of list)await db.collection('dispatches').doc(String(d.id)).delete();
+    setSS('ok');toast(`已刪除 ${worker} 的合併派工（${list.length} 筆）`);
+  }catch(e){console.error(e);setSS('err');toast('刪除失敗：'+(e.message||e));}
+};
+// 合併派工新增人員：加到整組每張訂單（同 batchId、同群組品名 → 員工端併成同一張合併卡片），沿用原派工的日期與設定
+window.addWorkerToGroup=function(gi){
+  const g=window._dlG[gi];if(!g)return;
+  const exist=new Set(g.dispatches.map(d=>d.worker));
+  const available=window.DB.employees.filter(e=>!exist.has(e));
+  if(!available.length)return alert('所有員工都已在這組合併派工中');
+  const orderIds=[...new Set(g.dispatches.map(d=>d.orderId))];
+  const ords=orderIds.map(id=>window.DB.orders.find(o=>o.id===id)).filter(Boolean);
+  const qty=ords.reduce((a,o)=>a+(o.qty||0),0),rep=ords.reduce((a,o)=>a+(o.done||0)+(o.defect||0)+(o.shortage||0),0);
+  document.getElementById('modal-title-txt').textContent=`新增人員：${g.groupName}（合併 ${orderIds.length} 張）`;
+  document.getElementById('modal-content').innerHTML=`
+    <div style="font-size:13px;color:#888;margin-bottom:12px">選擇要加入的員工（可多選）。會加入整組 ${orderIds.length} 張訂單，員工端併成同一張合併卡片，生效日期與設定沿用原派工。</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin-bottom:16px">
+      ${available.map(e=>`<label style="display:flex;align-items:center;gap:6px;padding:8px;border:1px solid #e0e0e0;border-radius:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" value="${dueEsc(e)}" class="addg-w" style="width:auto"> ${dueEsc(e)}</label>`).join('')}
+    </div>
+    <div style="font-size:12px;color:#888;margin-bottom:4px">訂單合計 ${qty}／已回報 ${rep}／<b style="color:#185FA5">剩餘 ${Math.max(0,qty-rep)}</b></div>
+    <label style="margin-top:0">派工數量 <span style="color:#aaa;font-weight:400">（選填，每人在這張合併卡片的總量；不填＝不限）</span></label>
+    <input type="number" id="addg-qty" min="1" step="1" placeholder="例：700" style="width:160px;margin-bottom:14px">
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-primary btn-sm" onclick="confirmAddWorkersGroup(${gi})">確認新增</button>
+      <button class="btn btn-sm" onclick="closeModal()">取消</button>
+    </div>`;
+  document.getElementById('dispatch-modal').style.display='flex';
+};
+window.confirmAddWorkersGroup=async function(gi){
+  const g=window._dlG[gi];if(!g)return;
+  const selected=[...document.querySelectorAll('.addg-w:checked')].map(c=>c.value);
+  if(!selected.length)return alert('請至少選擇一名員工');
+  const qRaw=(document.getElementById('addg-qty')?.value||'').trim();
+  let gq=0;
+  if(qRaw){gq=Number(qRaw);if(!Number.isInteger(gq)||gq<1)return alert('派工數量請填正整數，或留空');}
+  const base=[...g.dispatches].sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''))[0];
+  const orderIds=[...new Set(g.dispatches.map(d=>d.orderId))];
+  const ords=orderIds.map(id=>window.DB.orders.find(o=>o.id===id)).filter(Boolean).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  if(!ords.length)return alert('找不到這組的訂單資料');
+  const now=new Date().toISOString();
+  const keep={};['effectiveDate','sequence','note','multiDay','maxDays','startTime','untilTime','untilMust','preview','priority','isReDispatch'].forEach(k=>{if(base[k]!==undefined&&base[k]!==null&&base[k]!=='')keep[k]=base[k];});
+  if(!keep.effectiveDate)keep.effectiveDate=toTW(now,false);
+  setSS('syncing');
+  try{
+    for(const o of ords){
+      const remaining=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
+      for(const worker of selected){
+        await saveDispatch({id:genId('D'),isMerged:true,orderId:o.id,orderName:o.name,orderSpec:o.spec||'',orderNo:o.orderno||'',itemPrice:o.price||0,worker,
+          assignQty:remaining,...(gq?{groupQty:gq}:{}),batchId:base.batchId,groupName:base.groupName,
+          doneQty:0,defectQty:0,shortageQty:0,status:'待完成',createdAt:now,...keep});
+      }
+    }
+    ldRecord([g.groupName],keep.effectiveDate,selected,base.batchId,now);
+    setSS('ok');closeModal();toast(`已新增 ${selected.join('、')} 至 ${g.groupName}（合併 ${ords.length} 張${gq?`，每人 ${gq}`:''}）`);
+  }catch(e){console.error(e);setSS('err');toast('新增失敗：'+(e.message||e));}
+};
+
 rsStart();
 dueListen();
 
@@ -3566,6 +3694,12 @@ function renderDispatchLog(){
   let allDispatches=[...window.DB.dispatches].sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''));
   const grouped={};
   allDispatches.forEach(d=>{
+    // 同品名合併派工 → 併成一張卡（同 batchId＋群組品名）；其他照舊依訂單分組
+    const mk=dlMergedKey(d);
+    if(mk){
+      if(!grouped[mk])grouped[mk]={merged:true,key:mk,batchId:d.batchId,groupName:d.groupName,orderSpec:d.orderSpec,orderName:d.groupName,orderNo:'',dispatches:[]};
+      grouped[mk].dispatches.push(d);return;
+    }
     if(!grouped[d.orderId])grouped[d.orderId]={orderName:d.orderName,orderSpec:d.orderSpec,orderNo:d.orderNo,orderId:d.orderId,dispatches:[]};
     grouped[d.orderId].dispatches.push(d);
   });
@@ -3575,7 +3709,8 @@ function renderDispatchLog(){
     groups=groups.filter(g=>
       (g.orderName||'').toLowerCase().includes(kw)||
       (g.orderNo||'').toLowerCase().includes(kw)||
-      (g.orderSpec||'').toLowerCase().includes(kw)
+      (g.orderSpec||'').toLowerCase().includes(kw)||
+      (g.merged&&g.dispatches.some(d=>(d.orderNo||'').toLowerCase().includes(kw)))
     );
   }
   // 最多顯示20個訂單群組
@@ -3584,7 +3719,8 @@ function renderDispatchLog(){
     el.innerHTML=`<div style="color:#aaa">${kw?`無符合「${kw}」的派工記錄`:'尚無派工記錄'}</div>`;
     return;
   }
-  el.innerHTML=groups.map(g=>`
+  window._dlG=groups;
+  el.innerHTML=groups.map((g,gi)=>g.merged?dlMergedHtml(g,highlight,gi):`
     <div style="margin-bottom:12px;border:1px solid #f0f0f0;border-radius:8px;overflow:hidden">
       <div style="background:#f7f7f7;padding:8px 10px;font-size:12px;font-weight:600;display:flex;justify-content:space-between;align-items:center">
         <span>${highlight(g.orderName)}${g.orderSpec?' ('+highlight(g.orderSpec)+')':''}</span>
@@ -3597,7 +3733,7 @@ function renderDispatchLog(){
         <div style="padding:7px 10px;border-bottom:1px solid #f5f5f5;display:flex;justify-content:space-between;align-items:center">
           <div>
             <span style="font-weight:600;font-size:13px">${d.worker}</span>${seqBadge(d)}
-            <span style="font-size:11px;color:#185FA5;margin-left:6px;white-space:nowrap">${dispDateLabel(d)}</span>
+            <span style="font-size:11px;color:#185FA5;margin-left:6px;white-space:nowrap">${dispDateLabel(d)}</span>${dispQtyBadge(d)}
             <span style="color:#888;font-size:11px;margin-left:8px">完 ${d.doneQty||0} ／ 不良 ${d.defectQty||0} ／ 來料不足 ${d.shortageQty||0}</span>
             ${d.note&&String(d.note).trim()?`<div style="font-size:11px;color:#E65100;font-weight:600;margin-top:2px;white-space:pre-wrap">📌 派工備註：${d.note}</div>`:''}
             ${d.workerNote?`<div style="font-size:11px;color:#1565C0;margin-top:2px">💬 ${d.workerNote}</div>`:''}
@@ -3831,6 +3967,21 @@ function orderMissedCount(o){
   return Object.values(last).filter(d=>dispReportState(d).k==='missed').length;
 }
 function missedTag(n){return n>0?` <span style="background:#FFEBEE;color:#C62828;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap" title="最近一個工作日有員工沒有回報，點訂單詳情查看">⚠ ${n} 筆未回報</span>`:'';}
+// 派工時有輸入派工數量 → 派工記錄上標示（合併多張：每人在合併卡片的總量；單張：指派量小於訂單數量）
+function dispCustomQty(d){
+  if(d.groupQty>0){
+    // 合併張數：同一次派工、同一個人、同品名的派工筆數
+    const n=window.DB.dispatches.filter(x=>x.worker===d.worker&&x.batchId&&x.batchId===d.batchId&&(x.groupName||'')===(d.groupName||'')).length||1;
+    return{q:d.groupQty,merged:true,n};
+  }
+  const o=window.DB.orders.find(x=>x.id===d.orderId);
+  if(o&&d.assignQty>0&&d.assignQty<o.qty)return{q:d.assignQty,merged:false};
+  return null;
+}
+function dispQtyBadge(d){
+  const c=dispCustomQty(d);if(!c)return'';
+  return` <span style="background:#E8F5E9;color:#1B5E20;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap" title="${c.merged?'多張同品名合併派工：這個人在合併卡片上的總量':'這個人在這張訂單的派工量'}">派 ${c.q}${c.merged?`（${c.n} 張合併共 ${c.q}）`:''}</span>`;
+}
 window.addWorkerToOrder=function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   const existWorkers=window.DB.dispatches.filter(d=>d.orderId===orderId).map(d=>d.worker);
@@ -3906,7 +4057,7 @@ window.openDispatchDetail=function(id){
       <div><span style="color:#888">員工：</span><strong>${d.worker}</strong></div>
       <div><span style="color:#888">品名：</span>${d.orderName} ${d.orderSpec||''}</div>
       <div><span style="color:#888">訂單號：</span>${d.orderNo||'-'}</div>
-      <div><span style="color:#888">指派數量：</span>${d.assignQty}</div>
+      <div><span style="color:#888">指派數量：</span>${(()=>{const c=dispCustomQty(d);return c?(c.merged?`<b>${c.q}</b>（${c.n} 張同品名訂單合併共 ${c.q}，不是每張各 ${c.q}；這張訂單上限 ${d.assignQty}）`:`<b>${c.q}</b>（派工時指定）`):`${d.assignQty}（未指定，可做到訂單剩餘量）`;})()}</div>
       ${d.sequence?`<div><span style="color:#888">工單順序：</span>第 ${d.sequence} 張（前一張回報後才顯示給員工）</div>`:''}
       <div><span style="color:#888">完工：</span><span style="color:#2E7D32;font-weight:600">${d.doneQty||0}</span> ／ 不良品：<span style="color:#C62828">${d.defectQty||0}</span> ／ 來料不足：<span style="color:#E65100">${d.shortageQty||0}</span></div>
       ${d.note?`<div><span style="color:#888">派工備註：</span>${d.note}</div>`:''}
