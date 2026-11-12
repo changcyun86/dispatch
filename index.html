@@ -3845,6 +3845,9 @@ window.addWorkerToOrder=function(orderId){
         <input type="checkbox" value="${e}" id="add-w-${e}" style="width:auto"> ${e}
       </label>`).join('')}
     </div>
+    ${(()=>{const rep=(o.done||0)+(o.defect||0)+(o.shortage||0);return`<div style="font-size:12px;color:#888;margin-bottom:4px">訂單總量 ${o.qty}／已回報 ${rep}／<b style="color:#185FA5">剩餘 ${Math.max(0,o.qty-rep)}</b></div>`;})()}
+    <label style="margin-top:0">派工數量 <span style="color:#aaa;font-weight:400">（選填，每人各自；不填＝不限，可做到訂單剩餘量）</span></label>
+    <input type="number" id="addw-qty" min="1" step="1" placeholder="例：200" style="width:160px;margin-bottom:14px">
     <div style="display:flex;gap:8px">
       <button class="btn btn-primary btn-sm" onclick="confirmAddWorkers('${orderId}')">確認新增</button>
       <button class="btn btn-sm" onclick="closeModal()">取消</button>
@@ -3855,13 +3858,21 @@ window.confirmAddWorkers=async function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   const selected=Array.from(document.querySelectorAll('[id^="add-w-"]:checked')).map(c=>c.value);
   if(!selected.length)return alert('請至少選擇一名員工');
+  // 派工數量（每人）：不填＝訂單總量（照舊，不限）；有填 → 員工端顯示「你的派工量」，最多回報到這個數量
+  const qRaw=(document.getElementById('addw-qty')?.value||'').trim();
+  let assignQty=o.qty;
+  if(qRaw){
+    const q=Number(qRaw);
+    if(!Number.isInteger(q)||q<1)return alert('派工數量請填正整數，或留空');
+    assignQty=Math.min(q,o.qty);
+  }
   const batchId=genId('B');
   const now=new Date().toISOString();
   for(const worker of selected){
     await saveDispatch({
       id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
       orderNo:o.orderno||'',itemPrice:o.price,worker,
-      assignQty:o.qty,batchId,
+      assignQty,batchId,
       doneQty:0,defectQty:0,shortageQty:0,
       note:'',status:'待完成',createdAt:now,
       effectiveDate:toTW(now,false) // 明確寫入台灣日期（之後在「調整」改日期、順序都以它為準）
@@ -3869,7 +3880,7 @@ window.confirmAddWorkers=async function(orderId){
   }
   ldRecord([o.name],toTW(now,false),selected,batchId,now);
   closeModal();
-  toast(`已新增 ${selected.join('、')} 至 ${o.name}`);
+  toast(`已新增 ${selected.join('、')} 至 ${o.name}${assignQty<o.qty?`（每人 ${assignQty}）`:''}`);
 }
 window.deleteDispatch=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
