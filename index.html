@@ -2204,7 +2204,11 @@ window.openShipBatch=function(orderId,entryId){
   document.getElementById('modal-content').innerHTML=`
     <div style="font-size:15px;font-weight:700">${dueEsc(o.name)}${o.spec?` <span style="font-weight:400;color:#888">(${dueEsc(o.spec)})</span>`:''}${e.to?`<span style="font-size:13px;color:#185FA5;margin-left:8px">交 ${dueEsc(e.to)}</span>`:''}</div>
     <div style="font-size:12px;color:#888;margin:2px 0 8px">${dueEsc(o.orderno||'')}　交期 ${dueFmt(e.date)}（${dueDaysTxt(e.days)}）</div>
-    ${o.note||e.note?`<div style="font-size:12px;color:#E65100;margin-bottom:8px">📝 ${dueEsc([o.note,e.note].filter(Boolean).join('／'))}</div>`:''}
+    <div style="display:flex;gap:6px;align-items:flex-end;margin-bottom:10px">
+      <div style="flex:1"><label style="margin-top:0">訂單備註</label><input type="text" id="sb-note" value="${dueEsc(o.note||'')}" placeholder="例：未回廠、已磨待振"></div>
+      <button class="btn btn-sm" onclick="shipBatchSaveNote('${o.id}',true)" style="margin-bottom:1px">儲存備註</button>
+    </div>
+    ${e.note?`<div style="font-size:12px;color:#E65100;margin:-4px 0 8px">這批註記：${dueEsc(e.note)}</div>`:''}
     <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;padding:8px 10px;background:#FAFAFA;border-radius:8px;margin-bottom:12px">
       <span>這批 <b>${e.need}</b></span><span>已做好 <b style="color:#2E7D32">${Math.min(e.doneCov,e.need)}</b></span><span>已出貨 <b style="color:#185FA5">${e.delivered?'—':e.shipCov}</b></span>
       <span style="padding:0 8px;border-radius:10px;background:${st.bg};color:${st.c};font-weight:600">${st.t}</span>
@@ -2215,13 +2219,29 @@ window.openShipBatch=function(orderId,entryId){
       <div><label>出貨數量</label><input type="number" id="ship-qty" min="1" value="${qty}"></div>
     </div>
     <div style="margin-bottom:12px"><label>備註（可不填）</label><input type="text" id="ship-note" value="${dueEsc(note)}"></div>
-    <button class="btn btn-primary" style="width:100%;padding:12px;font-size:15px" onclick="submitShipment('${o.id}')">確認出貨</button>`
+    <button class="btn btn-primary" style="width:100%;padding:12px;font-size:15px" onclick="shipBatchConfirm('${o.id}')">確認出貨</button>`
     :`<div style="text-align:center;color:${e.finished?'#9E9E9E':'#E65100'};padding:10px;font-size:13px">${e.finished?'這批已完成':'這批還沒有做好的數量，還不能出貨'}</div>`}
     <div style="display:flex;justify-content:center;gap:18px;margin-top:14px;font-size:13px">
       <a href="javascript:void(0)" onclick="openDueEditor('${o.id}')" style="color:#185FA5">改交期／分批</a>
       <a href="javascript:void(0)" onclick="dueDeleteEntry('${o.id}','${e.id}')" style="color:#C62828">刪除這批交期</a>
     </div>`;
   document.getElementById('dispatch-modal').style.display='flex';
+};
+// 訂單備註：有改才寫入（只更新 note 欄位）
+window.shipBatchSaveNote=async function(orderId,showToast){
+  const o=window.DB.orders.find(x=>x.id===orderId),el=document.getElementById('sb-note');if(!o||!el)return true;
+  const v=el.value.trim();if(v===(o.note||'')){if(showToast)toast('備註沒有變更');return true;}
+  try{
+    await db.collection('orders').doc(orderId).update({note:v?v:firebase.firestore.FieldValue.delete()});
+    if(v)o.note=v;else delete o.note;
+    if(showToast){toast('備註已儲存');renderShipping();}
+    return true;
+  }catch(e){console.error(e);toast('備註儲存失敗：'+(e.message||e));return false;}
+};
+// 確認出貨：備註有改就一起存，再出貨
+window.shipBatchConfirm=async function(orderId){
+  if(!(await shipBatchSaveNote(orderId,false)))return;
+  submitShipment(orderId);
 };
 window.dueDeleteEntry=async function(orderId,entryId){
   const o=window.DB.orders.find(x=>x.id===orderId);const doc=dueGet(orderId);if(!o||!doc)return;
@@ -2436,9 +2456,9 @@ function renderShipCal(box){
     const ds=`${mon}-${String(d).padStart(2,'0')}`;
     const list=(byDate.get(ds)||[]).sort((a,b)=>(a.e.finished-b.e.finished)||(a.e.to||'').localeCompare(b.e.to||''));
     const chips=list.map(({o,e,st})=>{
-      const lbl=`${e.to||''}${o.name}${o.spec?'-'+o.spec:''}-${e.need!=null?e.need:'?'}`;
+      const lbl=`${e.to||''}${o.name}-${e.need!=null?e.need:'?'}`; // 月曆不顯示規格（滑鼠移上去的提示裡有）
       const click=o._snap?`toast('此訂單已結案；要修改請先在訂單管理按「載入已結案訂單」')`:`openShipBatch('${o.id}','${e.id}')`;
-      const tip=`${o.orderno||''} ${st.t}${e.gap>0?'・缺 '+e.gap:''}${o.note?'・'+o.note:''}${e.note?'・'+e.note:''}`;
+      const tip=`${o.orderno||''}${o.spec?' 規格 '+o.spec:''} ${st.t}${e.gap>0?'・缺 '+e.gap:''}${o.note?'・'+o.note:''}${e.note?'・'+e.note:''}`;
       const nt=[o.note,e.note].filter(Boolean).join('・'); // 第二行：訂單備註（與這批的註記）
       return`<div class="cal-chip" onclick="${click}" title="${dueEsc(tip)}" style="background:${e.finished?'#EEEEEE':st.bg};color:${e.finished?'#9E9E9E':st.c};${e.finished?'text-decoration:line-through;':''}"><div class="cal-l1">${dueEsc(lbl)}</div>${nt?`<div class="cal-l2">${dueEsc(nt)}</div>`:''}</div>`;
     }).join('');
@@ -2472,7 +2492,7 @@ function renderShipCal(box){
     <button class="btn btn-sm" onclick="calLoadDone()" title="已全部出貨的訂單不會自動讀取；按這裡才讀本月的紀錄">${hs||'顯示本月已全部出貨的訂單'}</button>
   </div>
   <div class="cal-grid">${[...'一二三四五六日'].map(w=>`<div class="cal-h">週${w}</div>`).join('')}${cells.join('')}</div>
-  <div style="font-size:11px;color:#888;margin-top:6px">格式：交給＋品名-規格-數量，第二行是訂單備註。點一下可直接出貨（或改交期、刪除這批交期）。每天右上角「＋」可新增記事（黃色，只有管理端看得到）。</div>`;
+  <div style="font-size:11px;color:#888;margin-top:6px">格式：交給＋品名-數量，第二行是訂單備註（規格在滑鼠移上去的提示裡）。點一下可直接出貨（或改交期、刪除這批交期）。每天右上角「＋」可新增記事（黃色，只有管理端看得到）。</div>`;
 }
 
 // ══ 派工：交期提醒 ════════════════════════════════════════════════════
