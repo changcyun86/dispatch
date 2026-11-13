@@ -389,10 +389,11 @@ textarea{resize:vertical;min-height:70px}
     <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7" onclick="exportShippingXlsx()">↓ 匯出 Excel</button>
   </div>
   <div id="rs-note-shipping" style="display:none;font-size:12px;color:#555;background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;padding:6px 12px;margin-bottom:8px"></div>
-  <div style="display:flex;gap:0;background:#fff;border:1px solid #e0e0e0;border-radius:10px;overflow:hidden;margin-bottom:0.75rem;max-width:460px">
+  <div style="display:flex;gap:0;background:#fff;border:1px solid #e0e0e0;border-radius:10px;overflow:hidden;margin-bottom:0.75rem;max-width:600px">
     <button id="ship-mode-order" onclick="setShipMode('order')" style="flex:1;padding:9px;border:none;background:#185FA5;color:#fff;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">依訂單</button>
     <button id="ship-mode-due" onclick="setShipMode('due')" style="flex:1;padding:9px;border:none;background:#fff;color:#555;font-family:inherit;font-size:13px;cursor:pointer">每日出貨（依交期）</button>
     <button id="ship-mode-cal" onclick="setShipMode('cal')" style="flex:1;padding:9px;border:none;background:#fff;color:#555;font-family:inherit;font-size:13px;cursor:pointer">月曆</button>
+    <button id="ship-mode-log" onclick="setShipMode('log')" style="flex:1;padding:9px;border:none;background:#fff;color:#555;font-family:inherit;font-size:13px;cursor:pointer">出貨記錄</button>
   </div>
   <div id="ship-due-view" style="display:none"></div>
   <div id="ship-order-view">
@@ -2260,6 +2261,7 @@ window.shipBatchSaveNote=async function(orderId,showToast){
 };
 // 確認出貨：備註有改就一起存，再出貨
 window.shipBatchConfirm=async function(orderId){
+  if(_shipBusy)return;
   if(!(await shipBatchSaveNote(orderId,false)))return;
   submitShipment(orderId);
 };
@@ -2320,7 +2322,7 @@ let _calMonth='';
 const DUE_HIST=new Map(); // 月份 → {state:'loading'|'loaded', ids:Set, at}
 window.setShipMode=function(m){
   _shipMode=m;
-  ['order','due','cal'].forEach(k=>{
+  ['order','due','cal','log'].forEach(k=>{
     const b=document.getElementById('ship-mode-'+k);
     if(b){b.style.background=k===m?'#185FA5':'#fff';b.style.color=k===m?'#fff':'#555';b.style.fontWeight=k===m?'600':'400';}
   });
@@ -2372,6 +2374,7 @@ function dueShipTable(rows){
 function renderShipDue(){
   const box=document.getElementById('ship-due-view');if(!box)return;
   if(_shipMode==='cal'){renderShipCal(box);return;}
+  if(_shipMode==='log'){renderShipLog(box);return;}
   const today=twToday(),kw=dueShipKw();
   const showDone=!!document.getElementById('ship-due-showdone')?.checked;
   const items=dueShipItems().filter(it=>dueItemMatch(it,kw));
@@ -2435,6 +2438,52 @@ window.printShipList=function(){
     <button onclick="print()" style="margin-top:12px;padding:6px 16px">列印</button></body></html>`);
   w.document.close();
 };
+
+// ── 出貨記錄：依出貨日期列出所有出貨（含已結案訂單），可刪除；讀取次數＝當天出貨筆數 ──
+window.SHIPLOG={date:'',list:[],unsub:null,ready:false};
+function shipLogListen(date){
+  if(SHIPLOG.unsub){try{SHIPLOG.unsub();}catch(e){}SHIPLOG.unsub=null;}
+  SHIPLOG.date=date;SHIPLOG.list=[];SHIPLOG.ready=false;
+  SHIPLOG.unsub=db.collection('shipments').where('date','==',date).onSnapshot(sn=>{
+    SHIPLOG.list=sn.docs.map(d=>({id:d.id,...d.data()}));SHIPLOG.ready=true;
+    if(_shipMode==='log')renderShipping();
+  },e=>{console.warn('[出貨記錄]',e);toast('出貨記錄讀取失敗');});
+}
+window.shipLogDate=function(v){if(v)shipLogListen(v);renderShipping();};
+function renderShipLog(box){
+  const date=SHIPLOG.date||twToday();
+  if(!SHIPLOG.unsub||SHIPLOG.date!==date)shipLogListen(date);
+  const list=[...SHIPLOG.list].sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+  // 可能重複：同訂單、同數量，2 分鐘內各建立一筆
+  const dup=new Set();
+  list.forEach((a,i)=>list.slice(i+1).forEach(b=>{
+    const ka=(a.allocations||[]).map(x=>x.orderId).join(','),kb=(b.allocations||[]).map(x=>x.orderId).join(',');
+    if(ka&&ka===kb&&a.qty===b.qty&&Math.abs(Date.parse(b.createdAt||0)-Date.parse(a.createdAt||0))<120000){dup.add(a.id);dup.add(b.id);}
+  }));
+  const total=list.reduce((a,x)=>a+(x.qty||0),0);
+  const rows=list.map(x=>{
+    const t=x.createdAt&&!isNaN(Date.parse(x.createdAt))?new Date(Date.parse(x.createdAt)+8*3600e3).toISOString().slice(11,19):''; // 台灣時間，含秒（方便分辨連按的重複）
+    const nos=(x.allocations||[]).map(a=>a.orderNo||a.orderId).join('、');
+    return`<tr style="${dup.has(x.id)?'background:#FFF3E0':''}">
+      <td style="white-space:nowrap;color:#888">${t}</td>
+      <td style="color:#185FA5;font-weight:600">${dueEsc(nos)}</td>
+      <td><b>${dueEsc(x.orderName||'')}</b>${x.orderSpec?` <span style="color:#888">(${dueEsc(x.orderSpec)})</span>`:''}</td>
+      <td class="col-num" style="font-weight:700">${x.qty||0}</td>
+      <td style="font-size:12px;color:#666">${dueEsc(x.note||'')}${dup.has(x.id)?'<div style="color:#E65100;font-weight:600">⚠ 可能重複出貨</div>':''}</td>
+      <td><button class="btn btn-sm btn-danger" onclick="deleteShipment('${x.id}')" style="font-size:11px;padding:2px 8px">刪除</button></td></tr>`;
+  }).join('');
+  box.innerHTML=`<div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:13px;color:#555">出貨日期</span><input type="date" value="${date}" onchange="shipLogDate(this.value)" style="width:160px;font-size:13px">
+      <button class="btn btn-sm" onclick="shipLogDate(twToday())">今天</button>
+      <span style="font-size:13px;color:#555">共 <b>${list.length}</b> 筆、<b>${total}</b> 件</span>
+      ${dup.size?`<span style="font-size:12px;color:#E65100;font-weight:600">⚠ 有疑似重複的出貨（橘底），確認後可刪除多的那筆</span>`:''}
+    </div>
+    <div class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>建立時間</th><th>訂單號</th><th>品名</th><th class="col-num">數量</th><th>備註</th><th></th></tr></thead>
+      <tbody>${!SHIPLOG.ready?'<tr><td colspan="6" style="text-align:center;color:#888;padding:1.5rem">⏳ 載入中...</td></tr>':rows||'<tr><td colspan="6" style="text-align:center;color:#aaa;padding:1.5rem">這天沒有出貨記錄</td></tr>'}</tbody>
+    </table></div></div>
+    <div style="font-size:12px;color:#888;margin-top:6px">包含已結案訂單的出貨。刪除出貨後，訂單與交期會依剩下的出貨自動重新判斷（已結案的會改回未結案）。</div>`;
+}
 // ── 月曆 ──
 window.calMove=function(n){
   const [y,m]=_calMonth.split('-').map(Number);
@@ -5667,7 +5716,9 @@ window.openShipModal=function(orderId,preQty,preNote){
     </div>`;
   document.getElementById('dispatch-modal').style.display='flex';
 }
+let _shipBusy=false; // 防止連按「確認出貨」重複寫入（網路慢時第一次還沒完成，第二次又送出）
 window.submitShipment=async function(orderId){
+  if(_shipBusy)return;
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   if(!rsGuard([orderId],true,()=>submitShipment(orderId)))return;
   const date=document.getElementById('ship-date').value;
@@ -5676,6 +5727,8 @@ window.submitShipment=async function(orderId){
   if(!date)return alert('請選擇出貨日期');
   if(!qty||qty<=0)return alert('請輸入出貨數量');
   const info=getOrderShipStatus(o);
+  _shipBusy=true;
+  document.querySelectorAll('#modal-content .btn-primary').forEach(b=>{b.disabled=true;b.textContent='出貨中...';});
   setSS('syncing');
   try{
     await db.collection('shipments').add({
@@ -5687,14 +5740,17 @@ window.submitShipment=async function(orderId){
     });
     setSS('ok');closeModal();
     toast(`出貨成功：${o.orderno||o.name} × ${qty}`);
-  }catch(e){setSS('err');toast('出貨失敗，請重試');}
+  }catch(e){setSS('err');toast('出貨失敗，請重試');document.querySelectorAll('#modal-content .btn-primary').forEach(b=>{b.disabled=false;b.textContent='確認出貨';});}
+  finally{_shipBusy=false;}
 }
 window.deleteShipment=async function(id){
   if(!confirm('確定刪除此出貨記錄？'))return;
   setSS('syncing');
   try{
-    const sh=window.DB.shipments.find(x=>x.id===id);
+    const sh=window.DB.shipments.find(x=>x.id===id)||(window.SHIPLOG&&SHIPLOG.list.find(x=>x.id===id));
     await db.collection('shipments').doc(id).delete();
+    // 訂單可能因這筆出貨而結案（不會自動讀取）→ 加入讀取，讓系統依剩下的出貨重新判斷是否結案
+    if(sh&&RS.mode==='scoped'){(sh.allocations||[]).map(a=>String(a.orderId)).filter(rsValidId).forEach(x=>RS.sticky.add(x));rsMark('orders');}
     if(sh)dueRecheck((sh.allocations||[]).map(a=>a.orderId).filter(Boolean),()=>!window.DB.shipments.some(x=>x.id===id)); // 交期：可能要改回未完成
     setSS('ok');toast('已刪除出貨記錄');
   }catch(e){setSS('err');toast('刪除失敗');}
