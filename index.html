@@ -2507,18 +2507,48 @@ window.calLoadDone=async function(){
   }catch(e){console.warn(e);DUE_HIST.delete(mon);toast('載入失敗，請稍後再試');}
   renderShipping();
 };
+// 月曆：一週內已完成的也要顯示（劃線）。打開月曆時讀一次（30 分鐘內不重讀）：
+//  1) 交期最晚日在 7 天內或之後的交期（含已全部完成、訂單已結案的）
+//  2) 7 天內的出貨紀錄 → 沒有交期的訂單，在出貨日顯示「已出貨」
+window.CAL_RECENT={state:'none',at:0,from:'',dueIds:new Set(),ships:[]};
+function calLoadRecent(){
+  const from=rsAddDays(twToday(),-7);
+  if(CAL_RECENT.state==='loading')return;
+  if(CAL_RECENT.state==='loaded'&&CAL_RECENT.from===from&&Date.now()-CAL_RECENT.at<RS_COLD_TTL)return;
+  CAL_RECENT.state='loading';
+  Promise.all([
+    db.collection('orderDueDates').where('maxDate','>=',from).get(),
+    db.collection('shipments').where('date','>=',from).get()
+  ]).then(([dn,sn])=>{
+    const ids=new Set();
+    dn.docs.forEach(d=>{ids.add(d.id);if(DUE.has(d.id))return;const x={id:d.id,...d.data()};DUE_EXTRA.set(d.id,x);DUE_FETCHED.add(d.id);dueQueueRecheck(x);});
+    CAL_RECENT.dueIds=ids;CAL_RECENT.ships=sn.docs.map(d=>({id:d.id,...d.data()}));
+    CAL_RECENT.state='loaded';CAL_RECENT.at=Date.now();CAL_RECENT.from=from;
+    if(_shipMode==='cal')renderShipping();
+  }).catch(e=>{console.warn('[月曆] 讀取最近完成失敗',e);CAL_RECENT.state='none';});
+}
+window.calShowShipLog=function(date){setShipMode('log');shipLogDate(date);};
 function renderShipCal(box){
+  calLoadRecent();
   if(!_calMonth)_calMonth=twToday().slice(0,7);
   const today=twToday(),mon=_calMonth,[y,m]=mon.split('-').map(Number);
   const items=dueShipItems();
   const loadedIds=new Set(window.DB.orders.map(o=>String(o.id)));
   // 已全部完成、訂單沒載入的：用交期文件裡的訂單快照顯示
   const h=DUE_HIST.get(mon);
-  const snapIds=new Set([...(h&&h.state==='loaded'?h.ids:[]),...DUE_RECENT]);
+  const snapIds=new Set([...(h&&h.state==='loaded'?h.ids:[]),...DUE_RECENT,...CAL_RECENT.dueIds]);
   for(const id of snapIds){
     if(loadedIds.has(id))continue;const d=DUE_EXTRA.get(id);if(!d||!d.snap)continue;
     const fixed=(d.entries||[]).reduce((a,e)=>a+(e.qty>0?e.qty:0),0);
     for(const e of (d.entries||[]))items.push({o:{id,orderno:d.snap.orderno,name:d.snap.name,spec:d.snap.spec,qty:d.snap.qty,_snap:true},e:{...e,need:e.qty>0?e.qty:Math.max(0,(d.snap.qty||0)-fixed),finished:true},st:{k:'done',t:'✓ 已出貨',c:'#9E9E9E',bg:'#F5F5F5'}});
+  }
+  // 沒有交期的訂單：7 天內的出貨顯示在出貨日（劃線）
+  const withDue=new Set(items.map(it=>String(it.o.id)));
+  for(const sh of CAL_RECENT.ships){
+    for(const a of (sh.allocations||[])){
+      if(withDue.has(String(a.orderId))||dueGet(a.orderId))continue;
+      items.push({o:{id:String(a.orderId),orderno:a.orderNo||'',name:sh.orderName||'',spec:sh.orderSpec||'',note:sh.note||'',_ship:sh.date},e:{id:'S'+sh.id,date:sh.date,need:a.qty||0,finished:true,to:''},st:{k:'done',t:'✓ 已出貨',c:'#9E9E9E',bg:'#F5F5F5'}});
+    }
   }
   const byDate=new Map();
   for(const it of items){if(!it.e.date||it.e.date.slice(0,7)!==mon)continue;if(!byDate.has(it.e.date))byDate.set(it.e.date,[]);byDate.get(it.e.date).push(it);}
@@ -2531,7 +2561,7 @@ function renderShipCal(box){
     const list=(byDate.get(ds)||[]).sort((a,b)=>(a.e.finished-b.e.finished)||(a.e.to||'').localeCompare(b.e.to||''));
     const chips=list.map(({o,e,st})=>{
       const lbl=`${e.to||''}${o.name}-${e.need!=null?e.need:'?'}`; // 月曆不顯示規格（滑鼠移上去的提示裡有）
-      const click=o._snap?`toast('此訂單已結案；要修改請先在訂單管理按「載入已結案訂單」')`:`openShipBatch('${o.id}','${e.id}')`;
+      const click=o._ship?`calShowShipLog('${o._ship}')`:o._snap?`toast('此訂單已結案；要修改請先在訂單管理按「載入已結案訂單」')`:`openShipBatch('${o.id}','${e.id}')`;
       const tip=`${o.orderno||''}${o.spec?' 規格 '+o.spec:''} ${st.t}${e.gap>0?'・缺 '+e.gap:''}${o.note?'・'+o.note:''}${e.note?'・'+e.note:''}`;
       const nt=[o.note,e.note].filter(Boolean).join('・'); // 第二行：訂單備註（與這批的註記）
       return`<div class="cal-chip" onclick="${click}" title="${dueEsc(tip)}" style="background:${e.finished?'#EEEEEE':st.bg};color:${e.finished?'#9E9E9E':st.c};${e.finished?'text-decoration:line-through;':''}"><div class="cal-l1">${dueEsc(lbl)}</div>${nt?`<div class="cal-l2">${dueEsc(nt)}</div>`:''}</div>`;
