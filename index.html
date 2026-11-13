@@ -1683,6 +1683,22 @@ function dueListen(){
   };
   start();
 }
+const DUE_RECENT=new Set(); // 最近完成、仍要在月曆顯示的交期文件 id
+function dueListenRecent(){
+  let tries=0;
+  const start=()=>{
+    db.collection('orderDueDates').where('showUntil','>=',twToday()).onSnapshot(snap=>{
+      snap.docChanges().forEach(ch=>{
+        const d={id:ch.doc.id,...ch.doc.data()};
+        if(ch.type==='removed'){DUE_RECENT.delete(d.id);return;}
+        DUE_RECENT.add(d.id);
+        if(!DUE.has(d.id)){DUE_EXTRA.set(d.id,d);DUE_FETCHED.add(d.id);}
+      });
+      tries=0;dueRerender();
+    },err=>{console.warn('[交期] 最近完成監聽失敗，稍後重試',err);setTimeout(start,Math.min(300000,30000*Math.pow(2,tries++)));});
+  };
+  start();
+}
 // 沒有常駐的訂單（例如已全部交貨），點開時才讀一次
 async function dueEnsure(orderId){
   const k=String(orderId);
@@ -1705,6 +1721,7 @@ async function dueSave(orderId,entries,oHint){
   const o=oHint||window.DB.orders.find(x=>x.id===k);
   const open=o?dueCalc(o,{entries}).some(e=>!e.finished):entries.some(e=>!e.delivered);
   const doc={orderId:k,entries,open,...dueDocMeta(entries,o),updatedAt:new Date().toISOString()};
+  if(!open)doc.showUntil=dueShowUntil(doc.maxDate);
   await ref.set(doc);
   if(doc.open){DUE.set(k,{id:k,...doc});DUE_EXTRA.delete(k);}else{DUE.delete(k);DUE_EXTRA.set(k,{id:k,...doc});}
 }
@@ -2137,8 +2154,11 @@ window.toggleSortByDue=function(btn){
 // 只在資料「足夠」時往 false 寫：出貨資料還沒讀完只會讓數量偏少，不會誤判成已完成。
 // 刪除出貨、改訂單數量時，把訂單放進 DUE_RECHECK，重新確認是否要改回 open=true。
 const DUE_WRITING=new Set(),DUE_RECHECK=new Map(),DUE_ORPHAN_CHECK=new Set(); // 訂單 id → 資料已更新到位的判斷
+// 全部完成後在月曆上再顯示一週：showUntil＝(交期最晚日、完成日 取較晚者)＋7 天；由另一個監聽讀「最近完成」的交期
+function dueShowUntil(maxDate){const t=twToday(),base=(maxDate&&maxDate>t)?maxDate:t;return rsAddDays(base,7);}
 function dueWriteState(id,patch,base){
   DUE_WRITING.add(id);patch.updatedAt=new Date().toISOString();
+  if(patch.open===false)patch.showUntil=dueShowUntil(patch.maxDate||(base&&base.maxDate));
   if(patch.open===false){DUE.delete(id);DUE_EXTRA.set(id,{...base,...patch});}
   db.collection('orderDueDates').doc(id).update(patch).catch(e=>console.warn('[交期] 狀態更新失敗',e)).finally(()=>DUE_WRITING.delete(id));
 }
@@ -2441,7 +2461,8 @@ function renderShipCal(box){
   const loadedIds=new Set(window.DB.orders.map(o=>String(o.id)));
   // 已全部完成、訂單沒載入的：用交期文件裡的訂單快照顯示
   const h=DUE_HIST.get(mon);
-  if(h&&h.state==='loaded')for(const id of h.ids){
+  const snapIds=new Set([...(h&&h.state==='loaded'?h.ids:[]),...DUE_RECENT]);
+  for(const id of snapIds){
     if(loadedIds.has(id))continue;const d=DUE_EXTRA.get(id);if(!d||!d.snap)continue;
     const fixed=(d.entries||[]).reduce((a,e)=>a+(e.qty>0?e.qty:0),0);
     for(const e of (d.entries||[]))items.push({o:{id,orderno:d.snap.orderno,name:d.snap.name,spec:d.snap.spec,qty:d.snap.qty,_snap:true},e:{...e,need:e.qty>0?e.qty:Math.max(0,(d.snap.qty||0)-fixed),finished:true},st:{k:'done',t:'✓ 已出貨',c:'#9E9E9E',bg:'#F5F5F5'}});
@@ -2926,6 +2947,7 @@ window.confirmAddWorkersGroup=async function(gi){
 
 rsStart();
 dueListen();
+dueListenRecent();
 
 async function saveOrder(o){setSS('syncing');try{await db.collection('orders').doc(o.id).set(o);setSS('ok');}catch(e){setSS('err');toast('儲存失敗');}}
 async function saveDispatch(d){setSS('syncing');try{await db.collection('dispatches').doc(String(d.id)).set(d);setSS('ok');}catch(e){setSS('err');}}
