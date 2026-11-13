@@ -767,6 +767,7 @@ function showAdminApp(){
   document.getElementById('main-app').style.display='block';
   setTimeout(()=>{if(typeof checkBackupReminder==='function')checkBackupReminder();},1000);
   const md=document.getElementById('m-date');if(md)md.value=twToday();
+  if(window._afterLogin)setTimeout(window._afterLogin,0); // 例如網址 #cal → 直接開出貨月曆
 }
 function checkPwd(){
   const val=document.getElementById('pwd-input').value;
@@ -2443,48 +2444,93 @@ window.printShipList=function(){
   w.document.close();
 };
 
-// ── 出貨記錄：依出貨日期列出所有出貨（含已結案訂單），可刪除；讀取次數＝當天出貨筆數 ──
-window.SHIPLOG={date:'',list:[],unsub:null,ready:false};
-function shipLogListen(date){
+// ── 出貨記錄：依出貨日期範圍列出所有出貨（含已結案訂單），可依品名搜尋、依品名合計、可刪除 ──
+// 資料直接讀出貨紀錄（不受訂單是否結案影響）；讀取次數＝期間內的出貨筆數
+window.SHIPLOG={from:'',to:'',list:[],unsub:null,ready:false,kw:''};
+function shipLogListen(from,to){
   if(SHIPLOG.unsub){try{SHIPLOG.unsub();}catch(e){}SHIPLOG.unsub=null;}
-  SHIPLOG.date=date;SHIPLOG.list=[];SHIPLOG.ready=false;
-  SHIPLOG.unsub=db.collection('shipments').where('date','==',date).onSnapshot(sn=>{
+  SHIPLOG.from=from;SHIPLOG.to=to;SHIPLOG.list=[];SHIPLOG.ready=false;
+  SHIPLOG.unsub=db.collection('shipments').where('date','>=',from).where('date','<=',to).onSnapshot(sn=>{
     SHIPLOG.list=sn.docs.map(d=>({id:d.id,...d.data()}));SHIPLOG.ready=true;
     if(_shipMode==='log')renderShipping();
   },e=>{console.warn('[出貨記錄]',e);toast('出貨記錄讀取失敗');});
 }
-window.shipLogDate=function(v){if(v)shipLogListen(v);renderShipping();};
+function shipLogWeek(off){ // 本週（週一～週日）；off=-1 上週
+  const t=twToday(),wd=(new Date(t+'T00:00:00Z').getUTCDay()+6)%7,mon=rsAddDays(t,-wd+7*off);
+  return[mon,rsAddDays(mon,6)];
+}
+window.shipLogRange=function(k){
+  const t=twToday();let r;
+  if(k==='today')r=[t,t];else if(k==='week')r=shipLogWeek(0);else if(k==='lastweek')r=shipLogWeek(-1);
+  else if(k==='month')r=[t.slice(0,8)+'01',t];else return;
+  shipLogListen(r[0],r[1]);renderShipping();
+};
+window.shipLogSet=function(){
+  let f=document.getElementById('sl-from')?.value,t=document.getElementById('sl-to')?.value;
+  if(!f&&!t)return;if(!f)f=t;if(!t)t=f;if(f>t)[f,t]=[t,f];
+  shipLogListen(f,t);renderShipping();
+};
+// 舊的單日呼叫（月曆點「已出貨」）
+window.shipLogDate=function(v){if(v){shipLogListen(v,v);}renderShipping();};
+window.shipLogKw=function(v){SHIPLOG.kw=v;clearTimeout(window._slkT);window._slkT=setTimeout(()=>renderShipLogBody(),250);};
 function renderShipLog(box){
-  const date=SHIPLOG.date||twToday();
-  if(!SHIPLOG.unsub||SHIPLOG.date!==date)shipLogListen(date);
-  const list=[...SHIPLOG.list].sort((a,b)=>(a.createdAt||'').localeCompare(b.createdAt||''));
+  if(!SHIPLOG.unsub){const t=twToday();shipLogListen(t,t);}
+  const {from,to}=SHIPLOG,isW=JSON.stringify([from,to]);
+  const act=k=>{const t=twToday();const m={today:[t,t],week:shipLogWeek(0),lastweek:shipLogWeek(-1),month:[t.slice(0,8)+'01',t]}[k];return JSON.stringify(m)===isW?'btn-primary':'';};
+  box.innerHTML=`<div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span style="font-size:13px;color:#555">出貨日期</span>
+      <input type="date" id="sl-from" value="${from}" onchange="shipLogSet()" style="width:150px;font-size:13px"><span style="color:#aaa">～</span>
+      <input type="date" id="sl-to" value="${to}" onchange="shipLogSet()" style="width:150px;font-size:13px">
+      <button class="btn btn-sm ${act('today')}" onclick="shipLogRange('today')">今天</button>
+      <button class="btn btn-sm ${act('week')}" onclick="shipLogRange('week')">本週</button>
+      <button class="btn btn-sm ${act('lastweek')}" onclick="shipLogRange('lastweek')">上週</button>
+      <button class="btn btn-sm ${act('month')}" onclick="shipLogRange('month')">本月</button>
+      <span style="flex:1"></span>
+      <span style="font-size:13px;color:#888">🔍</span><input type="text" id="sl-kw" value="${dueEsc(SHIPLOG.kw)}" oninput="shipLogKw(this.value)" placeholder="品名／規格／訂單號" style="width:180px;font-size:13px">
+    </div><div id="sl-body"></div>`;
+  renderShipLogBody();
+}
+function renderShipLogBody(){
+  const el=document.getElementById('sl-body');if(!el)return;
+  if(!SHIPLOG.ready){el.innerHTML='<div class="card" style="text-align:center;color:#888">⏳ 載入中...</div>';return;}
+  const kw=(SHIPLOG.kw||'').trim().toLowerCase();
+  const all=[...SHIPLOG.list].sort((a,b)=>(a.date||'').localeCompare(b.date||'')||(a.createdAt||'').localeCompare(b.createdAt||''));
+  const list=kw?all.filter(x=>[(x.orderName||''),(x.orderSpec||''),...(x.allocations||[]).map(a=>a.orderNo||'')].join(' ').toLowerCase().includes(kw)):all;
   // 可能重複：同訂單、同數量，2 分鐘內各建立一筆
   const dup=new Set();
-  list.forEach((a,i)=>list.slice(i+1).forEach(b=>{
+  all.forEach((a,i)=>all.slice(i+1).forEach(b=>{
     const ka=(a.allocations||[]).map(x=>x.orderId).join(','),kb=(b.allocations||[]).map(x=>x.orderId).join(',');
     if(ka&&ka===kb&&a.qty===b.qty&&Math.abs(Date.parse(b.createdAt||0)-Date.parse(a.createdAt||0))<120000){dup.add(a.id);dup.add(b.id);}
   }));
+  // 依品名＋規格合計
+  const sum=new Map();
+  list.forEach(x=>{const k=(x.orderName||'')+'||'+(x.orderSpec||'');const g=sum.get(k)||{n:x.orderName||'',s:x.orderSpec||'',c:0,q:0};g.c++;g.q+=x.qty||0;sum.set(k,g);});
+  const groups=[...sum.values()].sort((a,b)=>b.q-a.q);
   const total=list.reduce((a,x)=>a+(x.qty||0),0);
+  const multi=SHIPLOG.from!==SHIPLOG.to;
+  const hl=t=>{const s=dueEsc(t);if(!kw)return s;const i=s.toLowerCase().indexOf(kw);return i<0?s:s.slice(0,i)+'<mark style="background:#FFF176;padding:0">'+s.slice(i,i+kw.length)+'</mark>'+s.slice(i+kw.length);};
+  const sumHtml=groups.length?`<div class="card" style="padding:0;overflow:hidden;margin-bottom:0.75rem">
+      <div style="padding:8px 14px;background:#F1F8FF;font-weight:700;font-size:13px">依品名合計（${SHIPLOG.from.replace(/-/g,'/')}${multi?' ～ '+SHIPLOG.to.replace(/-/g,'/'):''}）　共 ${list.length} 筆、<span style="color:#185FA5">${total.toLocaleString()}</span> 件</div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>品名</th><th>規格</th><th class="col-num">筆數</th><th class="col-num">出貨數量</th></tr></thead><tbody>
+      ${groups.map(g=>`<tr><td style="font-weight:600">${hl(g.n)}</td><td style="color:#666">${hl(g.s)}</td><td class="col-num">${g.c}</td><td class="col-num" style="font-weight:700;color:#185FA5">${g.q.toLocaleString()}</td></tr>`).join('')}
+      </tbody></table></div></div>`:'';
   const rows=list.map(x=>{
     const t=x.createdAt&&!isNaN(Date.parse(x.createdAt))?new Date(Date.parse(x.createdAt)+8*3600e3).toISOString().slice(11,19):''; // 台灣時間，含秒（方便分辨連按的重複）
     const nos=(x.allocations||[]).map(a=>a.orderNo||a.orderId).join('、');
     return`<tr style="${dup.has(x.id)?'background:#FFF3E0':''}">
+      ${multi?`<td style="white-space:nowrap">${dueEsc((x.date||'').slice(5).replace('-','/'))}</td>`:''}
       <td style="white-space:nowrap;color:#888">${t}</td>
-      <td style="color:#185FA5;font-weight:600">${dueEsc(nos)}</td>
-      <td><b>${dueEsc(x.orderName||'')}</b>${x.orderSpec?` <span style="color:#888">(${dueEsc(x.orderSpec)})</span>`:''}</td>
+      <td style="color:#185FA5;font-weight:600">${hl(nos)}</td>
+      <td><b>${hl(x.orderName||'')}</b>${x.orderSpec?` <span style="color:#888">(${hl(x.orderSpec)})</span>`:''}</td>
       <td class="col-num" style="font-weight:700">${x.qty||0}</td>
       <td style="font-size:12px;color:#666">${dueEsc(x.note||'')}${dup.has(x.id)?'<div style="color:#E65100;font-weight:600">⚠ 可能重複出貨</div>':''}</td>
       <td><button class="btn btn-sm btn-danger" onclick="deleteShipment('${x.id}')" style="font-size:11px;padding:2px 8px">刪除</button></td></tr>`;
   }).join('');
-  box.innerHTML=`<div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <span style="font-size:13px;color:#555">出貨日期</span><input type="date" value="${date}" onchange="shipLogDate(this.value)" style="width:160px;font-size:13px">
-      <button class="btn btn-sm" onclick="shipLogDate(twToday())">今天</button>
-      <span style="font-size:13px;color:#555">共 <b>${list.length}</b> 筆、<b>${total}</b> 件</span>
-      ${dup.size?`<span style="font-size:12px;color:#E65100;font-weight:600">⚠ 有疑似重複的出貨（橘底），確認後可刪除多的那筆</span>`:''}
-    </div>
+  const cols=multi?7:6;
+  el.innerHTML=`${dup.size?`<div style="font-size:12px;color:#E65100;font-weight:600;margin-bottom:6px">⚠ 有疑似重複的出貨（橘底），確認後可刪除多的那筆</div>`:''}${sumHtml}
     <div class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>建立時間</th><th>訂單號</th><th>品名</th><th class="col-num">數量</th><th>備註</th><th></th></tr></thead>
-      <tbody>${!SHIPLOG.ready?'<tr><td colspan="6" style="text-align:center;color:#888;padding:1.5rem">⏳ 載入中...</td></tr>':rows||'<tr><td colspan="6" style="text-align:center;color:#aaa;padding:1.5rem">這天沒有出貨記錄</td></tr>'}</tbody>
+      <thead><tr>${multi?'<th>出貨日</th>':''}<th>建立時間</th><th>訂單號</th><th>品名</th><th class="col-num">數量</th><th>備註</th><th></th></tr></thead>
+      <tbody>${rows||`<tr><td colspan="${cols}" style="text-align:center;color:#aaa;padding:1.5rem">${kw?`這段期間沒有符合「${dueEsc(SHIPLOG.kw)}」的出貨`:'這段期間沒有出貨記錄'}</td></tr>`}</tbody>
     </table></div></div>
     <div style="font-size:12px;color:#888;margin-top:6px">包含已結案訂單的出貨。刪除出貨後，訂單與交期會依剩下的出貨自動重新判斷（已結案的會改回未結案）。</div>`;
 }
@@ -2528,6 +2574,13 @@ function calLoadRecent(){
   }).catch(e=>{console.warn('[月曆] 讀取最近完成失敗',e);CAL_RECENT.state='none';});
 }
 window.calShowShipLog=function(date){setShipMode('log');shipLogDate(date);};
+// 以新分頁開啟月曆：網址加 #cal，新分頁登入後直接進到出貨管理的月曆（同一個瀏覽器的登入狀態會帶過去）
+window.openCalWindow=function(){window.open(location.pathname+location.search+'#cal','_blank');};
+window._afterLogin=function(){
+  if(location.hash==='#cal'){
+    try{sw('shipping');setShipMode('cal');document.title='出貨月曆 - 派工系統';}catch(e){console.warn(e);}
+  }
+};
 function renderShipCal(box){
   calLoadRecent();
   if(!_calMonth)_calMonth=twToday().slice(0,7);
@@ -2585,6 +2638,7 @@ function renderShipCal(box){
     .cal-note-done{text-decoration:line-through;opacity:.55}
   </style>
   <div class="card" style="padding:0.75rem 1.25rem;margin-bottom:0.75rem;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+    ${location.hash==='#cal'?'':`<button class="btn btn-sm" onclick="openCalWindow()" title="在新分頁開啟出貨月曆">↗ 新分頁開啟</button>`}
     <button class="btn btn-sm" onclick="calMove(-1)">‹</button><strong style="font-size:15px;min-width:110px;text-align:center">${y} 年 ${m} 月</strong><button class="btn btn-sm" onclick="calMove(1)">›</button>
     <button class="btn btn-sm" onclick="calMove(0)">今天</button>
     ${overN?`<span style="color:#C62828;font-size:12px;font-weight:600">⚠ 逾期未出 ${overN} 批</span>`:''}
@@ -3028,6 +3082,8 @@ window.confirmAddWorkersGroup=async function(gi){
   }catch(e){console.error(e);setSS('err');toast('新增失敗：'+(e.message||e));}
 };
 
+// 已登入（重新整理）時，主程式載入完再處理網址 #cal
+if(document.getElementById('main-app')?.style.display==='block')setTimeout(()=>window._afterLogin&&window._afterLogin(),0);
 rsStart();
 dueListen();
 dueListenRecent();
