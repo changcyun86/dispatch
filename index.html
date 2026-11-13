@@ -1693,7 +1693,7 @@ function dueListenRecent(){
         const d={id:ch.doc.id,...ch.doc.data()};
         if(ch.type==='removed'){DUE_RECENT.delete(d.id);return;}
         DUE_RECENT.add(d.id);
-        if(!DUE.has(d.id)){DUE_EXTRA.set(d.id,d);DUE_FETCHED.add(d.id);}
+        if(!DUE.has(d.id)){DUE_EXTRA.set(d.id,d);DUE_FETCHED.add(d.id);dueQueueRecheck(d);}
       });
       tries=0;dueRerender();
     },err=>{console.warn('[交期] 最近完成監聽失敗，稍後重試',err);setTimeout(start,Math.min(300000,30000*Math.pow(2,tries++)));});
@@ -1707,7 +1707,7 @@ async function dueEnsure(orderId){
   try{
     const s=await db.collection('orderDueDates').doc(k).get();
     DUE_FETCHED.add(k);
-    if(s.exists)DUE_EXTRA.set(k,{id:k,...s.data()});
+    if(s.exists){const d={id:k,...s.data()};DUE_EXTRA.set(k,d);dueQueueRecheck(d);}
   }catch(e){console.warn('[交期] 讀取失敗',e);}
 }
 function dueDocMeta(entries,o){
@@ -1768,7 +1768,9 @@ function dueCalc(o,doc){
     const need=e.qty>0?e.qty:Math.max(0,qty-fixed);
     const cov=Math.min(avail,need);avail-=cov;
     const doneCov=Math.min(availDone,need);availDone-=doneCov;
-    let shipCov=0;if(!e.delivered){shipCov=Math.min(availShip,need);availShip-=shipCov;} // 手動完成的批次不分配出貨量
+    // 出貨量依交期先後分配給每一批，「舊版手動完成」的批次也照樣分配：
+    // 否則同一批既勾了手動完成、又按了出貨，出貨量會被算到下一批，下一批就被誤判成已出貨（2026/11 修正）
+    const shipCov=Math.min(availShip,need);availShip-=shipCov;
     const shipped=!e.delivered&&need>0&&shipCov>=need;
     const finished=!!e.delivered||need<=0||shipped;
     return{...e,need,cov,gap:finished?0:need-cov,doneCov,shipCov,shipped,finished,days:dueDaysBetween(today,e.date)};
@@ -2195,6 +2197,7 @@ function dueReconcile(){
     if(!d){if(DUE_FETCHED.has(id))DUE_RECHECK.delete(id);continue;}
     if(!o||DUE_WRITING.has(id))continue;
     if(readyFn&&!readyFn(o))continue; // 刪除的出貨／新數量還沒反映到畫面資料：等下一次
+    if(RS.mode==='scoped'){const ck=RS.shipChunkOf.get(id);if(!ck||!RS.ready.get(ck))continue;} // 這張訂單的出貨還沒讀完，先不判斷
     DUE_RECHECK.delete(id);
     if(dueCalc(o,d).some(e=>!e.finished))dueWriteState(id,{open:true},d);
   }
@@ -2205,6 +2208,7 @@ function dueLight(){
   if(_dueLightTimer)return;
   _dueLightTimer=setTimeout(()=>{_dueLightTimer=null;try{if(_shipMode!=='order')renderShipping();dueReconcile();}catch(e){console.error(e);}},60);
 }
+function dueQueueRecheck(d){if(d&&d.open===false&&!DUE_RECHECK.has(String(d.id))){DUE_RECHECK.set(String(d.id),null);setTimeout(dueRerender,0);}}
 function dueRecheck(orderIds,readyFn){
   for(const raw of orderIds){const id=String(raw);DUE_RECHECK.set(id,readyFn||null);dueEnsure(id).then(dueRerender);}
 }
@@ -2361,7 +2365,7 @@ function dueShipRow(it){
     <td>${dueEsc(e.to||'')}</td>
     <td class="col-num" style="font-weight:600">${e.need}</td>
     <td class="col-num" style="color:#2E7D32">${Math.min(e.doneCov,e.need)}</td>
-    <td class="col-num" style="color:#185FA5">${e.delivered?'—':e.shipCov}</td>
+    <td class="col-num" style="color:#185FA5">${e.shipCov}</td>
     <td style="white-space:nowrap"><span style="padding:2px 8px;border-radius:12px;font-size:11px;background:${st.bg};color:${st.c};font-weight:600">${st.t}</span>${(!e.finished&&e.gap>0)?`<div style="font-size:11px;color:#C62828">缺 ${e.gap} 待派工</div>`:''}</td>
     <td>${btn}</td>
   </tr>`;
@@ -2498,7 +2502,7 @@ window.calLoadDone=async function(){
   try{
     const sn=await db.collection('orderDueDates').where('months','array-contains',mon).get();
     const ids=new Set();
-    sn.docs.forEach(d=>{if(DUE.has(d.id))return;DUE_EXTRA.set(d.id,{id:d.id,...d.data()});DUE_FETCHED.add(d.id);ids.add(d.id);});
+    sn.docs.forEach(d=>{if(DUE.has(d.id))return;const x={id:d.id,...d.data()};DUE_EXTRA.set(d.id,x);DUE_FETCHED.add(d.id);ids.add(d.id);dueQueueRecheck(x);});
     DUE_HIST.set(mon,{state:'loaded',ids,at:Date.now()});
   }catch(e){console.warn(e);DUE_HIST.delete(mon);toast('載入失敗，請稍後再試');}
   renderShipping();
