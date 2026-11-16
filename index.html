@@ -210,6 +210,7 @@ textarea{resize:vertical;min-height:70px}
       <button class="btn btn-sm" onclick="closePanel('manual-panel')">取消</button>
     </div>
   </div>
+  <div id="over-note" style="display:none;font-size:13px;color:#4A148C;background:#F3E5F5;border:1px solid #CE93D8;border-radius:8px;padding:8px 12px;margin-bottom:8px"></div>
   <div id="done-check-note" style="display:none;font-size:13px;color:#C62828;background:#FFEBEE;border:1px solid #F5C6C6;border-radius:8px;padding:8px 12px;margin-bottom:8px"></div>
   <div class="card" style="padding:0;overflow:hidden">
     <div class="tbl-wrap">
@@ -2221,10 +2222,12 @@ let _shipMode='order';
 window.openShipBatch=function(orderId,entryId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   const doc=dueGet(orderId);if(!doc)return openDueEditor(orderId);
-  const e=dueCalc(o,doc).find(x=>x.id===entryId);if(!e)return openDueEditor(orderId);
+  const all=dueCalc(o,doc),e=all.find(x=>x.id===entryId);if(!e)return openDueEditor(orderId);
   const st=dueShipState(e),info=getOrderShipStatus(o),today=twToday();
   const canShip=!e.finished&&info&&info.pending>0&&st.made>0;
-  const qty=canShip?Math.min(st.made,info.pending):0;
+  // 最後一批：超做的數量也一起帶入（例：訂單 310、完工 418 → 可出 418）
+  const isLast=all.filter(x=>!x.finished).pop()===e;
+  const qty=canShip?(isLast?info.pending:Math.min(st.made,info.pending)):0;
   const note=`交期 ${dueFmt(e.date)}${e.to?' 交'+e.to:''}`;
   document.getElementById('modal-title-txt').textContent=`出貨 — ${o.orderno||o.name}`;
   document.getElementById('modal-content').innerHTML=`
@@ -2235,6 +2238,7 @@ window.openShipBatch=function(orderId,entryId){
       <button class="btn btn-sm" onclick="shipBatchSaveNote('${o.id}',true)" style="margin-bottom:1px">儲存備註</button>
     </div>
     ${e.note?`<div style="font-size:12px;color:#E65100;margin:-4px 0 8px">這批註記：${dueEsc(e.note)}</div>`:''}
+    ${overQty(o)?`<div style="margin-bottom:8px">${overHtml(o)}${isLast?'<div style="font-size:11px;color:#6A1B9A">出貨數量已含超出的部分</div>':''}</div>`:''}
     <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;padding:8px 10px;background:#FAFAFA;border-radius:8px;margin-bottom:12px">
       <span>這批 <b>${e.need}</b></span><span>已做好 <b style="color:#2E7D32">${Math.min(e.doneCov,e.need)}</b></span><span>已出貨 <b style="color:#185FA5">${e.delivered?'—':e.shipCov}</b></span>
       <span style="padding:0 8px;border-radius:10px;background:${st.bg};color:${st.c};font-weight:600">${st.t}</span>
@@ -2705,12 +2709,15 @@ function doneCheck(o){
   const ds=window.DB.dispatches.filter(d=>d.orderId===o.id);
   // 舊版合併派工（一筆含多張訂單）無法依訂單拆分，不比對
   if(window.DB.dispatches.some(d=>Array.isArray(d.mergedOrderIds)&&d.mergedOrderIds.length&&(d.orderId===o.id||d.mergedOrderIds.includes(o.id))))return null;
-  const sum={done:Math.min(o.qty||0,ds.reduce((a,d)=>a+(d.doneQty||0),0)),defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)};
+  const sum={done:ds.reduce((a,d)=>a+(d.doneQty||0),0),defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)};
   // 強制完成：完工數＝訂單總量是刻意的，不算不符。舊版強制完成沒有標記 → 完工數剛好等於總量、且派工合計較少，也視為強制完成
   if(doneForced(o,sum.done))sum.done=o.done||0;
   const bad=(o.done||0)!==sum.done||(o.defect||0)!==sum.defect||(o.shortage||0)!==sum.shortage;
   return bad?sum:null;
 }
+// 超做：完工數超過訂單數量（例：訂單 310、實際完成 418 → 多 108）
+function overQty(o){return Math.max(0,(o.done||0)-(o.qty||0));}
+function overHtml(o){const n=overQty(o);return n?`<div style="font-size:11px;font-weight:700;color:#6A1B9A">⚠ 超出訂單 ${n} 個（訂單 ${o.qty}、完工 ${o.done}）</div>`:'';}
 function doneForced(o,sumDone){return!!o.forceDone||((o.done||0)===(o.qty||0)&&(o.qty||0)>0&&sumDone<(o.qty||0));}
 function doneCheckHtml(o){
   const sum=doneCheck(o);if(!sum)return'';
@@ -2730,9 +2737,9 @@ window.fixOrderTotals=async function(ids){
       const o=window.DB.orders.find(x=>x.id===id);if(!o)continue;
       const sn=await db.collection('dispatches').where('orderId','==',id).get();
       const ds=sn.docs.map(d=>d.data());
-      const sumDone=Math.min(o.qty||0,ds.reduce((a,d)=>a+(d.doneQty||0),0));
+      const sumDone=ds.reduce((a,d)=>a+(d.doneQty||0),0);
       await db.collection('orders').doc(id).update({
-        done:doneForced(o,sumDone)?(o.qty||0):sumDone, // 強制完成的維持總量
+        done:doneForced(o,sumDone)?Math.max(o.qty||0,sumDone):sumDone, // 強制完成的維持總量
         defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),
         shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)});
       n++;
@@ -3020,7 +3027,7 @@ window.deleteWorkerGroup=async function(gi,worker){
       const o=window.DB.orders.find(x=>x.id===oid);if(!o)continue;
       const others=window.DB.dispatches.filter(x=>x.orderId===oid&&!del.has(x.id));
       await saveOrder({...o,
-        done:o.forceDone?o.qty:Math.min(o.qty,others.reduce((a,x)=>a+(x.doneQty||0),0)),
+        done:o.forceDone?Math.max(o.qty,others.reduce((a,x)=>a+(x.doneQty||0),0)):others.reduce((a,x)=>a+(x.doneQty||0),0),
         defect:others.reduce((a,x)=>a+(x.defectQty||0),0),
         shortage:others.reduce((a,x)=>a+(x.shortageQty||0),0)});
     }
@@ -3247,6 +3254,11 @@ function renderOrders(){
   const mismatchBtn=document.getElementById('btn-price-mismatch');
   if(mismatchBtn)mismatchBtn.textContent=mismatchIds.size?`⚠ 單價不符 (${mismatchIds.size})`:'⚠ 單價不符';
   if(showPriceMismatchOnly)list=list.filter(o=>mismatchIds.has(o.id));
+  // 超做提醒：完工超過訂單數量、還沒全部出貨的訂單（不受篩選影響）
+  {const el=document.getElementById('over-note');
+   if(el){const ov=window.DB.orders.filter(o=>overQty(o)>0&&!o.closed&&(getOrderShipStatus(o)||{}).st!=='全數出貨').sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+     el.style.display=ov.length?'block':'none';
+     el.innerHTML=ov.length?`<div style="font-weight:600;margin-bottom:4px">⚠ 有 ${ov.length} 張訂單完工數超出訂單數量（可出貨以實際完工數計）</div>`+ov.map(o=>`<div style="display:flex;gap:10px;flex-wrap:wrap;padding:3px 0;border-top:1px dashed #CE93D8;font-size:12px;color:#333"><span style="color:#185FA5;font-weight:600;min-width:96px">${dueEsc(o.orderno||'-')}</span><a href="javascript:void(0)" onclick="openOrderDetail('${o.id}')" style="font-weight:600;color:#333">${dueEsc(o.name)}${o.spec?` <span style="font-weight:400;color:#888">(${dueEsc(o.spec)})</span>`:''}</a><span>訂單 ${o.qty}・完工 ${o.done}・<b style="color:#6A1B9A">多 ${overQty(o)} 個</b></span></div>`).join(''):'';}}
   {const badO=window.DB.orders.map(o=>({o,sum:doneCheck(o)})).filter(x=>x.sum).sort((a,b)=>(a.o.date||'').localeCompare(b.o.date||'')||(a.o.orderno||'').localeCompare(b.o.orderno||''));
    const bad=badO.map(x=>x.o.id),el=document.getElementById('done-check-note');
    if(el){el.style.display=bad.length?'block':'none';
@@ -3289,7 +3301,8 @@ function renderOrders(){
     const mt=missedTag(orderMissedCount(o));
     const noteH=o.note?`<div style="font-size:11px;font-weight:400;color:#E65100">📝 ${hl(dueEsc(o.note))}</div>`:'';
     const chkH=doneCheckHtml(o);
-    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${mt}${noteH}${chkH}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${mt}${noteH}${chkH}${estH}</td>`;
+    const ovH=overHtml(o);
+    const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${mt}${noteH}${ovH}${chkH}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${mt}${noteH}${ovH}${chkH}${estH}</td>`;
     return`<tr style="background:${isSel?'#FFF8E1':''}">
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
       <td style="white-space:nowrap">${o.date||'-'}</td>
@@ -3384,6 +3397,7 @@ window.openOrderDetail=function(orderId){
         <span>單價：<strong>$${o.price||0}</strong></span>
       </div>
       ${o.forceDone?`<div style="font-size:12px;color:#6A1B9A">✔ 已強制完成（${(o.forceDone.at||'').slice(0,10)}，當時回報完工 ${o.forceDone.reported}）</div>`:''}
+      ${overHtml(o)}
       ${doneCheckHtml(o)}
       <div id="due-detail-box" style="padding:8px;background:#FAFAFA;border-radius:6px">${dueDetailHtml(o)}</div>
       <div style="display:flex;gap:16px;flex-wrap:wrap;color:#666">
@@ -3467,7 +3481,7 @@ window.editOrderQty=async function(orderId,newVal,inputEl){
     if(o.forceDone){
       const{forceDone,...rest}=o;
       const sumDone=window.DB.dispatches.filter(x=>x.orderId===orderId).reduce((a,x)=>a+(x.doneQty||0),0);
-      await saveOrder({...rest,qty,done:Math.min(qty,sumDone)});
+      await saveOrder({...rest,qty,done:sumDone});
       toast('已取消強制完成，完工數依派工回報重新計算');
     }else await saveOrder({...o,qty});
     // 同步更新所有相關 dispatch 的 assignQty
@@ -4477,12 +4491,14 @@ window.submitAdjust=async function(id){
   if(o){
     const allDisp=window.DB.dispatches.filter(x=>x.orderId===d.orderId);
     await saveOrder({...o,
-      done:o.forceDone?o.qty:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)), // 強制完成的維持總量
+      done:o.forceDone?Math.max(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)):allDisp.reduce((a,x)=>a+(x.doneQty||0),0), // 不設上限（超做照實記錄）；強制完成至少為總量
       defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
       shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
     });
   }
   closeModal();toast('已調整');
+  {const o2=window.DB.orders.find(x=>x.id===d.orderId),sumD=window.DB.dispatches.filter(x=>x.orderId===d.orderId).reduce((a,x)=>a+(x.doneQty||0),0);
+   if(o2&&sumD>o2.qty)setTimeout(()=>alert(`提醒：「${o2.name}」訂單數量 ${o2.qty}，完工合計 ${sumD}，多了 ${sumD-o2.qty} 個。\n可出貨數量會以 ${sumD} 計算。`),100);}
 }
 window.closeModal=function(){document.querySelectorAll('.modal-overlay').forEach(m=>m.style.display='none');}
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',function(e){if(e.target===this)closeModal();}));
@@ -5746,7 +5762,7 @@ function renderShipping(){
       <td style="padding:10px 14px;font-weight:600;color:#185FA5">${o.orderno||'-'}</td>
       <td style="padding:10px 14px">
         <div style="font-weight:500">${o.name}</div>
-        ${o.spec?`<div style="font-size:11px;color:#aaa">${o.spec}</div>`:''}
+        ${o.spec?`<div style="font-size:11px;color:#aaa">${o.spec}</div>`:''}${overHtml(o)}
       </td>
       <td class="col-num" style="padding:10px 14px">${o.qty}</td>
       <td class="col-num" style="padding:10px 14px;color:#2E7D32;font-weight:600">${info.canShip}</td>
@@ -5969,7 +5985,7 @@ window.confirmReport=async function(id){
       if(o){
         const allDisp=[...window.DB.dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId),{...d,...updateData}];
         await db.collection('orders').doc(o.id).update({
-          done:o.forceDone?o.qty:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)), // 強制完成的維持總量
+          done:o.forceDone?Math.max(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)):allDisp.reduce((a,x)=>a+(x.doneQty||0),0), // 不設上限（超做照實記錄）；強制完成至少為總量
           defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
           shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
         });
@@ -6015,7 +6031,7 @@ window.confirmAllReports=async function(skipAsk){
         if(o){
           const allDisp=[...window.DB.dispatches.filter(x=>x.id!==d.id&&x.orderId===d.orderId),{...d,...updateData}];
           await db.collection('orders').doc(o.id).update({
-            done:o.forceDone?o.qty:Math.min(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)), // 強制完成的維持總量
+            done:o.forceDone?Math.max(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)):allDisp.reduce((a,x)=>a+(x.doneQty||0),0), // 不設上限（超做照實記錄）；強制完成至少為總量
             defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
             shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
           });

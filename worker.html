@@ -1395,7 +1395,7 @@ window.saveEdit=async function(id){
       lastReportAt:new Date().toISOString()};
     await writeReports([updated]);
     editingId=null;setSS('ok');toast('已儲存 / Đã lưu ✓');
-  }catch(e){setSS('err');toast('儲存失敗，請重試');}
+  }catch(e){setSS('err');(e&&e.overQty?alert:toast)(e&&e.overQty?e.message:'儲存失敗，請重試');}
 }
 window.requestAdjust=function(id){
   // 已確認後點申請調整 → 進入編輯模式，saveEdit 會走 pending 流程
@@ -2138,13 +2138,25 @@ async function writeReports(updatedList){
       dd.def+=(u.defectQty||0)-(old.defectQty||0);
       dd.sho+=(u.shortageQty||0)-(old.shortageQty||0);
     });
+    // 員工回報的總數量不能超出訂單數量（以伺服器最新資料判斷，兩人同時回報也擋得住）；
+    // 超出訂單只能由管理員在「調整」修改。減少或不變的修改照常允許。
+    oSnaps.forEach((sn,i)=>{
+      if(!sn.exists)return;
+      const o=sn.data(),dd=delta.get(orderIds[i]),inc=dd.done+dd.def+dd.sho;
+      if(inc<=0)return;
+      const reported=(o.done||0)+(o.defect||0)+(o.shortage||0),left=Math.max(0,(o.qty||0)-reported);
+      if(inc>left){
+        const err=new Error(`超過訂單剩餘數量（剩 ${left}，這次 ${inc}）。多做的請寫在備註，由管理員調整。\nVượt quá số lượng còn lại (còn ${left}). Ghi phần dư vào ghi chú.`);
+        err.overQty=true;throw err;
+      }
+    });
     updatedList.forEach((u,i)=>tx.set(dRefs[i],u));
     oSnaps.forEach((sn,i)=>{
       if(!sn.exists)return;
       const o=sn.data(),dd=delta.get(orderIds[i]);
       if(!dd.done&&!dd.def&&!dd.sho)return;
       tx.update(oRefs[i],{
-        done:o.forceDone?(o.qty||0):Math.max(0,Math.min(o.qty||0,(o.done||0)+dd.done)), // 管理端強制完成的訂單維持總量
+        done:o.forceDone?Math.max(o.qty||0,(o.done||0)+dd.done):Math.max(0,(o.done||0)+dd.done), // 不設上限（管理端可能調整成超做數量）；強制完成至少為總量
         defect:Math.max(0,(o.defect||0)+dd.def),
         shortage:Math.max(0,(o.shortage||0)+dd.sho)
       });
@@ -2179,7 +2191,7 @@ window.submitGroupRpt=async function(dispIds,gid){
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
     logReportEvent(list,'report',{done:v.done,def:v.def,sho:v.sho});
     autoClockOut();
-  }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
+  }catch(e){setSS('err');(e&&e.overQty?alert:toast)(e&&e.overQty?e.message:'回報失敗，請重試 / Thất bại, thử lại');}
   finally{_submittingGroup.delete(key);}
 };
 // ── 歷史：合併群組的修改 ──
@@ -2216,7 +2228,7 @@ window.saveGroupEdit=async function(gid){
         status:a.done+a.def+a.sho>0?'回報中':'待完成',lastReportAt:now};});
     await grpWrite(updated);
     editingGroup=null;setSS('ok');toast('已儲存 / Đã lưu ✓');
-  }catch(e){setSS('err');toast('儲存失敗，請重試');}
+  }catch(e){setSS('err');(e&&e.overQty?alert:toast)(e&&e.overQty?e.message:'儲存失敗，請重試');}
 };
 
 // ── 單筆工單驗證與回報 ──
@@ -2262,7 +2274,7 @@ window.submitRpt=async function(id){
     setSS('ok');toast('回報成功 / Báo cáo thành công ✓');
     logReportEvent([d],'report',{done,def,sho});
     autoClockOut();
-  }catch(e){setSS('err');toast('回報失敗，請重試 / Thất bại, thử lại');}
+  }catch(e){setSS('err');(e&&e.overQty?alert:toast)(e&&e.overQty?e.message:'回報失敗，請重試 / Thất bại, thử lại');}
   finally{_submitting.delete(id);}
 }
 
