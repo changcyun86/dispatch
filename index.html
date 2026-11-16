@@ -2238,7 +2238,7 @@ window.openShipBatch=function(orderId,entryId){
       <button class="btn btn-sm" onclick="shipBatchSaveNote('${o.id}',true)" style="margin-bottom:1px">儲存備註</button>
     </div>
     ${e.note?`<div style="font-size:12px;color:#E65100;margin:-4px 0 8px">這批註記：${dueEsc(e.note)}</div>`:''}
-    ${overQty(o)?`<div style="margin-bottom:8px">${overHtml(o)}${isLast?'<div style="font-size:11px;color:#6A1B9A">出貨數量已含超出的部分</div>':''}</div>`:''}
+    ${shipIssueBox(o)}${overQty(o)&&isLast&&canShip?'<div style="font-size:11px;color:#6A1B9A;margin:-6px 0 8px">出貨數量已含超出訂單的部分</div>':''}
     <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:13px;padding:8px 10px;background:#FAFAFA;border-radius:8px;margin-bottom:12px">
       <span>這批 <b>${e.need}</b></span><span>已做好 <b style="color:#2E7D32">${Math.min(e.doneCov,e.need)}</b></span><span>已出貨 <b style="color:#185FA5">${e.delivered?'—':e.shipCov}</b></span>
       <span style="padding:0 8px;border-radius:10px;background:${st.bg};color:${st.c};font-weight:600">${st.t}</span>
@@ -2366,7 +2366,7 @@ function dueShipRow(it){
   return`<tr style="${e.finished?'opacity:0.55':''}">
     <td style="color:#185FA5;font-weight:600;white-space:nowrap">${dueEsc(o.orderno||'-')}</td>
     <td><span style="font-weight:600;cursor:pointer;color:#185FA5" onclick="openShipBatch('${o.id}','${e.id}')" title="出貨／改交期">${dueEsc(o.name)}</span>${o.spec?` <span style="color:#888">(${dueEsc(o.spec)})</span>`:''}
-      ${o.note?`<div style="font-size:11px;color:#E65100">📝 ${dueEsc(o.note)}</div>`:''}${e.note?`<div style="font-size:11px;color:#E65100">${dueEsc(e.note)}</div>`:''}</td>
+      ${o.note?`<div style="font-size:11px;color:#E65100">📝 ${dueEsc(o.note)}</div>`:''}${e.note?`<div style="font-size:11px;color:#E65100">${dueEsc(e.note)}</div>`:''}${e.finished?'':shipIssueBadge(o)}</td>
     <td>${dueEsc(e.to||'')}</td>
     <td class="col-num" style="font-weight:600">${e.need}</td>
     <td class="col-num" style="color:#2E7D32">${Math.min(e.doneCov,e.need)}</td>
@@ -2434,7 +2434,7 @@ window.printShipList=function(){
   const items=dueShipItems().filter(it=>!it.e.finished&&it.e.date<=d)
     .sort((a,b)=>a.e.date.localeCompare(b.e.date)||(a.e.to||'').localeCompare(b.e.to||'')||(a.o.orderno||'').localeCompare(b.o.orderno||''));
   if(!items.length)return alert(`${dueFmt(d)} 以前沒有待出貨的批次`);
-  const rows=items.map(it=>{const {o,e,st}=it;return`<tr><td>${dueFmt(e.date)}${e.date<d?' <b>逾期</b>':''}</td><td>${dueEsc(e.to||'')}</td><td>${dueEsc(o.orderno||'')}</td><td><b>${dueEsc(o.name)}</b></td><td>${dueEsc(o.spec||'')}</td><td class="n">${st.remain}</td><td class="n">${st.made}</td><td>${st.t}</td><td>${dueEsc([o.note,e.note].filter(Boolean).join('／'))}</td><td class="c">□</td></tr>`;}).join('');
+  const rows=items.map(it=>{const {o,e,st}=it;return`<tr><td>${dueFmt(e.date)}${e.date<d?' <b>逾期</b>':''}</td><td>${dueEsc(e.to||'')}</td><td>${dueEsc(o.orderno||'')}</td><td><b>${dueEsc(o.name)}</b></td><td>${dueEsc(o.spec||'')}</td><td class="n">${st.remain}</td><td class="n">${st.made}</td><td>${st.t}</td><td>${dueEsc([o.note,e.note,...shipIssues(o).map(x=>'⚠'+x.t)].filter(Boolean).join('／'))}</td><td class="c">□</td></tr>`;}).join('');
   const w=window.open('','_blank');
   if(!w)return alert('瀏覽器擋住了新視窗，請允許此網站開啟彈出視窗');
   w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>出貨清單 ${d}</title><style>
@@ -2619,9 +2619,10 @@ function renderShipCal(box){
     const chips=list.map(({o,e,st})=>{
       const lbl=`${e.to||''}${o.name}-${e.need!=null?e.need:'?'}`; // 月曆不顯示規格（滑鼠移上去的提示裡有）
       const click=o._ship?`calShowShipLog('${o._ship}')`:o._snap?`toast('此訂單已結案；要修改請先在訂單管理按「載入已結案訂單」')`:`openShipBatch('${o.id}','${e.id}')`;
-      const tip=`${o.orderno||''}${o.spec?' 規格 '+o.spec:''} ${st.t}${e.gap>0?'・缺 '+e.gap:''}${o.note?'・'+o.note:''}${e.note?'・'+e.note:''}`;
+      const iss=e.finished||o._snap||o._ship?[]:shipIssues(o);
+      const tip=`${iss.length?'⚠ '+iss.map(x=>x.t).join('、')+'｜':''}${o.orderno||''}${o.spec?' 規格 '+o.spec:''} ${st.t}${e.gap>0?'・缺 '+e.gap:''}${o.note?'・'+o.note:''}${e.note?'・'+e.note:''}`;
       const nt=[o.note,e.note].filter(Boolean).join('・'); // 第二行：訂單備註（與這批的註記）
-      return`<div class="cal-chip" onclick="${click}" title="${dueEsc(tip)}" style="background:${e.finished?'#EEEEEE':st.bg};color:${e.finished?'#9E9E9E':st.c};${e.finished?'text-decoration:line-through;':''}"><div class="cal-l1">${dueEsc(lbl)}</div>${nt?`<div class="cal-l2">${dueEsc(nt)}</div>`:''}</div>`;
+      return`<div class="cal-chip" onclick="${click}" title="${dueEsc(tip)}" style="background:${e.finished?'#EEEEEE':st.bg};color:${e.finished?'#9E9E9E':st.c};${e.finished?'text-decoration:line-through;':''}"><div class="cal-l1">${iss.length?'⚠ ':''}${dueEsc(lbl)}</div>${nt?`<div class="cal-l2">${dueEsc(nt)}</div>`:''}</div>`;
     }).join('');
     const notes=(CALN.days[ds]||[]).map(n=>`<div class="cal-note${n.done?' cal-note-done':''}" onclick="calNoteEdit('${ds}','${n.id}')" title="點擊修改">📝 ${dueEsc(n.text)}</div>`).join('');
     cells.push(`<div class="cal-cell${ds===today?' cal-today':''}"><div class="cal-d"><span class="cal-dn">${d}</span><button class="cal-add" onclick="event.stopPropagation();calNoteEdit('${ds}')" title="新增記事">＋</button></div>${chips}${notes}</div>`);
@@ -2720,6 +2721,28 @@ function doneCheck(o){
 // 超做：完工數超過訂單數量（例：訂單 310、實際完成 418 → 多 108）
 function overQty(o){return Math.max(0,(o.done||0)-(o.qty||0));}
 function overHtml(o){const n=overQty(o);return n?`<div style="font-size:11px;font-weight:700;color:#6A1B9A">⚠ 超出訂單 ${n} 個（訂單 ${o.qty}、完工 ${o.done}）</div>`:'';}
+// 出貨提醒：不良品、來料不足、完工超出訂單數量
+function shipIssues(o){
+  const a=[];
+  if(o.defect>0)a.push({k:'def',t:`不良品 ${o.defect}`,c:'#C62828'});
+  if(o.shortage>0)a.push({k:'sho',t:`來料不足 ${o.shortage}`,c:'#E65100'});
+  const ov=overQty(o);if(ov)a.push({k:'over',t:`超出訂單 ${ov}`,c:'#6A1B9A'});
+  return a;
+}
+function shipIssueBadge(o){
+  const a=shipIssues(o);if(!a.length)return'';
+  return`<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:2px">${a.map(x=>`<span style="font-size:11px;font-weight:700;color:${x.c};background:#fff;border:1px solid ${x.c};border-radius:8px;padding:0 6px">⚠ ${x.t}</span>`).join('')}</div>`;
+}
+// 出貨視窗裡的完整提醒：數量說明＋各員工的不良／來料不足與員工備註
+function shipIssueBox(o){
+  const a=shipIssues(o);if(!a.length)return'';
+  const ds=window.DB.dispatches.filter(d=>d.orderId===o.id&&((d.defectQty||0)+(d.shortageQty||0)>0||(d.workerNote||'').trim()));
+  const lines=ds.map(d=>`<div>・${dueEsc(d.worker||'')}：${[(d.defectQty?`不良 ${d.defectQty}`:''),(d.shortageQty?`來料不足 ${d.shortageQty}`:'')].filter(Boolean).join('、')}${(d.workerNote||'').trim()?`<span style="color:#1565C0">　💬 ${dueEsc(d.workerNote)}</span>`:''}</div>`).join('');
+  return`<div style="background:#FFF8E1;border:1px solid #FFB74D;border-radius:8px;padding:8px 10px;margin-bottom:12px;font-size:12px;line-height:1.7">
+    <div style="font-weight:700;color:#BF360C">⚠ 出貨前請確認：${a.map(x=>`<span style="color:${x.c}">${x.t}</span>`).join('・')}</div>
+    <div style="color:#555">訂單 ${o.qty}・完工 ${o.done||0}・可出貨以完工數計${o.defect||o.shortage?'（不良品、來料不足不會出貨）':''}</div>
+    ${lines?`<div style="margin-top:4px;color:#333">${lines}</div>`:''}</div>`;
+}
 function doneForced(o,sumDone){return!!o.forceDone||((o.done||0)===(o.qty||0)&&(o.qty||0)>0&&sumDone<(o.qty||0));}
 function doneCheckHtml(o){
   const sum=doneCheck(o);if(!sum)return'';
@@ -5764,7 +5787,7 @@ function renderShipping(){
       <td style="padding:10px 14px;font-weight:600;color:#185FA5">${o.orderno||'-'}</td>
       <td style="padding:10px 14px">
         <div style="font-weight:500">${o.name}</div>
-        ${o.spec?`<div style="font-size:11px;color:#aaa">${o.spec}</div>`:''}${overHtml(o)}
+        ${o.spec?`<div style="font-size:11px;color:#aaa">${o.spec}</div>`:''}${shipIssueBadge(o)}
       </td>
       <td class="col-num" style="padding:10px 14px">${o.qty}</td>
       <td class="col-num" style="padding:10px 14px;color:#2E7D32;font-weight:600">${info.canShip}</td>
@@ -5808,6 +5831,7 @@ window.openShipModal=function(orderId,preQty,preNote){
   document.getElementById('modal-title-txt').textContent=`出貨 — ${o.orderno||o.name}`;
   document.getElementById('modal-content').innerHTML=`
     <div style="font-size:13px;font-weight:600;margin-bottom:8px">${o.name}${o.spec?' ('+o.spec+')':''}</div>
+    ${shipIssueBox(o)}
     <div style="font-size:12px;color:#666;margin-bottom:14px;display:flex;gap:16px;flex-wrap:wrap">
       <span>可出貨：<strong style="color:#2E7D32">${info.canShip}</strong></span>
       <span>已出貨：<strong>${info.shipped}</strong></span>
