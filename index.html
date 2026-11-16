@@ -2712,6 +2712,8 @@ function doneCheck(o){
   const sum={done:ds.reduce((a,d)=>a+(d.doneQty||0),0),defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)};
   // 強制完成：完工數＝訂單總量是刻意的，不算不符。舊版強制完成沒有標記 → 完工數剛好等於總量、且派工合計較少，也視為強制完成
   if(doneForced(o,sum.done))sum.done=o.done||0;
+  // 舊資料：以前完工數以訂單數量為上限（派工回報合計超過訂單數量時，訂單只記到訂單數量）→ 不算不符
+  if((o.done||0)===(o.qty||0)&&sum.done>(o.qty||0))sum.done=o.done||0;
   const bad=(o.done||0)!==sum.done||(o.defect||0)!==sum.defect||(o.shortage||0)!==sum.shortage;
   return bad?sum:null;
 }
