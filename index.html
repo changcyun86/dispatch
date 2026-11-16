@@ -2476,6 +2476,19 @@ window.shipLogSet=function(){
 };
 // 舊的單日呼叫（月曆點「已出貨」）
 window.shipLogDate=function(v){if(v){shipLogListen(v,v);}renderShipping();};
+// 修改出貨日期：只改這筆出貨的日期（數量、訂單不變）
+window.shipLogChangeDate=async function(id,el){
+  const x=SHIPLOG.list.find(s=>s.id===id);if(!x)return;
+  const v=el.value;
+  if(!v||v===x.date){el.value=x.date||'';return;}
+  if(!confirm(`把這筆出貨（${x.orderName||''} × ${x.qty}）的出貨日期\n從 ${(x.date||'').replace(/-/g,'/')} 改為 ${v.replace(/-/g,'/')}？`)){el.value=x.date||'';return;}
+  setSS('syncing');
+  try{
+    await db.collection('shipments').doc(id).update({date:v,dateChangedAt:new Date().toISOString(),dateBefore:x.date||''});
+    const m=window.DB.shipments.find(s=>s.id===id);if(m)m.date=v;
+    setSS('ok');toast(`出貨日期已改為 ${v.replace(/-/g,'/')}${(v<SHIPLOG.from||v>SHIPLOG.to)?'（已不在目前查詢的日期範圍內）':''}`);
+  }catch(e){console.error(e);setSS('err');el.value=x.date||'';toast('修改失敗：'+(e.message||e));}
+};
 window.shipLogKw=function(v){SHIPLOG.kw=v;clearTimeout(window._slkT);window._slkT=setTimeout(()=>renderShipLogBody(),250);};
 function renderShipLog(box){
   if(!SHIPLOG.unsub){const t=twToday();shipLogListen(t,t);}
@@ -2522,7 +2535,7 @@ function renderShipLogBody(){
     const t=x.createdAt&&!isNaN(Date.parse(x.createdAt))?new Date(Date.parse(x.createdAt)+8*3600e3).toISOString().slice(11,19):''; // 台灣時間，含秒（方便分辨連按的重複）
     const nos=(x.allocations||[]).map(a=>a.orderNo||a.orderId).join('、');
     return`<tr style="${dup.has(x.id)?'background:#FFF3E0':''}">
-      ${multi?`<td style="white-space:nowrap">${dueEsc((x.date||'').slice(5).replace('-','/'))}</td>`:''}
+      <td style="white-space:nowrap"><input type="date" value="${dueEsc(x.date||'')}" onchange="shipLogChangeDate('${x.id}',this)" title="修改出貨日期" style="width:140px;font-size:12px;padding:3px 6px;margin:0"></td>
       <td style="white-space:nowrap;color:#888">${t}</td>
       <td style="color:#185FA5;font-weight:600">${hl(nos)}</td>
       <td><b>${hl(x.orderName||'')}</b>${x.orderSpec?` <span style="color:#888">(${hl(x.orderSpec)})</span>`:''}</td>
@@ -2530,10 +2543,10 @@ function renderShipLogBody(){
       <td style="font-size:12px;color:#666">${dueEsc(x.note||'')}${dup.has(x.id)?'<div style="color:#E65100;font-weight:600">⚠ 可能重複出貨</div>':''}</td>
       <td><button class="btn btn-sm btn-danger" onclick="deleteShipment('${x.id}')" style="font-size:11px;padding:2px 8px">刪除</button></td></tr>`;
   }).join('');
-  const cols=multi?7:6;
+  const cols=7;
   el.innerHTML=`${dup.size?`<div style="font-size:12px;color:#E65100;font-weight:600;margin-bottom:6px">⚠ 有疑似重複的出貨（橘底），確認後可刪除多的那筆</div>`:''}${sumHtml}
     <div class="card" style="padding:0;overflow:hidden"><div class="tbl-wrap"><table class="tbl">
-      <thead><tr>${multi?'<th>出貨日</th>':''}<th>建立時間</th><th>訂單號</th><th>品名</th><th class="col-num">數量</th><th>備註</th><th></th></tr></thead>
+      <thead><tr><th>出貨日期</th><th>建立時間</th><th>訂單號</th><th>品名</th><th class="col-num">數量</th><th>備註</th><th></th></tr></thead>
       <tbody>${rows||`<tr><td colspan="${cols}" style="text-align:center;color:#aaa;padding:1.5rem">${kw?`這段期間沒有符合「${dueEsc(SHIPLOG.kw)}」的出貨`:'這段期間沒有出貨記錄'}</td></tr>`}</tbody>
     </table></div></div>
     <div style="font-size:12px;color:#888;margin-top:6px">包含已結案訂單的出貨。刪除出貨後，訂單與交期會依剩下的出貨自動重新判斷（已結案的會改回未結案）。</div>`;
