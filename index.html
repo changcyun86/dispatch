@@ -389,6 +389,7 @@ textarea{resize:vertical;min-height:70px}
     <strong style="font-size:15px">出貨管理</strong>
     <button class="btn btn-sm" style="background:#E8F5E9;color:#2E7D32;border-color:#A5D6A7" onclick="exportShippingXlsx()">↓ 匯出 Excel</button>
   </div>
+  <div id="ship-issue-alert" style="display:none;margin-bottom:10px"></div>
   <div id="rs-note-shipping" style="display:none;font-size:12px;color:#555;background:#FFF8E1;border:1px solid #FFE082;border-radius:8px;padding:6px 12px;margin-bottom:8px"></div>
   <div style="display:flex;gap:0;background:#fff;border:1px solid #e0e0e0;border-radius:10px;overflow:hidden;margin-bottom:0.75rem;max-width:600px">
     <button id="ship-mode-order" onclick="setShipMode('order')" style="flex:1;padding:9px;border:none;background:#185FA5;color:#fff;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer">依訂單</button>
@@ -1368,6 +1369,7 @@ function rsFlush(){
   for(const col of cols){try{RS_RENDER[col]();}catch(e){console.error(e);}}
   rsRenderNotes();
   if(cols.includes('shipments'))dueRerender();else if(cols.includes('orders'))dueLight(); // 交期：出貨／完工量變動
+  if(cols.includes('orders')||cols.includes('dispatches')){try{renderIssueAlerts();}catch(e){console.error(e);}}
   if(RS.mode==='scoped'){rsReconcile();ldTallyReconcile();}
 }
 // 依 id 清單分批（每批 30 個）開監聽；已開過的 id 不重開
@@ -3129,6 +3131,56 @@ window.confirmAddWorkersGroup=async function(gi){
 
 // 已登入（重新整理）時，主程式載入完再處理網址 #cal
 if(document.getElementById('main-app')?.style.display==='block')setTimeout(()=>window._afterLogin&&window._afterLogin(),0);
+
+// ══ 出貨管理最上方：來料不足／不良品 → 請通知生管（2026/11）══════════════════
+// 依訂單彙總（不良、來料不足合計）；按「已通知生管」後記在 system/issueAck（1 份文件），
+// 之後數量又增加才會再提醒。只看最近 14 天內有回報的，避免上線時把舊資料全部跳出來。
+window.ISSUE_ACK={};
+db.collection('system').doc('issueAck').onSnapshot(s=>{ISSUE_ACK=s.exists?(s.data().orders||{}):{};try{renderIssueAlerts();}catch(e){}},e=>console.warn('[生管提醒] 讀取失敗',e));
+const ISSUE_DAYS=14;
+function issueList(){
+  const from=rsAddDays(twToday(),-ISSUE_DAYS),out=[];
+  for(const o of window.DB.orders){
+    const def=o.defect||0,sho=o.shortage||0;
+    if(!def&&!sho)continue;
+    const ack=ISSUE_ACK[o.id];
+    if(ack&&def<=(ack.def||0)&&sho<=(ack.sho||0))continue;
+    const ds=window.DB.dispatches.filter(d=>d.orderId===o.id&&((d.defectQty||0)+(d.shortageQty||0))>0);
+    const last=ds.map(d=>d.lastReportAt?toTW(d.lastReportAt,false):dispWorkDate(d)).sort().pop()||'';
+    if(last&&last<from)continue;
+    out.push({o,def,sho,last,ds});
+  }
+  return out.sort((a,b)=>(b.last||'').localeCompare(a.last||''));
+}
+function renderIssueAlerts(){
+  const el=document.getElementById('ship-issue-alert');if(!el)return;
+  const list=issueList();
+  if(!list.length){el.style.display='none';el.innerHTML='';return;}
+  el.style.display='block';
+  el.innerHTML=`<div style="background:#FFEBEE;border:2px solid #E57373;border-radius:10px;padding:8px 12px">
+    <div style="font-weight:700;color:#B71C1C;margin-bottom:4px">📢 請通知生管（${list.length}）</div>
+    ${list.map(({o,def,sho,last,ds})=>{
+      const parts=[sho?`短少 ${sho} 支`:'',def?`不良 ${def} 支`:''].filter(Boolean).join('、');
+      const who=[...new Set(ds.map(d=>d.worker))].join('、');
+      const notes=[...new Set(ds.map(d=>(d.workerNote||'').trim()).filter(Boolean))];
+      return`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-top:1px dashed #EF9A9A">
+        <div style="flex:1;min-width:260px;font-size:14px">
+          <b>${last?dueFmt(last):''}</b>　<b>${dueEsc(o.name)}${o.spec?'-'+dueEsc(o.spec):''}-${o.qty}</b>，員工回報 <b>${o.done||0}</b>，<b style="color:#C62828">${parts}</b>，請通知生管
+          <div style="font-size:11px;color:#666">${dueEsc(o.orderno||'')}${who?'・回報：'+dueEsc(who):''}${notes.length?`<span style="color:#1565C0">　💬 ${dueEsc(notes.join('／'))}</span>`:''}</div>
+        </div>
+        <button class="btn btn-sm" style="background:#C62828;color:#fff;border-color:#C62828;white-space:nowrap" onclick="issueAck('${o.id}')">已通知生管</button>
+      </div>`;}).join('')}
+  </div>`;
+}
+window.issueAck=async function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  const v={def:o.defect||0,sho:o.shortage||0,at:new Date().toISOString()};
+  try{
+    await db.collection('system').doc('issueAck').set({orders:{[orderId]:v}},{merge:true});
+    ISSUE_ACK[orderId]=v;renderIssueAlerts();toast('已記錄：已通知生管');
+  }catch(e){console.error(e);toast('儲存失敗：'+(e.message||e));}
+};
+
 rsStart();
 dueListen();
 dueListenRecent();
