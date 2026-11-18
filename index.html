@@ -2658,7 +2658,7 @@ function renderShipCal(box){
       return`<div class="cal-chip" onclick="${click}" title="${dueEsc(tip)}" style="background:${e.finished?'#EEEEEE':st.bg};color:${e.finished?'#9E9E9E':st.c};${e.finished?'text-decoration:line-through;':''}"><div class="cal-l1">${iss.length?'⚠ ':''}${dueEsc(lbl)}</div>${nt?`<div class="cal-l2">${dueEsc(nt)}</div>`:''}</div>`;
     }).join('');
     const notes=(CALN.days[ds]||[]).map(n=>`<div class="cal-note${n.done?' cal-note-done':''}" onclick="calNoteEdit('${ds}','${n.id}')" title="點擊修改">📝 ${dueEsc(n.text)}</div>`).join('');
-    cells.push(`<div class="cal-cell${ds===today?' cal-today':''}"><div class="cal-d"><span class="cal-dn">${d}</span><button class="cal-add" onclick="event.stopPropagation();calNoteEdit('${ds}')" title="新增記事">＋</button></div>${chips}${notes}</div>`);
+    cells.push(`<div class="cal-cell${ds===today?' cal-today':''}"><div class="cal-d"><span class="cal-dn">${d}</span><button class="cal-add" onclick="event.stopPropagation();calNoteEdit('${ds}')" title="新增記事">＋</button></div>${notes}${chips}</div>`); // 記事置頂
   }
   while(cells.length%7)cells.push('<div class="cal-cell cal-empty"></div>');
   const overN=items.filter(it=>!it.e.finished&&it.e.date<today).length;
