@@ -2743,13 +2743,73 @@ function doneCheck(o){
   const ds=window.DB.dispatches.filter(d=>d.orderId===o.id);
   // 舊版合併派工（一筆含多張訂單）無法依訂單拆分，不比對
   if(window.DB.dispatches.some(d=>Array.isArray(d.mergedOrderIds)&&d.mergedOrderIds.length&&(d.orderId===o.id||d.mergedOrderIds.includes(o.id))))return null;
-  const sum={done:ds.reduce((a,d)=>a+(d.doneQty||0),0),defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)};
+  const sum=orderSums(ds); // 分工：完工只算最後一道工序
   // 強制完成：完工數＝訂單總量是刻意的，不算不符。舊版強制完成沒有標記 → 完工數剛好等於總量、且派工合計較少，也視為強制完成
   if(doneForced(o,sum.done))sum.done=o.done||0;
   // 舊資料：以前完工數以訂單數量為上限（派工回報合計超過訂單數量時，訂單只記到訂單數量）→ 不算不符
   if((o.done||0)===(o.qty||0)&&sum.done>(o.qty||0))sum.done=o.done||0;
-  const bad=(o.done||0)!==sum.done||(o.defect||0)!==sum.defect||(o.shortage||0)!==sum.shortage;
+  const stKey=x=>JSON.stringify(Object.keys(x||{}).sort().map(k=>[k,x[k].done||0,x[k].def||0,x[k].sho||0]));
+  const stBad=Object.keys(sum.steps).length?stKey(o.steps)!==stKey(sum.steps):false;
+  const bad=(o.done||0)!==sum.done||(o.defect||0)!==sum.defect||(o.shortage||0)!==sum.shortage||stBad;
+  if(bad)sum.stBad=stBad;
   return bad?sum:null;
+}
+// ══ 分工（工序）（2026/11）══════════════════════════════════════════════
+// 一張訂單拆給多人各做一道工序（每人都經手全部數量）。派工記錄 step（第幾道）、stepCount（共幾道）、stepName、itemPrice（該工序單價）。
+// 訂單完工數＝最後一道工序（與沒分工的派工）的完成數；不良、來料不足各工序都算（都是少掉的支數）。
+// 各工序的累計記在訂單 steps：{ "1":{done,def,sho}, … }。
+function dStep(d){return d&&d.step>0?d.step:0;}
+function dCountsDone(d){const s=dStep(d);return!s||s>=(d.stepCount||s);}
+function stepTag(d){const s=dStep(d);if(!s)return'';return` <span style="background:#EDE7F6;color:#4527A0;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap" title="分工派工：這個人只做這道工序">🔧 工序${s}/${d.stepCount||'?'}${d.stepName?' '+dueEsc(d.stepName):''}・$${d.itemPrice||0}</span>`;}
+// 依派工加總訂單的完工／不良／來料不足（含各工序累計）
+function orderSums(ds){
+  let done=0,defect=0,shortage=0;const steps={};
+  ds.forEach(d=>{
+    if(dCountsDone(d))done+=d.doneQty||0;
+    defect+=d.defectQty||0;shortage+=d.shortageQty||0;
+    const s=dStep(d);if(s){const t=steps[s]=steps[s]||{done:0,def:0,sho:0};t.done+=d.doneQty||0;t.def+=d.defectQty||0;t.sho+=d.shortageQty||0;}
+  });
+  return{done,defect,shortage,steps};
+}
+// 寫回訂單用：強制完成的完工數至少為總量；有分工才寫 steps
+function orderTotalsPatch(o,ds){
+  const s=orderSums(ds);
+  const p={done:o.forceDone?Math.max(o.qty||0,s.done):s.done,defect:s.defect,shortage:s.shortage};
+  if(Object.keys(s.steps).length||o.steps)p.steps=s.steps;
+  return p;
+}
+// 某道工序還能做多少（只用訂單上的累計，不需讀派工）。k=0 為不分工。
+// 已用＝不分工的派工（全部）＋同一道工序（全部）＋前面工序的不良與來料不足（那些支數到不了這道）
+function stepUsed(o,k,n){
+  const st=o.steps||{},g=j=>st[j]||{done:0,def:0,sho:0};
+  const tot=(o.done||0)+(o.defect||0)+(o.shortage||0);
+  if(!k)return tot;
+  let sDef=0,sSho=0;Object.values(st).forEach(t=>{sDef+=t.def||0;sSho+=t.sho||0;});
+  const nonStep=((o.done||0)-(g(n).done||0))+((o.defect||0)-sDef)+((o.shortage||0)-sSho);
+  let used=nonStep+(g(k).done||0)+(g(k).def||0)+(g(k).sho||0);
+  for(let j=1;j<k;j++)used+=(g(j).def||0)+(g(j).sho||0);
+  return Math.max(0,used);
+}
+// 另一筆派工 x 佔用了派工 d 可回報量的多少（與 stepUsed 同一規則，用派工逐筆算）
+function dUsedFor(x,d){
+  const all=(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),loss=(x.defectQty||0)+(x.shortageQty||0);
+  const xs=dStep(x),k=dStep(d);
+  if(!xs)return all;
+  if(!k)return dCountsDone(x)?all:loss;
+  if(xs===k)return all;
+  return xs<k?loss:0;
+}
+function stepLeft(o,k,n){return Math.max(0,(o.qty||0)-stepUsed(o,k,n));}
+// 品名單價資料庫裡的工序設定（至少 2 道才算分工）
+function prodSteps(name,spec){const p=lookupProductBySpec(name,spec);return p&&Array.isArray(p.steps)&&p.steps.length>=2?p.steps:null;}
+// 訂單列表：分工進度
+function stepProgHtml(o){
+  const st=o.steps;if(!st||!Object.keys(st).length)return'';
+  const n=o.stepCount||Math.max(...Object.keys(st).map(Number));
+  const names=o.stepNames||[];
+  const parts=[];for(let k=1;k<=n;k++){const t=st[k]||{done:0,def:0,sho:0};
+    parts.push(`<span style="white-space:nowrap">${k}${names[k-1]?' '+dueEsc(names[k-1]):''} <b>${t.done||0}</b>${t.def?`<span style="color:#C62828">・不良${t.def}</span>`:''}${t.sho?`<span style="color:#E65100">・缺${t.sho}</span>`:''}</span>`);}
+  return`<div style="font-size:11px;font-weight:400;color:#4527A0">🔧 分工 ${parts.join('／')}<span style="color:#888">（完工以第 ${n} 道計）</span></div>`;
 }
 // 超做：完工數超過訂單數量（例：訂單 310、實際完成 418 → 多 108）
 function overQty(o){return Math.max(0,(o.done||0)-(o.qty||0));}
@@ -2770,7 +2830,7 @@ function shipIssueBadge(o){
 function shipIssueBox(o){
   const a=shipIssues(o);if(!a.length)return'';
   const ds=window.DB.dispatches.filter(d=>d.orderId===o.id&&((d.defectQty||0)+(d.shortageQty||0)>0||(d.workerNote||'').trim()));
-  const lines=ds.map(d=>`<div>・${dueEsc(d.worker||'')}：${[(d.defectQty?`不良 ${d.defectQty}`:''),(d.shortageQty?`來料不足 ${d.shortageQty}`:'')].filter(Boolean).join('、')}${(d.workerNote||'').trim()?`<span style="color:#1565C0">　💬 ${dueEsc(d.workerNote)}</span>`:''}</div>`).join('');
+  const lines=ds.map(d=>`<div>・${dueEsc(d.worker||'')}${dStep(d)?`（工序${d.step}${d.stepName?' '+dueEsc(d.stepName):''}）`:''}：${[(d.defectQty?`不良 ${d.defectQty}`:''),(d.shortageQty?`來料不足 ${d.shortageQty}`:'')].filter(Boolean).join('、')}${(d.workerNote||'').trim()?`<span style="color:#1565C0">　💬 ${dueEsc(d.workerNote)}</span>`:''}</div>`).join('');
   return`<div style="background:#FFF8E1;border:1px solid #FFB74D;border-radius:8px;padding:8px 10px;margin-bottom:12px;font-size:12px;line-height:1.7">
     <div style="font-weight:700;color:#BF360C">⚠ 出貨前請確認：${a.map(x=>`<span style="color:${x.c}">${x.t}</span>`).join('・')}</div>
     <div style="color:#555">訂單 ${o.qty}・完工 ${o.done||0}・可出貨以完工數計${o.defect||o.shortage?'（不良品、來料不足不會出貨）':''}</div>
@@ -2783,6 +2843,7 @@ function doneCheckHtml(o){
   if((o.done||0)!==sum.done)parts.push(`完工 ${o.done||0}→${sum.done}`);
   if((o.defect||0)!==sum.defect)parts.push(`不良 ${o.defect||0}→${sum.defect}`);
   if((o.shortage||0)!==sum.shortage)parts.push(`來料不足 ${o.shortage||0}→${sum.shortage}`);
+  if(sum.stBad)parts.push('各工序累計');
   return`<div style="font-size:11px;font-weight:600;color:#C62828">⚠ 完工數與派工回報不符（${parts.join('、')}）<a href="javascript:void(0)" onclick="event.stopPropagation();fixOrderTotals(['${o.id}'])" style="color:#185FA5;margin-left:4px">重新計算</a></div>`;
 }
 // 依伺服器上這張訂單的全部派工重新加總（手動按才執行；讀取次數＝該訂單派工筆數）
@@ -2795,11 +2856,9 @@ window.fixOrderTotals=async function(ids){
       const o=window.DB.orders.find(x=>x.id===id);if(!o)continue;
       const sn=await db.collection('dispatches').where('orderId','==',id).get();
       const ds=sn.docs.map(d=>d.data());
-      const sumDone=ds.reduce((a,d)=>a+(d.doneQty||0),0);
-      await db.collection('orders').doc(id).update({
-        done:doneForced(o,sumDone)?Math.max(o.qty||0,sumDone):sumDone, // 強制完成的維持總量
-        defect:ds.reduce((a,d)=>a+(d.defectQty||0),0),
-        shortage:ds.reduce((a,d)=>a+(d.shortageQty||0),0)});
+      const p=orderTotalsPatch(o,ds); // 分工：完工只算最後一道工序
+      if(doneForced(o,p.done))p.done=Math.max(o.qty||0,p.done); // 強制完成的維持總量
+      await db.collection('orders').doc(id).update(p);
       n++;
     }
     setSS('ok');toast(`已重新計算 ${n} 張訂單`);
@@ -3028,7 +3087,8 @@ window.dlToggle=function(k){_dlOpen.has(k)?_dlOpen.delete(k):_dlOpen.add(k);rend
 function dlMergedHtml(g,hl,gi){
   const orderIds=[...new Set(g.dispatches.map(d=>d.orderId))];
   const ords=orderIds.map(id=>window.DB.orders.find(o=>o.id===id)).filter(Boolean).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  const qty=ords.reduce((a,o)=>a+(o.qty||0),0),rep=ords.reduce((a,o)=>a+(o.done||0)+(o.defect||0)+(o.shortage||0),0);
+  const g0=g.dispatches[0];
+  const qty=ords.reduce((a,o)=>a+(o.qty||0),0),rep=ords.reduce((a,o)=>a+(dStep(g0)?stepUsed(o,g0.step,g0.stepCount):(o.done||0)+(o.defect||0)+(o.shortage||0)),0);
   const nos=ords.length?ords.map(o=>o.orderno||'-'):[...new Set(g.dispatches.map(d=>d.orderNo||'-'))];
   const byW=new Map();g.dispatches.forEach(d=>{if(!byW.has(d.worker))byW.set(d.worker,[]);byW.get(d.worker).push(d);});
   const ordDate=id=>(window.DB.orders.find(o=>o.id===id)||{}).date||'';
@@ -3048,7 +3108,7 @@ function dlMergedHtml(g,hl,gi){
     return`<div style="padding:7px 10px;border-bottom:1px solid #f5f5f5">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:6px">
         <div>
-          <span style="font-weight:600;font-size:13px">${dueEsc(w)}</span>${seqBadge(first)}
+          <span style="font-weight:600;font-size:13px">${dueEsc(w)}</span>${seqBadge(first)}${stepTag(first)}
           <span style="font-size:11px;color:#185FA5;margin-left:6px;white-space:nowrap">${dispDateLabel(first)}</span>${gq?` <span style="background:#E8F5E9;color:#1B5E20;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap" title="這個人在這張合併卡片上的總量">派 ${gq}</span>`:''}
           <span style="color:#888;font-size:11px;margin-left:8px">完 ${s('doneQty')} ／ 不良 ${s('defectQty')} ／ 來料不足 ${s('shortageQty')}</span>
           ${notes.length?`<div style="font-size:11px;color:#E65100;font-weight:600;margin-top:2px;white-space:pre-wrap">📌 派工備註：${dueEsc(notes.join('／'))}</div>`:''}
@@ -3084,10 +3144,7 @@ window.deleteWorkerGroup=async function(gi,worker){
     for(const oid of orderIds){
       const o=window.DB.orders.find(x=>x.id===oid);if(!o)continue;
       const others=window.DB.dispatches.filter(x=>x.orderId===oid&&!del.has(x.id));
-      await saveOrder({...o,
-        done:o.forceDone?Math.max(o.qty,others.reduce((a,x)=>a+(x.doneQty||0),0)):others.reduce((a,x)=>a+(x.doneQty||0),0),
-        defect:others.reduce((a,x)=>a+(x.defectQty||0),0),
-        shortage:others.reduce((a,x)=>a+(x.shortageQty||0),0)});
+      await saveOrder({...o,...orderTotalsPatch(o,others)});
     }
     for(const d of list)await db.collection('dispatches').doc(String(d.id)).delete();
     setSS('ok');toast(`已刪除 ${worker} 的合併派工（${list.length} 筆）`);
@@ -3130,14 +3187,14 @@ window.confirmAddWorkersGroup=async function(gi){
   const ords=orderIds.map(id=>window.DB.orders.find(o=>o.id===id)).filter(Boolean).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   if(!ords.length)return alert('找不到這組的訂單資料');
   const now=new Date().toISOString();
-  const keep={};['effectiveDate','sequence','note','multiDay','maxDays','startTime','untilTime','untilMust','preview','priority','isReDispatch'].forEach(k=>{if(base[k]!==undefined&&base[k]!==null&&base[k]!=='')keep[k]=base[k];});
+  const keep={};['effectiveDate','sequence','note','multiDay','maxDays','startTime','untilTime','untilMust','preview','priority','isReDispatch','step','stepCount','stepName'].forEach(k=>{if(base[k]!==undefined&&base[k]!==null&&base[k]!=='')keep[k]=base[k];});
   if(!keep.effectiveDate)keep.effectiveDate=toTW(now,false);
   setSS('syncing');
   try{
     for(const o of ords){
-      const remaining=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
+      const remaining=dStep(base)?stepLeft(o,base.step,base.stepCount):Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
       for(const worker of selected){
-        await saveDispatch({id:genId('D'),isMerged:true,orderId:o.id,orderName:o.name,orderSpec:o.spec||'',orderNo:o.orderno||'',itemPrice:o.price||0,worker,
+        await saveDispatch({id:genId('D'),isMerged:true,orderId:o.id,orderName:o.name,orderSpec:o.spec||'',orderNo:o.orderno||'',itemPrice:dStep(base)?(base.itemPrice||0):(o.price||0),worker,
           assignQty:remaining,...(gq?{groupQty:gq}:{}),batchId:base.batchId,groupName:base.groupName,
           doneQty:0,defectQty:0,shortageQty:0,status:'待完成',createdAt:now,...keep});
       }
@@ -3179,7 +3236,7 @@ function renderIssueAlerts(){
     <div style="font-weight:700;color:#B71C1C;margin-bottom:4px">📢 請通知生管（${list.length}）</div>
     ${list.map(({o,def,sho,last,ds})=>{
       const parts=[sho?`短少 ${sho} 支`:'',def?`不良 ${def} 支`:''].filter(Boolean).join('、');
-      const who=[...new Set(ds.map(d=>d.worker))].join('、');
+      const who=[...new Set(ds.map(d=>d.worker+(dStep(d)?`（工序${d.step}${d.stepName?' '+d.stepName:''}）`:'')))].join('、');
       const notes=[...new Set(ds.map(d=>(d.workerNote||'').trim()).filter(Boolean))];
       return`<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 0;border-top:1px dashed #EF9A9A">
         <div style="flex:1;min-width:260px;font-size:14px">
@@ -3409,7 +3466,7 @@ function renderOrders(){
     const mt=missedTag(orderMissedCount(o));
     const noteH=o.note?`<div style="font-size:11px;font-weight:400;color:#E65100">📝 ${hl(dueEsc(o.note))}</div>`:'';
     const chkH=doneCheckHtml(o);
-    const ovH=overHtml(o);
+    const ovH=overHtml(o)+stepProgHtml(o);
     const nameCell=indent?`<td style="font-weight:600;padding-left:${indent}px;color:#888">↳ ${hl(o.name)}${mt}${noteH}${ovH}${chkH}${estH}</td>`:`<td style="font-weight:600">${hl(o.name)}${mt}${noteH}${ovH}${chkH}${estH}</td>`;
     return`<tr style="background:${isSel?'#FFF8E1':''}">
       <td><input type="checkbox" class="order-row-ck" data-id="${o.id}" ${isSel?'checked':''} onclick="toggleOrderSel('${o.id}',this.checked)" style="cursor:pointer;accent-color:#185FA5"></td>
@@ -3588,8 +3645,7 @@ window.editOrderQty=async function(orderId,newVal,inputEl){
     // 更新訂單數量（強制完成的訂單改數量 → 取消強制完成，完工數依派工回報重新加總）
     if(o.forceDone){
       const{forceDone,...rest}=o;
-      const sumDone=window.DB.dispatches.filter(x=>x.orderId===orderId).reduce((a,x)=>a+(x.doneQty||0),0);
-      await saveOrder({...rest,qty,done:sumDone});
+      await saveOrder({...rest,qty,...orderTotalsPatch(rest,window.DB.dispatches.filter(x=>x.orderId===orderId))});
       toast('已取消強制完成，完工數依派工回報重新計算');
     }else await saveOrder({...o,qty});
     // 同步更新所有相關 dispatch 的 assignQty
@@ -3611,8 +3667,8 @@ window.editOrderPrice=async function(orderId, newVal, inputEl){
   if(!rsGuard([orderId],false,()=>editOrderPrice(orderId,newVal,inputEl)))return;
   o.price=price;
   await saveOrder(o);
-  // 同步更新所有相關派工記錄的 itemPrice
-  const related=findRelatedDispatches(orderId);
+  // 同步更新所有相關派工記錄的 itemPrice（分工的派工有各自的工序單價，不跟著改）
+  const related=findRelatedDispatches(orderId).filter(d=>!dStep(d));
   if(related.length){
     for(const d of related){
       d.itemPrice=price;
@@ -3640,7 +3696,7 @@ window.applyDbPrice=async function(orderId){
   const price=dbP.price;
   if(price===(o.price||0))return;
   if(!rsGuard([orderId],false,()=>applyDbPrice(orderId)))return;
-  const related=findRelatedDispatches(orderId);
+  const related=findRelatedDispatches(orderId).filter(d=>!dStep(d)); // 分工的派工有各自的工序單價，不跟著改
   const reported=related.filter(d=>(d.doneQty||0)>0);
   const confirmed=related.filter(d=>d.adminConfirmed);
   if(reported.length||confirmed.length){
@@ -3708,6 +3764,10 @@ window.grpMove=function(key,dir){
   updateSelectedInfo();
 };
 window.grpPrioToggle=function(on){window._grpPrioOn=!!on;updateSelectedInfo();};
+// 分工：各組選的工序（0＝不分工）。品名資料庫有設定工序才會出現選單
+window._grpStep={};
+function grpStepOf(key,o){const st=prodSteps(o.name,o.spec),k=parseInt(window._grpStep[key])||0;return st&&k>=1&&k<=st.length?k:0;}
+window.grpStepSet=function(key,v){window._grpStep[key]=parseInt(v)||0;updateSelectedInfo();};
 // 派工時各組的排列順序（只算勾選中的組，依區塊內的先後編 1、2、3…）；沒勾「依此順序排列」→ 空
 function grpPrioMap(){
   if(!window._grpPrioOn)return{};
@@ -3867,8 +3927,9 @@ function updateSelectedInfo(){
   const groups={};
   shown.forEach(o=>{
     const key=`${o.name}||${o.spec||''}||${o.price||0}`;
-    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,totalQty:0,orders:[],on:0};
-    const remaining=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
+    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,totalQty:0,orders:[],on:0,steps:prodSteps(o.name,o.spec),step:grpStepOf(key,o)};
+    const g0=groups[key];
+    const remaining=g0.step?stepLeft(o,g0.step,g0.steps.length):Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
     const on=window._selectedOrderIds.has(o.id);
     if(on){groups[key].totalQty+=remaining;groups[key].on++;}
     groups[key].orders.push({o,remaining,on});
@@ -3890,7 +3951,12 @@ function updateSelectedInfo(){
         <button class="btn btn-sm" style="padding:0 6px;font-size:11px;line-height:18px" ${gi===0?'disabled':''} onclick="grpMove('${keyEsc(g.key)}',-1)">↑</button>
         <button class="btn btn-sm" style="padding:0 6px;font-size:11px;line-height:18px" ${gi===gList.length-1?'disabled':''} onclick="grpMove('${keyEsc(g.key)}',1)">↓</button></span>`:''}
       ${prioOn&&g.on?`<span style="background:#1565C0;color:#fff;border-radius:10px;padding:0 7px;font-weight:700;margin-right:4px">${prioNo[g.key]}</span>`:''}
-      <span style="font-weight:600;color:${g.on?'#1a1a1a':'#aaa'}">${g.name}</span>${g.spec?` <span style="color:#aaa">(${g.spec})</span>`:''} ／ $${g.price} ／ 合計剩餘 <strong style="color:${g.on?'#185FA5':'#aaa'}">${g.totalQty}</strong> 件
+      <span style="font-weight:600;color:${g.on?'#1a1a1a':'#aaa'}">${g.name}</span>${g.spec?` <span style="color:#aaa">(${g.spec})</span>`:''} ／ $${g.step?g.steps[g.step-1].price:g.price} ／ ${g.step?`工序${g.step}剩餘`:'合計剩餘'} <strong style="color:${g.on?'#185FA5':'#aaa'}">${g.totalQty}</strong> 件
+      ${g.steps?`<div style="margin:4px 0 2px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span style="color:#4527A0;font-weight:600">🔧 分工</span>
+        <select style="width:auto;margin:0;padding:2px 6px;font-size:12px;border-color:${g.step?'#7E57C2':'#ddd'}" onchange="grpStepSet('${keyEsc(g.key)}',this.value)">
+          <option value="0"${g.step?'':' selected'}>不分工（$${g.price}，一人做完全部）</option>
+          ${g.steps.map((x,k)=>`<option value="${k+1}"${g.step===k+1?' selected':''}>工序${k+1}/${g.steps.length}${x.name?' '+dueEsc(x.name):''}　$${x.price}</option>`).join('')}
+        </select>${g.step?`<span style="color:#888">勾選的員工只做這道工序；其他工序請另外派</span>`:''}</div>`:''}
       <div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin:3px 0 2px">
         ${g.orders.map(x=>`<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:${x.on?'#333':'#aaa'};${x.on?'':'text-decoration:line-through;'}">
           <input type="checkbox" style="width:auto;margin:0" ${x.on?'checked':''} onchange="toggleBoxOrder('${x.o.id}',this.checked)">
@@ -3912,7 +3978,9 @@ window.createDispatch=async function(){
   const effectiveDate=document.getElementById('d-effective-date').value||toTW(new Date().toISOString(),false);
   {
     const today=toTW(new Date().toISOString(),false);
-    const ip=window.DB.orders.filter(o=>ids.includes(o.id)&&isInProgressOrder(o));
+    // 分工：派另一道工序不受影響（員工端各工序的卡片分開）；只有同一道工序今天已派過才擋
+    const stepFree=o=>{const k=grpStepOf(`${o.name}||${o.spec||''}||${o.price||0}`,o);return k>0&&!window.DB.dispatches.some(d=>d.orderId===o.id&&dStep(d)===k&&dispWorkDate(d)===today);};
+    const ip=window.DB.orders.filter(o=>ids.includes(o.id)&&isInProgressOrder(o)&&!stepFree(o));
     if(ip.length&&effectiveDate<=today)return alert(`以下訂單今天還在加工中，只能預派到明天以後（請把「生效日期」改成明天以後）：\n\n${ip.map(o=>'・'+o.name+(o.orderno?'（'+o.orderno+'）':'')).join('\n')}\n\n今天要加人，請到訂單明細用「加派員工」。`);
   }
   const sequenceVal=document.getElementById('d-sequence').value;
@@ -3943,7 +4011,7 @@ window.createDispatch=async function(){
     .sort((a,b)=>(a.date||'').localeCompare(b.date||'')); // 先進先出排序
   selectedOrders.forEach(o=>{
     const key=`${o.name}||${o.spec||''}||${o.price||0}`;
-    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,orders:[]};
+    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,orders:[],steps:prodSteps(o.name,o.spec),step:grpStepOf(key,o)};
     groups[key].orders.push(o);
   });
   // 每組每張訂單各自建立一筆 dispatch，共用 batchId
@@ -3952,8 +4020,14 @@ window.createDispatch=async function(){
     const prioField=prioMap[gkey]?{priority:prioMap[gkey]}:{};
     const isReDispatch=g.orders.some(o=>(o.done||0)+(o.defect||0)+(o.shortage||0)>0);
     const isSameNameGroup=g.orders.length>1; // 同品名合併群組標記
+    // 分工：這組只派選定的那道工序，單價用工序單價；訂單記下共幾道與工序名稱（列表顯示進度用）
+    const sx=g.step?g.steps[g.step-1]:null;
+    const stepFields=sx?{step:g.step,stepCount:g.steps.length,stepName:sx.name||''}:{};
     for(const o of g.orders){
-      const remaining=Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
+      if(sx){const names=g.steps.map(x=>x.name||'');
+        if(o.stepCount!==g.steps.length||JSON.stringify(o.stepNames||[])!==JSON.stringify(names)){
+          await db.collection('orders').doc(o.id).update({stepCount:g.steps.length,stepNames:names});o.stepCount=g.steps.length;o.stepNames=names;}}
+      const remaining=sx?stepLeft(o,g.step,g.steps.length):Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
       for(const worker of selectedWorkers){
         await saveDispatch({
           id:genId('D'),
@@ -3963,7 +4037,8 @@ window.createDispatch=async function(){
           orderName:o.name,
           orderSpec:o.spec||'',
           orderNo:o.orderno||'',
-          itemPrice:o.price||0,
+          itemPrice:sx?sx.price:(o.price||0),
+          ...stepFields,
           worker,
           // 2026/11：多張同品名合併時，派工數量＝每人在這張合併卡片的總量（groupQty）；各訂單仍以剩餘量為上限，回報依接單日期分配
           assignQty:(customAssignQty!==null&&!isSameNameGroup)?customAssignQty:remaining,
@@ -3990,7 +4065,7 @@ window.createDispatch=async function(){
   document.querySelectorAll('#d-worker-checks input').forEach(c=>c.checked=false);
   window._selectedOrderIds=new Set();
   window._boxRemovedIds=new Set();
-  window._grpOrder=[];window._grpPrioOn=false;
+  window._grpOrder=[];window._grpPrioOn=false;window._grpStep={};
   renderDispatchOrders();
   renderDispatchLog();
   const totalOrders=ids.length;
@@ -4127,7 +4202,7 @@ function renderDispatchLog(){
       ${g.dispatches.map(d=>`
         <div style="padding:7px 10px;border-bottom:1px solid #f5f5f5;display:flex;justify-content:space-between;align-items:center">
           <div>
-            <span style="font-weight:600;font-size:13px">${d.worker}</span>${seqBadge(d)}
+            <span style="font-weight:600;font-size:13px">${d.worker}</span>${seqBadge(d)}${stepTag(d)}
             <span style="font-size:11px;color:#185FA5;margin-left:6px;white-space:nowrap">${dispDateLabel(d)}</span>${dispQtyBadge(d)}
             <span style="color:#888;font-size:11px;margin-left:8px">完 ${d.doneQty||0} ／ 不良 ${d.defectQty||0} ／ 來料不足 ${d.shortageQty||0}</span>
             ${d.note&&String(d.note).trim()?`<div style="font-size:11px;color:#E65100;font-weight:600;margin-top:2px;white-space:pre-wrap">📌 派工備註：${d.note}</div>`:''}
@@ -4377,21 +4452,36 @@ function dispQtyBadge(d){
   const c=dispCustomQty(d);if(!c)return'';
   return` <span style="background:#E8F5E9;color:#1B5E20;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;white-space:nowrap" title="${c.merged?'多張同品名合併派工：這個人在合併卡片上的總量':'這個人在這張訂單的派工量'}">派 ${c.q}${c.merged?`（${c.n} 張合併共 ${c.q}）`:''}</span>`;
 }
-window.addWorkerToOrder=function(orderId){
+window.addWorkerToOrder=function(orderId,stepSel){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
-  const existWorkers=window.DB.dispatches.filter(d=>d.orderId===orderId).map(d=>d.worker);
+  // 分工：品名有設定工序 → 選要加到哪一道（預設：這張單已經在派的最新一道；都沒有則不分工）
+  const steps=prodSteps(o.name,o.spec);
+  let k=0;
+  if(steps){
+    if(stepSel!==undefined)k=parseInt(stepSel)||0;
+    else{const last=[...window.DB.dispatches].filter(d=>d.orderId===orderId).sort((a,b)=>(b.createdAt||'').localeCompare(a.createdAt||''))[0];k=last?dStep(last):0;}
+    if(k>steps.length)k=0;
+  }
+  const existWorkers=window.DB.dispatches.filter(d=>d.orderId===orderId&&dStep(d)===k).map(d=>d.worker);
   const available=window.DB.employees.filter(e=>!existWorkers.includes(e));
-  if(!available.length)return alert('所有員工都已在此訂單的派工記錄中');
+  if(!available.length&&!steps)return alert('所有員工都已在此訂單的派工記錄中');
+  const used=k?stepUsed(o,k,steps.length):(o.done||0)+(o.defect||0)+(o.shortage||0);
   // 顯示選擇員工的 modal
   document.getElementById('modal-title-txt').textContent=`新增人員：${o.name}`;
   document.getElementById('modal-content').innerHTML=`
+    ${steps?`<div style="margin-bottom:10px;background:#F6F3FC;border:1px solid #D1C4E9;border-radius:8px;padding:6px 10px;font-size:13px">
+      <span style="color:#4527A0;font-weight:600">🔧 分工</span>
+      <select id="addw-step" style="width:auto;margin:0 0 0 6px;padding:2px 6px;font-size:12px" onchange="addWorkerToOrder('${orderId}',this.value)">
+        <option value="0"${k?'':' selected'}>不分工（$${o.price||0}）</option>
+        ${steps.map((x,i)=>`<option value="${i+1}"${k===i+1?' selected':''}>工序${i+1}/${steps.length}${x.name?' '+dueEsc(x.name):''}　$${x.price}</option>`).join('')}
+      </select></div>`:''}
     <div style="font-size:13px;color:#888;margin-bottom:12px">選擇要加入的員工（可多選）</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin-bottom:16px">
       ${available.map(e=>`<label style="display:flex;align-items:center;gap:6px;padding:8px;border:1px solid #e0e0e0;border-radius:8px;cursor:pointer;font-size:13px">
         <input type="checkbox" value="${e}" id="add-w-${e}" style="width:auto"> ${e}
-      </label>`).join('')}
+      </label>`).join('')||'<div style="color:#aaa;font-size:12px">這道工序所有員工都已派過</div>'}
     </div>
-    ${(()=>{const rep=(o.done||0)+(o.defect||0)+(o.shortage||0);return`<div style="font-size:12px;color:#888;margin-bottom:4px">訂單總量 ${o.qty}／已回報 ${rep}／<b style="color:#185FA5">剩餘 ${Math.max(0,o.qty-rep)}</b></div>`;})()}
+    <div style="font-size:12px;color:#888;margin-bottom:4px">訂單總量 ${o.qty}／${k?`工序${k}已回報`:'已回報'} ${used}／<b style="color:#185FA5">剩餘 ${Math.max(0,o.qty-used)}</b></div>
     <label style="margin-top:0">派工數量 <span style="color:#aaa;font-weight:400">（選填，每人各自；不填＝不限，可做到訂單剩餘量）</span></label>
     <input type="number" id="addw-qty" min="1" step="1" placeholder="例：200" style="width:160px;margin-bottom:14px">
     <div style="display:flex;gap:8px">
@@ -4412,12 +4502,19 @@ window.confirmAddWorkers=async function(orderId){
     if(!Number.isInteger(q)||q<1)return alert('派工數量請填正整數，或留空');
     assignQty=Math.min(q,o.qty);
   }
+  const steps=prodSteps(o.name,o.spec);
+  const k=steps?(parseInt(document.getElementById('addw-step')?.value)||0):0;
+  const sx=k?steps[k-1]:null;
+  if(sx){const names=steps.map(x=>x.name||'');
+    if(o.stepCount!==steps.length||JSON.stringify(o.stepNames||[])!==JSON.stringify(names))
+      await db.collection('orders').doc(o.id).update({stepCount:steps.length,stepNames:names});}
   const batchId=genId('B');
   const now=new Date().toISOString();
   for(const worker of selected){
     await saveDispatch({
       id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
-      orderNo:o.orderno||'',itemPrice:o.price,worker,
+      orderNo:o.orderno||'',itemPrice:sx?sx.price:o.price,worker,
+      ...(sx?{step:k,stepCount:steps.length,stepName:sx.name||''}:{}),
       assignQty,batchId,
       doneQty:0,defectQty:0,shortageQty:0,
       note:'',status:'待完成',createdAt:now,
@@ -4435,11 +4532,7 @@ window.deleteDispatch=async function(id){
   const o=window.DB.orders.find(x=>x.id===d.orderId);
   if(o){
     const otherDisp=window.DB.dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId);
-    await saveOrder({...o,
-      done:Math.max(0,otherDisp.reduce((a,x)=>a+(x.doneQty||0),0)),
-      defect:Math.max(0,otherDisp.reduce((a,x)=>a+(x.defectQty||0),0)),
-      shortage:Math.max(0,otherDisp.reduce((a,x)=>a+(x.shortageQty||0),0))
-    });
+    await saveOrder({...o,...orderTotalsPatch(o,otherDisp)});
   }
   await db.collection('dispatches').doc(String(id)).delete();
   toast('已刪除派工記錄');
@@ -4468,12 +4561,12 @@ window.openAdjust=function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
   const o=window.DB.orders.find(x=>x.id===d.orderId);
   const othersRep=window.DB.dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId)
-    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    .reduce((a,x)=>a+dUsedFor(x,d),0); // 分工：只算會佔到這道工序的
   const remain=o?Math.max(0,o.qty-othersRep):d.assignQty;
   document.getElementById('adjust-content').innerHTML=`
     <div style="font-size:13px;margin-bottom:12px">
-      <strong>${d.worker}</strong> — ${d.orderName}${d.orderSpec?' ('+d.orderSpec+')':''}
-      ${o?`<div style="font-size:11px;color:#888;margin-top:4px">訂單總量：${o.qty} ／ 其他員工已回報：${othersRep} ／ <strong style="color:#185FA5">可回報：${remain}</strong></div>`:''}
+      <strong>${d.worker}</strong> — ${d.orderName}${d.orderSpec?' ('+d.orderSpec+')':''}${stepTag(d)}
+      ${o?`<div style="font-size:11px;color:#888;margin-top:4px">訂單總量：${o.qty} ／ ${dStep(d)?`工序${d.step}其他人已回報`:'其他員工已回報'}：${othersRep} ／ <strong style="color:#185FA5">可回報：${remain}</strong></div>`:''}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
       <div>
@@ -4496,6 +4589,13 @@ window.openAdjust=function(id){
       <span style="display:flex;align-items:center;gap:6px">排列順序 <input type="number" id="adj-priority" min="1" value="${d.priority||''}" placeholder="不排" style="width:70px;margin:0"></span>
       ${d.isMerged?`<span style="font-size:11px;color:#888">（生效日期、工單順序、多日設定、幾點開始、做到幾點、必須做完、提前看到、排列順序、派工備註會套用到同一張合併卡片的其他訂單）</span>`:''}
     </div>
+    ${(()=>{const gm=d.groupQty>0||(d.isMerged&&d.batchId&&d.groupName);
+      const cur=d.groupQty>0?d.groupQty:(!gm&&o&&d.assignQty>0&&d.assignQty<o.qty?d.assignQty:'');
+      const mine=gm?adjShareMates(d).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0):(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0);
+      return`<div style="background:#E8F5E9;border-radius:8px;padding:8px 10px;margin-bottom:10px">
+      <label style="margin-top:0">派工數量 <span style="color:#558B2F;font-weight:400">（每人各自${gm?'；這個人在這張合併卡片的總量':''}；留空＝不限，可做到訂單剩餘量）</span></label>
+      <input type="number" id="adj-share" min="1" step="1" value="${cur}" placeholder="不限" style="width:160px;margin-bottom:2px">
+      <div style="font-size:11px;color:#666">目前${cur?`派 ${cur}`:'不限'}，${gm?'這張合併卡片':''}已回報 ${mine}</div></div>`;})()}
     <label>派工備註 <span style="color:#aaa;font-weight:400">（員工端卡片上會顯示）</span></label>
     <textarea id="adj-note" placeholder="填寫備註說明...（可不填）" style="min-height:56px">${dueEsc(d.note||'')}</textarea>
     <label>加工完成數量</label>
@@ -4512,6 +4612,8 @@ window.openAdjust=function(id){
   `;
   document.getElementById('adjust-modal').style.display='flex';
 }
+// 合併卡片：同一次派工、同一個人、同品名的派工（含自己）
+function adjShareMates(d){return window.DB.dispatches.filter(x=>x.worker===d.worker&&x.batchId&&x.batchId===d.batchId&&(x.groupName||'')===(d.groupName||''));}
 window.submitAdjust=async function(id){
   const d=window.DB.dispatches.find(x=>x.id===id);if(!d)return;
   if(!rsGuard([d.orderId],false,()=>submitAdjust(id)))return;
@@ -4521,7 +4623,7 @@ window.submitAdjust=async function(id){
   const myTotal=done+def+sho;
   const o=window.DB.orders.find(x=>x.id===d.orderId);
   const othersRep=window.DB.dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId)
-    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    .reduce((a,x)=>a+dUsedFor(x,d),0); // 分工：只算會佔到這道工序的
   const remain=o?Math.max(0,o.qty-othersRep):d.assignQty;
   const errEl=document.getElementById('adj-err');
   if(errEl)errEl.style.display='none';
@@ -4540,6 +4642,31 @@ window.submitAdjust=async function(id){
   const adjStart=untilPickerVal('adj-start-time');
   if(adjStart&&adjMulti)return alert('多日工作不能設定「幾點開始」，請取消其中一項');
   if(adjStart&&adjUntil&&adjStart>=adjUntil)return alert(`開始時間 ${adjStart} 必須早於結束時間 ${adjUntil}`);
+  // 派工數量（每人）：留空＝不限。單張訂單 → assignQty（不超過訂單數量）；合併卡片 → 整張卡片的 groupQty
+  {
+    const el=document.getElementById('adj-share');
+    if(el){
+      const raw=el.value.trim();let q=0;
+      if(raw){q=Number(raw);if(!Number.isInteger(q)||q<1)return alert('派工數量請填正整數，或留空（不限）');}
+      const gm=d.groupQty>0||(d.isMerged&&d.batchId&&d.groupName);
+      if(gm){
+        if((d.groupQty||0)!==q){
+          const mates=adjShareMates(d);
+          const rep=mates.reduce((a,x)=>a+(x.id===d.id?myTotal:(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0)),0);
+          if(q&&q<rep&&!confirm(`這張合併卡片已回報 ${rep}，派工數量改成 ${q} 會比已回報少，員工將不能再回報。確定？`))return;
+          const v=q?q:firebase.firestore.FieldValue.delete();
+          for(const m of mates){if(m.id===d.id)continue;await db.collection('dispatches').doc(String(m.id)).update({groupQty:v}).catch(e=>console.warn('派工數量同步失敗',m.id,e));}
+          if(q)d.groupQty=q;else delete d.groupQty;
+        }
+      }else if(o){
+        const na=q?Math.min(q,o.qty):o.qty;
+        if((d.assignQty||0)!==na){
+          if(q&&q<myTotal&&!confirm(`已回報 ${myTotal}，派工數量改成 ${q} 會比已回報少，員工將不能再回報。確定？`))return;
+          d.assignQty=na;
+        }
+      }
+    }
+  }
   // 排列順序：有變更才處理；清空 → 移除欄位
   const adjPrio=parseInt(document.getElementById('adj-priority')?.value)||0;
   if((d.priority||0)!==adjPrio){
@@ -4598,14 +4725,10 @@ window.submitAdjust=async function(id){
   await saveDispatch(d);
   if(o){
     const allDisp=window.DB.dispatches.filter(x=>x.orderId===d.orderId);
-    await saveOrder({...o,
-      done:o.forceDone?Math.max(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)):allDisp.reduce((a,x)=>a+(x.doneQty||0),0), // 不設上限（超做照實記錄）；強制完成至少為總量
-      defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
-      shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
-    });
+    await saveOrder({...o,...orderTotalsPatch(o,allDisp)}); // 不設上限（超做照實記錄）；強制完成至少為總量；分工只算最後一道
   }
   closeModal();toast('已調整');
-  {const o2=window.DB.orders.find(x=>x.id===d.orderId),sumD=window.DB.dispatches.filter(x=>x.orderId===d.orderId).reduce((a,x)=>a+(x.doneQty||0),0);
+  {const o2=window.DB.orders.find(x=>x.id===d.orderId),sumD=orderSums(window.DB.dispatches.filter(x=>x.orderId===d.orderId)).done;
    if(o2&&sumD>o2.qty)setTimeout(()=>alert(`提醒：「${o2.name}」訂單數量 ${o2.qty}，完工合計 ${sumD}，多了 ${sumD-o2.qty} 個。\n可出貨數量會以 ${sumD} 計算。`),100);}
 }
 window.closeModal=function(){document.querySelectorAll('.modal-overlay').forEach(m=>m.style.display='none');}
@@ -4906,7 +5029,7 @@ window.calcSalary=function(){
       <td style="white-space:nowrap">${dispWorkDate(d)}</td>
       <td style="font-weight:600">${d.worker}</td>
       <td style="color:#888">${d.orderNo||'-'}</td>
-      <td>${d.orderName}</td>
+      <td>${d.orderName}${dStep(d)?`<div style="font-size:11px;color:#4527A0">🔧 工序${d.step}${d.stepName?' '+dueEsc(d.stepName):''}</div>`:''}</td>
       <td style="color:#888">${d.orderSpec||'-'}</td>
       <td class="col-num" style="padding:2px 4px">
         <div style="display:flex;align-items:center;gap:2px;justify-content:flex-end">
@@ -4936,8 +5059,8 @@ window.editSalaryPrice=async function(dispatchId, orderId, newVal, inputEl){
   const d=window.DB.dispatches.find(x=>x.id===dispatchId);
   if(!d||price===(d.itemPrice||0))return;
   if(!rsGuard([orderId||d.orderId],false,()=>editSalaryPrice(dispatchId,orderId,newVal,inputEl)))return;
-  // 找出此訂單所有相關派工記錄（含合併派工）
-  const related=findRelatedDispatches(orderId||d.orderId);
+  // 找出此訂單所有相關派工記錄（含合併派工）；分工的派工只改同一道工序，也不改訂單單價
+  const related=findRelatedDispatches(orderId||d.orderId).filter(x=>dStep(x)===dStep(d));
   // 同步所有派工記錄
   for(const rd of related){
     rd.itemPrice=price;
@@ -4951,9 +5074,9 @@ window.editSalaryPrice=async function(dispatchId, orderId, newVal, inputEl){
       if(otherInput)otherInput.value=price;
     }
   }
-  // 回寫訂單單價（不動產品資料庫）
+  // 回寫訂單單價（不動產品資料庫）；分工的工序單價不回寫
   const o=window.DB.orders.find(x=>x.id===(orderId||d.orderId));
-  if(o){o.price=price;await saveOrder(o);}
+  if(o&&!dStep(d)){o.price=price;await saveOrder(o);}
   // 重新計算薪資表：更新摘要、合計，以及「複製到 Excel」「匯出」「列印」使用的資料
   // （原本這裡只重建員工下拉選單，摘要與複製內容仍是舊單價）
   // 重算會重畫表格，所以保留捲動位置，以及游標所在的單價欄與其中尚未送出的輸入
@@ -5656,7 +5779,7 @@ function renderProducts(){
   ptb.innerHTML=filtered.map(({p,i})=>`<tr>
     <td style="font-weight:600">${hl(p.name)}</td>
     <td style="color:#888">${p.spec||'—'}</td>
-    <td class="col-num">$${p.price}</td>
+    <td class="col-num">$${p.price}${Array.isArray(p.steps)&&p.steps.length>=2?`<div style="font-size:11px;color:#4527A0;white-space:nowrap" title="${p.steps.map((x,k)=>`工序${k+1} ${x.name||''} $${x.price}`).join('\n')}">🔧 分 ${p.steps.length} 道：${p.steps.map(x=>x.price).join('+')}</div>`:''}</td>
     <td style="display:flex;gap:4px">
       <button class="btn btn-sm btn-warn" onclick="openEditProd(${i})">編輯</button>
       <button class="btn btn-sm btn-danger" onclick="removeProd(${i})">🗑</button>
@@ -5677,21 +5800,55 @@ window.openEditProd=function(i){
     </div>
     <div style="margin-bottom:14px">
       <label>加工單價</label>
-      <input type="number" id="edit-prod-price" value="${p.price||0}" ${p.name===DRINK_NAME?'':'min="0"'} step="0.01">
+      <input type="number" id="edit-prod-price" value="${p.price||0}" ${p.name===DRINK_NAME?'':'min="0"'} step="0.01" oninput="epStepSum()">
     </div>
+    ${p.name===DRINK_NAME?'':`<div style="margin-bottom:14px;background:#F6F3FC;border:1px solid #D1C4E9;border-radius:8px;padding:8px 10px">
+      <div style="font-weight:600;color:#4527A0;font-size:13px">🔧 分工（工序）<span style="font-weight:400;color:#888;font-size:12px">　選填。拆給多人各做一道、每人都經手全部數量時設定，例如 3.5 元拆成 1／1／1.5。派工時可選擇要不要用。</span></div>
+      <div id="ep-steps" style="margin-top:6px"></div>
+      <button class="btn btn-sm" style="margin-top:4px" onclick="epStepAdd()">＋ 新增工序</button>
+      <div id="ep-step-sum" style="font-size:12px;margin-top:6px"></div>
+    </div>`}
     <div style="display:flex;gap:8px">
       <button class="btn btn-primary" style="flex:1" onclick="saveEditProd(${i})">儲存</button>
       <button class="btn" onclick="closeModal()">取消</button>
     </div>`;
+  window._epSteps=(Array.isArray(p.steps)?p.steps:[]).map(x=>({name:x.name||'',price:x.price}));
+  epStepRender();
   document.getElementById('dispatch-modal').style.display='flex';
 }
+// 品名的工序編輯（存在 products 清單的 steps：[{name,price}]）
+function epStepRender(){
+  const box=document.getElementById('ep-steps');if(!box)return;
+  box.innerHTML=window._epSteps.map((x,k)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
+    <span style="font-size:12px;color:#4527A0;width:46px">工序${k+1}</span>
+    <input type="text" placeholder="名稱（選填，例：倒角）" value="${dueEsc(x.name||'')}" oninput="_epSteps[${k}].name=this.value" style="flex:1;margin:0">
+    <span style="color:#888;font-size:12px">$</span><input type="number" min="0" step="0.01" value="${x.price??''}" oninput="_epSteps[${k}].price=this.value;epStepSum()" style="width:80px;margin:0">
+    <button class="btn btn-sm btn-danger" onclick="_epSteps.splice(${k},1);epStepRender()">✕</button></div>`).join('')||'<div style="font-size:12px;color:#aaa">尚未設定（不分工）</div>';
+  epStepSum();
+}
+window.epStepAdd=function(){window._epSteps.push({name:'',price:''});epStepRender();};
+window.epStepSum=function(){
+  const el=document.getElementById('ep-step-sum');if(!el)return;
+  const st=window._epSteps||[];if(!st.length){el.innerHTML='';return;}
+  const sum=Math.round(st.reduce((a,x)=>a+(parseFloat(x.price)||0),0)*100)/100;
+  const price=parseFloat(document.getElementById('edit-prod-price')?.value)||0;
+  el.innerHTML=st.length<2?'<span style="color:#E65100">至少要 2 道工序才算分工</span>':
+    sum===price?`<span style="color:#2E7D32">工序合計 $${sum}＝加工單價 $${price} ✓</span>`:`<span style="color:#E65100">⚠ 工序合計 $${sum}，加工單價 $${price}（不同也可以儲存）</span>`;
+};
 window.saveEditProd=async function(i){
   const price=parseFloat(document.getElementById('edit-prod-price').value)||0;
+  let steps=null;
+  if(window._epSteps&&window._epSteps.length){
+    if(window._epSteps.length<2)return alert('分工至少要 2 道工序；不分工請把工序全部刪除');
+    if(window._epSteps.some(x=>String(x.price).trim()===''||!(parseFloat(x.price)>=0)))return alert('每道工序都要填單價（可為 0）');
+    steps=window._epSteps.map(x=>({name:String(x.name||'').trim(),price:Math.round(parseFloat(x.price)*100)/100}));
+  }
   const isDrink=(window.DB.products[i]||{}).name===DRINK_NAME;
   if(isDrink){if(price>=0)return alert('「代訂飲料」是扣款，單價請填負數（例如 -50）');}
   else if(price<0)return alert('單價不能為負數');
   const prods=[...window.DB.products];
   prods[i]={...prods[i],price};
+  if(steps)prods[i].steps=steps;else delete prods[i].steps;
   setSS('syncing');
   try{
     await db.collection('system').doc('products').set({list:prods});
@@ -6116,11 +6273,7 @@ window.confirmReport=async function(id){
       const o=window.DB.orders.find(x=>x.id===d.orderId);
       if(o){
         const allDisp=[...window.DB.dispatches.filter(x=>x.id!==id&&x.orderId===d.orderId),{...d,...updateData}];
-        await db.collection('orders').doc(o.id).update({
-          done:o.forceDone?Math.max(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)):allDisp.reduce((a,x)=>a+(x.doneQty||0),0), // 不設上限（超做照實記錄）；強制完成至少為總量
-          defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
-          shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
-        });
+        await db.collection('orders').doc(o.id).update(orderTotalsPatch(o,allDisp)); // 不設上限；強制完成至少為總量；分工只算最後一道
       }
     }
     await db.collection('dispatches').doc(String(id)).update(updateData);
@@ -6162,11 +6315,7 @@ window.confirmAllReports=async function(skipAsk){
         const o=window.DB.orders.find(x=>x.id===d.orderId);
         if(o){
           const allDisp=[...window.DB.dispatches.filter(x=>x.id!==d.id&&x.orderId===d.orderId),{...d,...updateData}];
-          await db.collection('orders').doc(o.id).update({
-            done:o.forceDone?Math.max(o.qty,allDisp.reduce((a,x)=>a+(x.doneQty||0),0)):allDisp.reduce((a,x)=>a+(x.doneQty||0),0), // 不設上限（超做照實記錄）；強制完成至少為總量
-            defect:allDisp.reduce((a,x)=>a+(x.defectQty||0),0),
-            shortage:allDisp.reduce((a,x)=>a+(x.shortageQty||0),0)
-          });
+          await db.collection('orders').doc(o.id).update(orderTotalsPatch(o,allDisp)); // 分工只算最後一道
         }
       }
       await db.collection('dispatches').doc(String(d.id)).update(updateData);
