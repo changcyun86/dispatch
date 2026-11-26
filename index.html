@@ -2806,6 +2806,10 @@ function dUsedFor(x,d){
 }
 function stepLeft(o,k,n){return Math.max(0,(o.qty||0)-stepUsed(o,k,n));}
 // 品名單價資料庫裡的工序設定（至少 2 道才算分工）
+// 訂單自己的工序（在訂單上按「加派二次加工」建立的，存在 o.stepList）優先，其次是品名單價資料庫的設定
+function orderSteps(o){return o&&Array.isArray(o.stepList)&&o.stepList.length>=2?o.stepList:prodSteps(o.name,o.spec);}
+// 派工區的分組：同品名＋規格＋單價；訂單自己設了工序的單獨一組（工序不同，不能合併）
+function grpKeyOfOrder(o){return`${o.name}||${o.spec||''}||${o.price||0}`+(o&&Array.isArray(o.stepList)&&o.stepList.length>=2?`||S:${o.id}`:'');}
 function prodSteps(name,spec){const p=lookupProductBySpec(name,spec);return p&&Array.isArray(p.steps)&&p.steps.length>=2?p.steps:null;}
 // 訂單列表：分工進度
 function stepProgHtml(o){
@@ -3505,6 +3509,7 @@ function renderOrders(){
       <td style="min-width:70px">${pct}%<div class="progress-bar"><div class="progress-fill" style="width:${pct}%"></div></div></td>
       <td style="display:flex;gap:4px">
         <button class="btn btn-sm" onclick="openOrderDetail('${o.id}')" title="訂單詳情">📋</button>
+        <button class="btn btn-sm" onclick="openNextProcess('${o.id}')" title="加派二次加工（在這張訂單再加一道工序並派工）" style="color:#4527A0">🔧+</button>
         <button class="btn btn-sm btn-danger" onclick="delOrder('${o.id}')">🗑</button>
       </td></tr>`;
   }
@@ -3771,13 +3776,13 @@ window.grpMove=function(key,dir){
 window.grpPrioToggle=function(on){window._grpPrioOn=!!on;updateSelectedInfo();};
 // 分工：各組選的工序（0＝不分工）。品名資料庫有設定工序才會出現選單
 window._grpStep={};
-function grpStepOf(key,o){const st=prodSteps(o.name,o.spec),k=parseInt(window._grpStep[key])||0;return st&&k>=1&&k<=st.length?k:0;}
+function grpStepOf(key,o){const st=orderSteps(o),k=parseInt(window._grpStep[key])||0;return st&&k>=1&&k<=st.length?k:0;}
 window.grpStepSet=function(key,v){window._grpStep[key]=parseInt(v)||0;updateSelectedInfo();};
 // 派工時各組的排列順序（只算勾選中的組，依區塊內的先後編 1、2、3…）；沒勾「依此順序排列」→ 空
 function grpPrioMap(){
   if(!window._grpPrioOn)return{};
   const ids=[...window._selectedOrderIds];
-  const live=new Set(window.DB.orders.filter(o=>ids.includes(o.id)).map(o=>`${o.name}||${o.spec||''}||${o.price||0}`));
+  const live=new Set(window.DB.orders.filter(o=>ids.includes(o.id)).map(o=>grpKeyOfOrder(o)));
   const keys=window._grpOrder.filter(k=>live.has(k));
   if(keys.length<2)return{};
   const m={};keys.forEach((k,i)=>m[k]=i+1);return m;
@@ -3931,8 +3936,8 @@ function updateSelectedInfo(){
   // 群組：同品名+規格+單價 合併顯示；合計只算勾選的訂單
   const groups={};
   shown.forEach(o=>{
-    const key=`${o.name}||${o.spec||''}||${o.price||0}`;
-    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,totalQty:0,orders:[],on:0,steps:prodSteps(o.name,o.spec),step:grpStepOf(key,o)};
+    const key=grpKeyOfOrder(o);
+    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,totalQty:0,orders:[],on:0,steps:orderSteps(o),step:grpStepOf(key,o)};
     const g0=groups[key];
     const remaining=g0.step?stepLeft(o,g0.step,g0.steps.length):Math.max(0,o.qty-((o.done||0)+(o.defect||0)+(o.shortage||0)));
     const on=window._selectedOrderIds.has(o.id);
@@ -3984,7 +3989,7 @@ window.createDispatch=async function(){
   {
     const today=toTW(new Date().toISOString(),false);
     // 分工：派另一道工序不受影響（員工端各工序的卡片分開）；只有同一道工序今天已派過才擋
-    const stepFree=o=>{const k=grpStepOf(`${o.name}||${o.spec||''}||${o.price||0}`,o);return k>0&&!window.DB.dispatches.some(d=>d.orderId===o.id&&dStep(d)===k&&dispWorkDate(d)===today);};
+    const stepFree=o=>{const k=grpStepOf(grpKeyOfOrder(o),o);return k>0&&!window.DB.dispatches.some(d=>d.orderId===o.id&&dStep(d)===k&&dispWorkDate(d)===today);};
     const ip=window.DB.orders.filter(o=>ids.includes(o.id)&&isInProgressOrder(o)&&!stepFree(o));
     if(ip.length&&effectiveDate<=today)return alert(`以下訂單今天還在加工中，只能預派到明天以後（請把「生效日期」改成明天以後）：\n\n${ip.map(o=>'・'+o.name+(o.orderno?'（'+o.orderno+'）':'')).join('\n')}\n\n今天要加人，請到訂單明細用「加派員工」。`);
   }
@@ -4015,8 +4020,8 @@ window.createDispatch=async function(){
   const selectedOrders=window.DB.orders.filter(o=>ids.includes(o.id))
     .sort((a,b)=>(a.date||'').localeCompare(b.date||'')); // 先進先出排序
   selectedOrders.forEach(o=>{
-    const key=`${o.name}||${o.spec||''}||${o.price||0}`;
-    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,orders:[],steps:prodSteps(o.name,o.spec),step:grpStepOf(key,o)};
+    const key=grpKeyOfOrder(o);
+    if(!groups[key])groups[key]={name:o.name,spec:o.spec||'',price:o.price||0,orders:[],steps:orderSteps(o),step:grpStepOf(key,o)};
     groups[key].orders.push(o);
   });
   // 每組每張訂單各自建立一筆 dispatch，共用 batchId
@@ -4202,6 +4207,7 @@ function renderDispatchLog(){
         <div style="display:flex;align-items:center;gap:6px">
           ${g.orderNo?`<span style="color:#888;font-weight:400">${highlight(g.orderNo)}</span>`:''}
           <button class="btn btn-sm btn-primary" style="font-size:11px;padding:3px 8px" onclick="addWorkerToOrder('${g.orderId}')">+ 新增人員</button>
+          <button class="btn btn-sm" style="font-size:11px;padding:3px 8px;color:#4527A0;border-color:#B39DDB" onclick="openNextProcess('${g.orderId}')" title="在這張訂單再加一道工序並派工">🔧 二次加工</button>
         </div>
       </div>
       ${g.dispatches.map(d=>`
@@ -4473,7 +4479,7 @@ function dispQtyBadge(d){
 window.addWorkerToOrder=function(orderId,stepSel){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   // 分工：品名有設定工序 → 選要加到哪一道（預設：這張單已經在派的最新一道；都沒有則不分工）
-  const steps=prodSteps(o.name,o.spec);
+  const steps=orderSteps(o);
   let k=0;
   if(steps){
     if(stepSel!==undefined)k=parseInt(stepSel)||0;
@@ -4508,6 +4514,90 @@ window.addWorkerToOrder=function(orderId,stepSel){
     </div>`;
   document.getElementById('dispatch-modal').style.display='flex';
 }
+// ══ 加派二次加工（2026/11）══════════════════════════════════════════════
+// 品名資料庫沒設定工序、偶爾才要再加工的物料：在訂單上直接加一道工序並派工。
+// 第一次：這張訂單原本的派工變成第 1 道（單價維持），新派的是第 2 道；再按一次就是第 3 道，依此類推。
+// 工序存在訂單 stepList（[{name,price}]）；訂單完工改以最後一道計算，之後派工區也會出現這張訂單的工序選單。
+window.openNextProcess=function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  if(!rsGuard([orderId],false,()=>openNextProcess(orderId)))return;
+  const own=Array.isArray(o.stepList)&&o.stepList.length>=2;
+  const ps=!own?prodSteps(o.name,o.spec):null;
+  if(ps)return alert(`「${o.name}」已在品名單價資料庫設定 ${ps.length} 道工序。\n請到派工頁，在派工記錄按「＋ 新增人員」，或勾選訂單後在「🔧 分工」選工序派工。`);
+  const n=own?o.stepList.length:1,next=n+1;
+  const title=next===2?'加派二次加工':`加派第 ${next} 道加工`;
+  const today=twToday();
+  document.getElementById('modal-title-txt').textContent=`${title}：${o.name}${o.spec?' '+o.spec:''}`;
+  document.getElementById('modal-content').innerHTML=`
+    <div style="background:#F6F3FC;border:1px solid #D1C4E9;border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.7;margin-bottom:10px;color:#4527A0">
+      ${own?`目前工序：${o.stepList.map((x,i)=>`${i+1} ${dueEsc(x.name||'')} $${x.price}`).join('／')}<br>新的這道是第 ${next} 道，之後訂單完工改以第 ${next} 道計算。`
+        :`這張訂單原本的派工會變成<b>第 1 道</b>（已做的單價維持 $${o.price||0}），新派的是<b>第 2 道</b>。<br>之後要第 2 道做完才算訂單完工、才能出貨。`}
+      ${(o.done||0)>0?`<br><span style="color:#C62828">目前完工 ${o.done}：會改成前一道的進度，訂單完工從第 ${next} 道的回報重新計算。</span>`:''}
+    </div>
+    ${own?'':`<label style="margin-top:0">第 1 道名稱 <span style="color:#aaa;font-weight:400">（選填，原本的加工）</span></label>
+    <input type="text" id="nxp-first" placeholder="例：一次加工" style="margin-bottom:8px">`}
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
+      <div><label style="margin-top:0">第 ${next} 道製程名稱</label><input type="text" id="nxp-name" placeholder="例：倒角"></div>
+      <div><label style="margin-top:0">單價</label><input type="number" id="nxp-price" min="0" step="0.01" placeholder="例：1"></div>
+    </div>
+    <div style="font-size:13px;color:#888;margin:10px 0 6px">派給（可多選；不勾也可以，之後再到派工頁選這道工序派工）</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px;margin-bottom:10px">
+      ${window.DB.employees.map(e=>`<label style="display:flex;align-items:center;gap:6px;padding:8px;border:1px solid #e0e0e0;border-radius:8px;cursor:pointer;font-size:13px">
+        <input type="checkbox" value="${dueEsc(e)}" class="nxp-w" style="width:auto"> ${dueEsc(e)}</label>`).join('')}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label style="margin-top:0">生效日期</label><input type="date" id="nxp-date" value="${today}"></div>
+      <div><label style="margin-top:0">派工數量 <span style="color:#aaa;font-weight:400">（選填，每人各自）</span></label><input type="number" id="nxp-qty" min="1" step="1" placeholder="不限"></div>
+    </div>
+    <label>派工備註 <span style="color:#aaa;font-weight:400">（選填）</span></label>
+    <textarea id="nxp-note" style="min-height:44px"></textarea>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn btn-primary btn-sm" onclick="submitNextProcess('${orderId}')">確認</button>
+      <button class="btn btn-sm" onclick="closeModal()">取消</button>
+    </div>`;
+  document.getElementById('dispatch-modal').style.display='flex';
+};
+window.submitNextProcess=async function(orderId){
+  const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
+  if(!rsGuard([orderId],false,()=>submitNextProcess(orderId)))return;
+  const own=Array.isArray(o.stepList)&&o.stepList.length>=2;
+  if(!own&&prodSteps(o.name,o.spec))return alert('這個品名已在資料庫設定工序，請用派工頁的工序選單派工');
+  const name=(document.getElementById('nxp-name').value||'').trim();
+  const pr=document.getElementById('nxp-price').value.trim();
+  if(!name)return alert('請填製程名稱');
+  if(pr===''||!(parseFloat(pr)>=0))return alert('請填單價（可為 0）');
+  const price=Math.round(parseFloat(pr)*100)/100;
+  const qRaw=(document.getElementById('nxp-qty').value||'').trim();
+  let assignQty=o.qty;
+  if(qRaw){const q=Number(qRaw);if(!Number.isInteger(q)||q<1)return alert('派工數量請填正整數，或留空');assignQty=Math.min(q,o.qty);}
+  const workers=[...document.querySelectorAll('.nxp-w:checked')].map(c=>c.value);
+  const eff=document.getElementById('nxp-date').value||twToday();
+  const note=document.getElementById('nxp-note').value||'';
+  const list=own?[...o.stepList,{name,price}]:[{name:(document.getElementById('nxp-first')?.value||'').trim(),price:o.price||0},{name,price}];
+  const n=list.length;
+  if(!workers.length&&!confirm(`沒有勾選員工，只建立第 ${n} 道工序「${name}」，之後再到派工頁派工？`))return;
+  setSS('syncing');
+  try{
+    const now=new Date().toISOString(),batchId=genId('B');
+    // 原本的派工：沒分工的 → 第 1 道；已分工的 → 共幾道改成 n
+    const ds=window.DB.dispatches.filter(d=>d.orderId===orderId).map(d=>({...d}));
+    for(const d of ds){
+      const p=dStep(d)?{stepCount:n}:(own?null:{step:1,stepCount:n,stepName:list[0].name});
+      if(!p)continue;Object.assign(d,p);
+      await db.collection('dispatches').doc(String(d.id)).update(p);
+    }
+    const added=workers.map(worker=>({id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',orderNo:o.orderno||'',
+      itemPrice:price,step:n,stepCount:n,stepName:name,worker,assignQty,batchId,doneQty:0,defectQty:0,shortageQty:0,
+      note,status:'待完成',createdAt:now,effectiveDate:eff}));
+    for(const d of added)await saveDispatch(d);
+    const tot=orderTotalsPatch(o,[...ds,...added]);
+    if(doneForced(o,tot.done))tot.done=Math.max(o.qty||0,tot.done);
+    await db.collection('orders').doc(orderId).update({stepList:list,stepCount:n,stepNames:list.map(x=>x.name||''),...tot});
+    if(workers.length)ldRecord([o.name],eff,workers,batchId,now);
+    setSS('ok');closeModal();
+    toast(`已加第 ${n} 道「${name}」$${price}${workers.length?`，派給 ${workers.join('、')}`:''}`);
+  }catch(e){console.error(e);setSS('err');toast('失敗：'+(e.message||e));}
+};
 window.confirmAddWorkers=async function(orderId){
   const o=window.DB.orders.find(x=>x.id===orderId);if(!o)return;
   const selected=Array.from(document.querySelectorAll('[id^="add-w-"]:checked')).map(c=>c.value);
@@ -4520,7 +4610,7 @@ window.confirmAddWorkers=async function(orderId){
     if(!Number.isInteger(q)||q<1)return alert('派工數量請填正整數，或留空');
     assignQty=Math.min(q,o.qty);
   }
-  const steps=prodSteps(o.name,o.spec);
+  const steps=orderSteps(o);
   const k=steps?(parseInt(document.getElementById('addw-step')?.value)||0):0;
   const sx=k?steps[k-1]:null;
   if(sx){const names=steps.map(x=>x.name||'');
