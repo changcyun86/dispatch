@@ -532,7 +532,18 @@ textarea{resize:vertical;min-height:70px}
 
 <!-- 薪資單 -->
 <div id="pg-payslip" class="page">
-  <div class="section-hdr"><strong style="font-size:15px">薪資單</strong></div>
+  <div class="section-hdr"><strong style="font-size:15px">薪資單</strong>
+    <span style="display:inline-flex;gap:4px;margin-left:12px"><button class="btn btn-sm ps-kind" data-k="month" onclick="psKind('month')">正式員工（月）</button><button class="btn btn-sm ps-kind" data-k="temp" onclick="psKind('temp')">臨時工（週）</button></span></div>
+  <div id="tp-wrap" style="display:none">
+    <div class="info-box" style="margin-bottom:1rem">ℹ️ 臨時工每週五發薪，期間為上週五～本週四。每天一種計薪方式（計件／日薪／時薪），每天金額無條件進位到元；耗材與代訂飲料從當週扣。確認後按「鎖定本週」保存快照。</div>
+    <div class="card" style="padding:0.875rem 1.25rem"><div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <div><label>發薪日（週五）</label><input type="date" id="tp-payday" style="width:auto" onchange="tpLoad(this.value)"></div>
+      <button class="btn btn-sm" onclick="tpShift(-7)">◀ 上一期</button><button class="btn btn-sm" onclick="tpShift(7)">下一期 ▶</button>
+      <button class="btn btn-sm" onclick="tpLoad()">🔄 重新整理</button><span id="tp-range" style="font-size:13px;color:#555"></span>
+    </div></div>
+    <div id="tp-body"></div>
+  </div>
+  <div id="ps-month-wrap">
   <div class="info-box" style="margin-bottom:1rem">ℹ️ 以一個完整月份為單位。系統能算的自動帶入，其他在「編輯」手動填寫（自動儲存為草稿）；確認後按「鎖定本期」保存快照，同時鎖定當月耗材紀錄。</div>
   <div class="card" style="padding:0.875rem 1.25rem">
     <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
@@ -541,6 +552,7 @@ textarea{resize:vertical;min-height:70px}
     </div>
   </div>
   <div id="ps-body"></div>
+  </div>
 </div>
 
 <!-- 耗材 -->
@@ -711,7 +723,7 @@ textarea{resize:vertical;min-height:70px}
     </div>
   </div>
   <div class="card">
-    <div class="card-title">員工薪資資料（到職日、固定加扣項目）</div>
+    <div class="card-title">員工薪資資料（到職日、固定加扣項目、臨時工計薪）</div>
     <div style="font-size:12px;color:#888;margin-bottom:8px">年資獎金：每滿一年 +500，滿週年的次月生效，無上限。固定加扣項目每月自動帶入薪資單（正數為加項、負數為扣項），當月仍可在薪資單上修改。</div>
     <div id="empinfo-editor"></div>
     <div id="empinfo-list"></div>
@@ -5022,7 +5034,7 @@ function renderCheckins(){
       <td style="font-weight:500">${hours}</td>
       <td style="font-size:12px;color:#888">${c.inDist!=null?`${c.inDist}m`:'-'}</td>
       <td style="font-size:12px;color:#888">${c.outDist!=null?`${c.outDist}m`:'-'}</td>
-      <td>${statusBadge}</td>
+      <td>${statusBadge}${ciConfirmBadge(c)}</td>
     </tr>`;
   }).join('');
 
@@ -5032,6 +5044,24 @@ function renderCheckins(){
   sumEl.innerHTML=`共 <strong>${list.length}</strong> 筆記錄，完整打卡 <strong>${countComplete}</strong> 筆，總工時 <strong style="color:#185FA5">${totalHours.toFixed(1)} 小時</strong>`;
 }
 
+// 共用裝置打卡：上班後按「確認工單」的紀錄（confirmAt、confirmList 快照）
+function ciConfirmBadge(c){
+  if(c.confirmAt){const n=(c.confirmList||[]).length;
+    return` <span class="badge" style="background:#E8F5E9;color:#2E7D32;cursor:pointer" title="點擊查看當時確認的工單" onclick="ciShowConfirm('${ciEsc(c.id)}')">✅ 已確認 ${ciEsc(c.confirmTime||'')}（${n} 張）</span>`;}
+  if(c.sharedDevice)return` <span class="badge" style="background:#FFEBEE;color:#C62828" title="用共用裝置打卡，但沒按「確認工單」">未確認工單</span>`;
+  return'';
+}
+window.ciShowConfirm=function(id){
+  const c=(window.DB.checkins||[]).find(x=>x.id===id);if(!c)return;
+  const list=c.confirmList||[];
+  document.getElementById('due-modal-title').textContent=`${c.worker} ${c.date} 確認的工單`;
+  document.getElementById('due-modal-content').innerHTML=`<div style="font-size:13px;color:#888;margin-bottom:8px">確認時間：${ciEsc(c.confirmTime||'')}（共用裝置，上班打卡後確認）</div>`+
+    (list.length?list.map((x,i)=>`<div style="padding:6px 0;border-bottom:1px solid #f0f0f0;font-size:14px">${i+1}. <b>${ciEsc(x.name)}</b> <span style="color:#888">${ciEsc(x.spec||'')}</span>
+      ${x.step?`<span style="color:#4527A0">　🔧 工序${x.step}${x.stepName?' '+ciEsc(x.stepName):''}</span>`:''}　數量 <b>${x.qty}</b>${x.n>1?`（合併 ${x.n} 張）`:''}${x.multiDay?'　多日':''}
+      ${x.note?`<div style="font-size:12px;color:#E65100">📌 ${ciEsc(x.note)}</div>`:''}</div>`).join(''):'<div style="color:#888">當時沒有工單</div>')+
+    `<div style="margin-top:12px"><button class="btn btn-sm" onclick="closeModal()">關閉</button></div>`;
+  document.getElementById('due-modal').style.display='flex';
+};
 // ── 薪資 ──
 function setPayPeriod(offset,btn){
   // offset=0 → 本月；offset=-1 → 上月；offset=-2 → 上上月
@@ -5390,7 +5420,7 @@ function renderEmpInfo(){
       return`<tr><td style="font-weight:600">${MAT.esc(e)}</td>
       <td>${info.hireDate?`${info.hireDate}<br><span style="color:#888;font-size:11px">民國 ${toROC(info.hireDate)}・${seniorityYears(info.hireDate,pm)} 年</span>`:'<span style="color:#E65100">未設定</span>'}</td>
       <td class="col-num">${info.hireDate?'$'+seniorityBonus(info.hireDate,pm).toLocaleString():'—'}</td>
-      <td style="font-size:12px">${items.length?items.map(i=>`${MAT.esc(i.label||'（未命名）')} <span style="color:${i.amount<0?'#C62828':'#2E7D32'}">${i.amount<0?'-':'+'}$${Math.abs(i.amount).toLocaleString()}</span>`).join('<br>'):'<span style="color:#aaa">無</span>'}</td>
+      <td style="font-size:12px">${info.temp?`<div style="color:#6A1B9A;font-weight:600;margin-bottom:2px">臨時工・預設${TP_TYPES[info.payType||'piece']}${info.dayRate?`・日薪 $${info.dayRate}`:''}${info.hourRate?`・時薪 $${info.hourRate}`:''}</div>`:''}${items.length?items.map(i=>`${MAT.esc(i.label||'（未命名）')} <span style="color:${i.amount<0?'#C62828':'#2E7D32'}">${i.amount<0?'-':'+'}$${Math.abs(i.amount).toLocaleString()}</span>`).join('<br>'):'<span style="color:#aaa">無</span>'}</td>
       <td><button class="btn btn-sm" onclick="empInfoEdit('${MAT.esc(e)}')">編輯</button></td></tr>`;}).join('')+`</tbody></table></div>`
     :'<div style="color:#aaa">尚無員工</div>';
   renderEmpInfoEditor();
@@ -5404,6 +5434,14 @@ function renderEmpInfoEditor(){
       <label style="margin:0">到職日</label><input type="date" id="ei-hire" value="${MAT.esc(f.hireDate||'')}" style="width:auto" oninput="_empEdit.hireDate=this.value;document.getElementById('ei-roc').textContent=this.value?'民國 '+toROC(this.value):''">
       <span id="ei-roc" style="font-size:12px;color:#888">${f.hireDate?'民國 '+toROC(f.hireDate):''}</span>
     </div>
+    <div style="background:#F3E5F5;border-radius:8px;padding:8px 10px;margin-bottom:10px">
+      <label style="display:flex;gap:6px;align-items:center;margin:0;cursor:pointer;color:#6A1B9A;font-weight:600"><input type="checkbox" style="width:auto;margin:0" ${f.temp?'checked':''} onchange="_empEdit.temp=this.checked;renderEmpInfoEditor()"> 臨時工（每週五發薪，不列入月薪資單）</label>
+      ${f.temp?`<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:6px;font-size:13px">
+        <span>預設計薪 <select style="width:auto;margin:0" onchange="_empEdit.payType=this.value">${Object.entries(TP_TYPES).map(([k,v])=>`<option value="${k}" ${(f.payType||'piece')===k?'selected':''}>${v}</option>`).join('')}</select></span>
+        <span>日薪 $<input type="number" min="0" step="1" value="${MAT.esc(f.dayRate??'')}" oninput="_empEdit.dayRate=this.value" style="width:90px;margin:0"></span>
+        <span>時薪 $<input type="number" min="0" step="0.01" value="${MAT.esc(f.hourRate??'')}" oninput="_empEdit.hourRate=this.value" style="width:90px;margin:0"></span>
+        <span style="font-size:11px;color:#888">每天的計薪方式可在「薪資單 → 臨時工」逐日修改</span></div>`:''}
+    </div>
     <div style="font-size:12px;color:#888;margin-bottom:6px">固定加扣項目（名稱可空白；扣款請填負數，例如 -2300）</div>
     ${f.items.map((it,i)=>`<div style="display:flex;gap:6px;margin-bottom:6px">
       <input placeholder="名稱（可空白）" value="${MAT.esc(it.label)}" oninput="_empEdit.items[${i}].label=this.value" style="flex:2">
@@ -5415,7 +5453,8 @@ function renderEmpInfoEditor(){
 }
 window.empInfoEdit=function(name){
   const info=EMPINFO.byName[name]||{};
-  _empEdit={name,hireDate:info.hireDate||'',items:(info.items||[]).map(i=>({label:i.label||'',amount:i.amount}))};
+  _empEdit={name,hireDate:info.hireDate||'',items:(info.items||[]).map(i=>({label:i.label||'',amount:i.amount})),
+    temp:!!info.temp,payType:info.payType||'piece',dayRate:info.dayRate??'',hourRate:info.hourRate??''};
   renderEmpInfoEditor();document.getElementById('empinfo-editor').scrollIntoView({block:'nearest'});
 }
 window.empInfoSave=async function(){
@@ -5429,8 +5468,17 @@ window.empInfoSave=async function(){
     if(it.amount===''||!Number.isInteger(a)||a===0)return alert(`「${it.label||'未命名'}」的金額需為非 0 的整數（扣款填負數）`);
     items.push({label:(it.label||'').trim(),amount:a});
   }
+  const tempF={temp:!!f.temp};
+  if(f.temp){
+    const dr=String(f.dayRate??'').trim(),hr=String(f.hourRate??'').trim();
+    if(dr!==''&&!(Number(dr)>=0))return alert('日薪請填數字');
+    if(hr!==''&&!(Number(hr)>=0))return alert('時薪請填數字');
+    if(f.payType==='day'&&dr==='')return alert('預設日薪，請填日薪金額');
+    if(f.payType==='hour'&&hr==='')return alert('預設時薪，請填時薪金額');
+    Object.assign(tempF,{payType:f.payType||'piece',dayRate:dr===''?0:Number(dr),hourRate:hr===''?0:Number(hr)});
+  }
   // merge：只更新這位員工，不覆蓋另一台電腦同時修改的其他員工
-  try{await db.collection('system').doc('employeeInfo').set({byName:{[f.name]:{hireDate:f.hireDate||'',items}}},{merge:true});_empEdit=null;toast(`已儲存 ${f.name} 的薪資資料`);renderEmpInfo();}
+  try{await db.collection('system').doc('employeeInfo').set({byName:{[f.name]:{hireDate:f.hireDate||'',items,...tempF}}},{merge:true});_empEdit=null;toast(`已儲存 ${f.name} 的薪資資料`);renderEmpInfo();}
   catch(e){toast('儲存失敗，請重試');}
 }
 
@@ -5631,7 +5679,7 @@ function psWorkers(){
   (window.DB.checkins||[]).forEach(c=>{if(c.date>=from&&c.date<=to&&(c.inTime||c.leave))set.add(c.worker);});
   (window.DB.dispatches||[]).forEach(d=>{if(d.doneQty>0){const dt=dispWorkDate(d);if(dt>=from&&dt<=to)set.add(d.worker);}});
   PS.mats.forEach(r=>{if(r.status==='issued'&&r.date>=from&&r.date<=to)set.add(r.worker);});
-  return[...set].filter(Boolean).sort((a,b)=>psEmpOrder(a)-psEmpOrder(b));
+  return[...set].filter(Boolean).filter(w=>!tpIsTemp(w)).sort((a,b)=>psEmpOrder(a)-psEmpOrder(b)); // 臨時工改在「臨時工週薪」
 }
 function psEmpOrder(w){const i=(window.DB.employees||[]).indexOf(w);return i<0?999:i;}
 // ── 讀取（只讀這個月的薪資單文件與耗材紀錄） ──
@@ -5834,11 +5882,255 @@ window.psUnlock=async function(){
     toast(`${m} 已解鎖，恢復為草稿`);
   }catch(e){toast('解鎖未完成，請重試');}
 };
+// ══ 臨時工週薪（2026/11）══════════════════════════════════════════════
+// 員工薪資資料標記「臨時工」（employeeInfo.byName[名].temp），有預設計薪方式與日薪、時薪金額。
+// 每天一種方式：打卡紀錄 payType 可逐日改（沒有就用預設）。計件＝當天派工完成數×單價；日薪＝固定金額；
+// 時薪＝（下班－上班，早於規定上班時間從規定時間起算，扣午休 12–13 實際重疊部分）×時薪。
+// 日薪、時薪那天的回報數量照樣算訂單進度，但不算加工費。每天金額先截到小數兩位再無條件進位到元。
+// 期間：上週五～本週四，週五發薪。耗材、代訂飲料從當週扣；手動加扣存在 tempPayslips/{發薪日}.overrides。
+var TP_TYPES={piece:'計件',day:'日薪',hour:'時薪'};
+const TP={payday:null,doc:null,unsub:null,mats:[],matsKey:'',waive:{},open:null,ready:false};
+function tpIsTemp(w){return!!(window.EMPINFO&&EMPINFO.byName[w]&&EMPINFO.byName[w].temp);}
+function tpRange(pd){return{from:rsAddDays(pd,-7),to:rsAddDays(pd,-1)};}
+function tpWd(d){return new Date(d+'T00:00:00Z').getUTCDay();}
+function tpDefaultPayday(){const t=twToday();return rsAddDays(t,(5-tpWd(t)+7)%7);} // 本週的週五（今天週五就是今天）
+const tpMin=t=>{const[h,m]=String(t||'').slice(0,5).split(':').map(Number);return h*60+(m||0);};
+const tpHM=m=>`${Math.floor(m/60)}:${String(Math.round(m%60)).padStart(2,'0')}`;
+const tpCeil=x=>Math.ceil(Math.floor(x*100+1e-6)/100-1e-9)||0; // 先截到小數兩位，再無條件進位到元（1409.17→1410）
+// 時薪工時（分鐘）；沒有下班時間 → null
+function tpMinutes(c){
+  if(!c||!c.inTime||!c.outTime)return null;
+  const cf=WC.conf(c.date);
+  const st=Math.max(tpMin(c.inTime),tpMin(cf.start)),en=tpMin(c.outTime);
+  let m=en-st;
+  if(cf.lunch){const ov=Math.min(en,13*60)-Math.max(st,12*60);if(ov>0)m-=ov;}
+  return Math.max(0,m);
+}
+function tpWorkRows(w,date){
+  return(window.DB.dispatches||[]).filter(d=>d.worker===w&&d.doneQty>0&&dispWorkDate(d)===date)
+    .map(d=>({date,worker:w,name:d.orderName||'',spec:d.orderSpec||'',qty:d.doneQty||0,price:d.itemPrice||0,amount:(d.doneQty||0)*(d.itemPrice||0),
+      step:dStep(d)?`工序${d.step}${d.stepName?' '+d.stepName:''}`:''}));
+}
+function tpCompute(w){
+  const doc=TP.doc||{};
+  if(doc.status==='locked'&&doc.slips&&doc.slips[w])return doc.slips[w];
+  const{from,to}=tpRange(TP.payday);
+  const info=(EMPINFO.byName[w])||{};
+  const cis=(window.DB.checkins||[]).filter(c=>c.worker===w&&c.date>=from&&c.date<=to);
+  const dates=new Set(cis.filter(c=>c.inTime&&!c.leave).map(c=>c.date));
+  (window.DB.dispatches||[]).forEach(d=>{if(d.worker===w&&d.doneQty>0){const dt=dispWorkDate(d);if(dt>=from&&dt<=to)dates.add(dt);}});
+  const days=[...dates].sort().map(date=>{
+    const c=cis.find(x=>x.date===date&&!x.leave)||null;
+    const type=(c&&c.payType)||info.payType||'piece';
+    const work=tpWorkRows(w,date);
+    const pieceAmt=work.reduce((a,r)=>a+r.amount,0);
+    let raw=0,detail='',warn='',mins=null;
+    if(type==='piece'){raw=pieceAmt;detail=work.length?`完成 ${work.reduce((a,r)=>a+r.qty,0)} 件`:'沒有回報數量';}
+    else if(type==='day'){raw=Number(info.dayRate)||0;detail=`日薪 $${raw}`;if(!info.dayRate)warn='未設定日薪金額';}
+    else{mins=tpMinutes(c);
+      if(mins==null){warn=c&&c.inTime?'未打下班卡，請補登下班時間':'沒有上班打卡';detail=c&&c.inTime?`${c.inTime}～ ?`:'';}
+      else{raw=mins/60*(Number(info.hourRate)||0);detail=`${String(c.inTime).slice(0,5)}～${String(c.outTime).slice(0,5)}${c.outManual?'':'*'}　${tpHM(mins)} × $${info.hourRate||0}`;if(!info.hourRate)warn='未設定時薪金額';}}
+    return{date,type,amount:tpCeil(raw),raw:Math.round(raw*100)/100,detail,warn,mins,
+      inTime:c?c.inTime||'':'',outTime:c?c.outTime||'':'',outManual:!!(c&&c.outManual),hasCi:!!c,
+      work,pieceIgnored:type!=='piece'&&pieceAmt>0?Math.round(pieceAmt*100)/100:0};
+  });
+  const sub={piece:0,day:0,hour:0},cnt={piece:0,day:0,hour:0};let hourMins=0;
+  days.forEach(d=>{sub[d.type]+=d.amount;cnt[d.type]++;if(d.type==='hour'&&d.mins)hourMins+=d.mins;});
+  const mats=TP.mats.filter(r=>r.worker===w&&r.status==='issued'&&r.date>=from&&r.date<=to)
+    .sort((a,b)=>(a.date||'').localeCompare(b.date||''))
+    .flatMap(r=>r.items.map(i=>{const sg=r.type==='return'?-1:1;
+      return{date:r.date,worker:r.worker,name:i.name,spec:i.spec||'',qty:sg*(Number(i.qty)||0),price:Number(i.price)||0,amount:sg*(Number(i.qty)||0)*(Number(i.price)||0),ret:r.type==='return'};}));
+  const matAmt=Math.round(mats.reduce((a,r)=>a+r.amount,0));
+  const drinks=drinkDays(w,from,to,window.DB.dispatches||[],window.DB.checkins||[],TP.waive);
+  const drinkCnt=drinks.filter(x=>!x.waived).length;
+  const adj=(((doc.overrides||{})[w]||{}).adj||[]).map(i=>({label:i.label||'',amount:Number(i.amount)||0}));
+  const lines=[];
+  if(cnt.piece)lines.push({label:`計件（${cnt.piece} 天）`,amount:sub.piece});
+  if(cnt.day)lines.push({label:`日薪（${cnt.day} 天）`,amount:sub.day});
+  if(cnt.hour)lines.push({label:`時薪（${cnt.hour} 天，${tpHM(hourMins)}）`,amount:sub.hour});
+  if(matAmt)lines.push({label:'耗材費用',amount:-matAmt});
+  if(drinkCnt)lines.push({label:`${DRINK_NAME}（${drinkCnt}次）`,amount:drinkCnt*drinkPrice()});
+  adj.filter(i=>i.amount).forEach(i=>lines.push({label:i.label||'加扣',amount:i.amount}));
+  const net=lines.reduce((a,l)=>a+l.amount,0);
+  return{worker:w,payday:TP.payday,from,to,days,lines,net,adj,mats,drinks,drinkCnt,
+    rates:{day:Number(info.dayRate)||0,hour:Number(info.hourRate)||0,def:info.payType||'piece'},
+    warn:days.filter(d=>d.warn).length};
+}
+function tpWorkers(){
+  if(TP.doc&&TP.doc.status==='locked'&&TP.doc.slips)return Object.keys(TP.doc.slips).sort((a,b)=>psEmpOrder(a)-psEmpOrder(b));
+  const{from,to}=tpRange(TP.payday),set=new Set();
+  (window.DB.checkins||[]).forEach(c=>{if(c.date>=from&&c.date<=to&&c.inTime)set.add(c.worker);});
+  (window.DB.dispatches||[]).forEach(d=>{if(d.doneQty>0){const dt=dispWorkDate(d);if(dt>=from&&dt<=to)set.add(d.worker);}});
+  TP.mats.forEach(r=>{if(r.status==='issued'&&r.date>=from&&r.date<=to)set.add(r.worker);});
+  return[...set].filter(tpIsTemp).sort((a,b)=>psEmpOrder(a)-psEmpOrder(b));
+}
+window.psKind=function(k){
+  try{localStorage.setItem('ps-kind',k);}catch(e){}
+  document.querySelectorAll('.ps-kind').forEach(b=>{const on=b.dataset.k===k;b.style.background=on?'#185FA5':'';b.style.color=on?'#fff':'';b.style.borderColor=on?'#185FA5':'';});
+  document.getElementById('ps-month-wrap').style.display=k==='temp'?'none':'';
+  document.getElementById('tp-wrap').style.display=k==='temp'?'':'none';
+  if(k==='temp'){const el=document.getElementById('tp-payday');if(!el.value)el.value=tpDefaultPayday();if(TP.payday!==el.value)tpLoad(el.value);else tpRender();}
+};
+window.tpShift=function(n){const el=document.getElementById('tp-payday');tpLoad(rsAddDays(el.value||tpDefaultPayday(),n));};
+window.tpLoad=async function(pd){
+  const el=document.getElementById('tp-payday');
+  pd=pd||el.value||tpDefaultPayday();
+  if(tpWd(pd)!==5){pd=rsAddDays(pd,(5-tpWd(pd)+7)%7);toast('發薪日改為該週的週五：'+pd);}
+  el.value=pd;
+  if(TP.unsub){TP.unsub();TP.unsub=null;}
+  TP.payday=pd;TP.doc=null;TP.open=null;TP.waive={};TP.ready=false;
+  const{from,to}=tpRange(pd);
+  document.getElementById('tp-range').textContent=`期間 ${from.slice(5).replace('-','/')}（五）～${to.slice(5).replace('-','/')}（四）`;
+  document.getElementById('tp-body').innerHTML='<div class="card" style="color:#aaa">載入中...</div>';
+  TP.unsub=db.collection('tempPayslips').doc(pd).onSnapshot(s=>{if(TP.payday!==pd)return;TP.doc=s.exists?s.data():null;if(TP.ready)tpRender();},e=>console.warn(e));
+  const months=[...new Set([from.slice(0,7),to.slice(0,7)])];
+  try{TP.mats=(await MAT.fetchMonths(months))||[];TP.matsKey=pd;}catch(e){TP.mats=[];toast('耗材資料載入失敗');}
+  await Promise.all([rsEnsureP('disp',from,to),rsEnsureP('ci',from,to)]);
+  if(TP.payday!==pd)return;
+  TP.ready=true;tpRender();
+};
+function tpRender(){
+  const body=document.getElementById('tp-body');if(!body||!TP.payday||!TP.ready)return;
+  const locked=!!(TP.doc&&TP.doc.status==='locked');
+  const slips=tpWorkers().map(tpCompute);
+  const noTemp=!Object.values(EMPINFO.byName||{}).some(x=>x&&x.temp);
+  body.innerHTML=`<div class="card"><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <div style="font-size:13px">${locked?`<span style="color:#C62828">🔒 已鎖定（${(TP.doc.lockedAt||'').slice(0,10)}），顯示的是鎖定時的快照</span>`:'<span style="color:#2E7D32">草稿：修改會自動儲存</span>'}</div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn btn-sm" onclick="tpPrint()">🖨️ 列印全部</button>
+        ${locked?`<button class="btn btn-sm" onclick="tpUnlock()">解鎖</button>`:`<button class="btn btn-warn btn-sm" onclick="tpLock()">🔒 鎖定本週</button>`}
+      </div></div></div>
+  ${slips.length?`<div class="card" style="padding:0"><div class="tbl-wrap"><table class="tbl" style="min-width:640px"><thead><tr>
+    <th>臨時工</th><th class="col-num">天數</th><th class="col-num">計件</th><th class="col-num">日薪</th><th class="col-num">時薪</th><th class="col-num">耗材／飲料</th><th class="col-num">實領</th><th></th></tr></thead><tbody>
+    ${slips.map(s=>{const L=k=>s.lines.filter(l=>l.label.startsWith(k)).reduce((a,l)=>a+l.amount,0);
+      return`<tr><td style="font-weight:600">${MAT.esc(s.worker)}${s.warn?` <span style="color:#C62828;font-size:11px">⚠ ${s.warn} 天待處理</span>`:''}</td>
+      <td class="col-num">${s.days.length}</td><td class="col-num">${psFmt(L('計件'))}</td><td class="col-num">${psFmt(L('日薪'))}</td><td class="col-num">${psFmt(L('時薪'))}</td>
+      <td class="col-num" style="color:#C62828">${psFmt(L('耗材')+L(DRINK_NAME))}</td><td class="col-num" style="font-weight:700">${psFmt(s.net)}</td>
+      <td style="white-space:nowrap"><button class="btn btn-sm" onclick="tpToggle('${MAT.esc(s.worker)}')">${TP.open===s.worker?'收合':(locked?'查看':'明細／編輯')}</button>
+        <button class="btn btn-sm" onclick="tpPrint('${MAT.esc(s.worker)}')">列印</button></td></tr>
+      ${TP.open===s.worker?`<tr><td colspan="8" style="background:#fafafa">${tpEditor(s,locked)}</td></tr>`:''}`;}).join('')}
+    </tbody></table></div></div>`:`<div class="card" style="color:#aaa">${noTemp?'還沒有設定臨時工：請到「設定 → 員工薪資資料」按「編輯」，勾選「臨時工」並填日薪、時薪。':'這一期沒有臨時工的出勤、加工或耗材紀錄'}</div>`}`;
+}
+window.tpToggle=w=>{TP.open=TP.open===w?null:w;tpRender();};
+function tpEditor(s,locked){
+  const w=MAT.esc(s.worker),dis=locked?'disabled':'';
+  const rows=s.days.map(d=>`<tr>
+    <td style="white-space:nowrap">${d.date.slice(5).replace('-','/')}（${'日一二三四五六'[tpWd(d.date)]}）</td>
+    <td>${locked||!d.hasCi?TP_TYPES[d.type]:`<select style="width:auto;margin:0;padding:2px 4px" onchange="tpSetType('${w}','${d.date}',this.value)">${Object.entries(TP_TYPES).map(([k,v])=>`<option value="${k}" ${d.type===k?'selected':''}>${v}</option>`).join('')}</select>`}</td>
+    <td style="font-size:12px">${MAT.esc(d.detail)}
+      ${d.type==='piece'&&d.work.length?`<div style="color:#666">${d.work.map(r=>`${MAT.esc(r.name)}${r.spec?' '+MAT.esc(r.spec):''}${r.step?'〔'+MAT.esc(r.step)+'〕':''} ${r.qty}×$${r.price}`).join('<br>')}</div>`:''}
+      ${d.pieceIgnored?`<div style="color:#888">（當天回報加工 $${d.pieceIgnored}，${TP_TYPES[d.type]}不計加工費）</div>`:''}
+      ${d.warn?`<div style="color:#C62828">⚠ ${MAT.esc(d.warn)}</div>`:''}
+      ${!locked&&d.type==='hour'&&d.hasCi&&d.inTime?`<div style="margin-top:2px">下班時間 <input type="time" value="${MAT.esc(String(d.outTime||'').slice(0,5))}" onchange="tpSetOut('${w}','${d.date}',this.value)" style="width:auto;margin:0;padding:1px 4px">${d.outTime&&!d.outManual?'<span style="color:#999">（*最後一次回報時間）</span>':''}</div>`:''}
+    </td>
+    <td class="col-num" style="font-weight:600">${psFmt(d.amount)}${d.raw!==d.amount?`<div style="font-size:10px;color:#aaa">${d.raw}</div>`:''}</td></tr>`).join('');
+  const adj=s.adj.map((i,idx)=>`<div style="display:flex;gap:6px;margin-bottom:4px"><input value="${MAT.esc(i.label)}" ${dis} placeholder="名稱（借支等）" onchange="tpAdj('${w}',${idx},'label',this.value)" style="flex:2">
+      <input type="number" step="1" value="${i.amount}" ${dis} onchange="tpAdj('${w}',${idx},'amount',this.value)" style="flex:1;text-align:right">
+      ${locked?'':`<button class="btn btn-sm" onclick="tpAdj('${w}',${idx},'del')">✕</button>`}</div>`).join('')||'<div style="font-size:12px;color:#aaa">無</div>';
+  const drinks=(s.drinks||[]).map(x=>`<div style="display:flex;gap:8px;align-items:center;font-size:12px;margin-bottom:3px">
+      <span style="width:90px;${x.waived?'text-decoration:line-through;color:#aaa':''}">${x.date}</span><span style="color:${x.waived?'#aaa':'#C62828'}">${x.waived?'已取消':psFmt(drinkPrice())}</span>
+      ${locked?'':`<button class="btn btn-sm" onclick="tpDrinkWaive('${w}','${x.date}',${x.waived?'false':'true'})">${x.waived?'恢復':'取消'}</button>`}</div>`).join('')||'<div style="font-size:12px;color:#aaa">無</div>';
+  return`<div style="display:grid;grid-template-columns:minmax(320px,3fr) minmax(240px,2fr);gap:16px;padding:6px 0">
+    <div><div style="font-size:12px;color:#555;margin-bottom:4px">每日明細（預設：${TP_TYPES[s.rates.def]}；日薪 $${s.rates.day}、時薪 $${s.rates.hour}）</div>
+      <table class="tbl" style="font-size:13px"><thead><tr><th>日期</th><th>方式</th><th>內容</th><th class="col-num">金額</th></tr></thead><tbody>${rows||'<tr><td colspan="4" style="color:#aaa">無</td></tr>'}</tbody></table>
+      <div style="font-size:11px;color:#888;margin-top:4px">時薪：早於規定上班時間從規定時間起算，扣午休 12:00–13:00；每天金額無條件進位到元。</div></div>
+    <div><div style="font-size:12px;color:#555;margin-bottom:4px">本週加扣（借支等，扣款填負數）</div>${adj}
+      ${locked?'':`<button class="btn btn-sm" onclick="tpAdj('${w}',0,'add')">＋ 新增</button>`}
+      <div style="font-size:12px;color:#555;margin:12px 0 4px">代訂飲料</div>${drinks}
+      <div style="margin-top:12px">${tpSlipHtml(s)}</div></div></div>`;
+}
+window.tpSetType=async function(w,date,v){
+  if(TP.doc&&TP.doc.status==='locked')return;
+  const info=EMPINFO.byName[w]||{};
+  if(v==='day'&&!info.dayRate&&!confirm(`${w} 還沒設定日薪金額，仍要改成日薪？`))return tpRender();
+  if(v==='hour'&&!info.hourRate&&!confirm(`${w} 還沒設定時薪金額，仍要改成時薪？`))return tpRender();
+  try{await db.collection('checkins').doc(`CI-${w}-${date}`).update({payType:v});
+    const c=(window.DB.checkins||[]).find(x=>x.worker===w&&x.date===date);if(c)c.payType=v;tpRender();}
+  catch(e){toast('更新失敗：'+(e.message||e));}
+};
+window.tpSetOut=async function(w,date,v){
+  if(TP.doc&&TP.doc.status==='locked'||!/^\d{2}:\d{2}$/.test(v||''))return;
+  const c=(window.DB.checkins||[]).find(x=>x.worker===w&&x.date===date);
+  if(c&&c.inTime&&v<=String(c.inTime).slice(0,5))return alert('下班時間要晚於上班時間 '+c.inTime);
+  try{await db.collection('checkins').doc(`CI-${w}-${date}`).update({outTime:v,outManual:true,outByAdmin:true});
+    if(c){c.outTime=v;c.outManual=true;}tpRender();toast(`已補登 ${w} ${date} 下班 ${v}`);}
+  catch(e){toast('更新失敗：'+(e.message||e));}
+};
+window.tpAdj=async function(w,i,k,v){
+  if(TP.doc&&TP.doc.status==='locked')return;
+  const arr=tpCompute(w).adj.map(x=>({...x}));
+  if(k==='del')arr.splice(i,1);else if(k==='add')arr.push({label:'',amount:0});else arr[i][k]=k==='amount'?(Number(v)||0):v;
+  TP.doc=TP.doc||{payday:TP.payday,status:'draft'};TP.doc.overrides=TP.doc.overrides||{};TP.doc.overrides[w]={adj:arr};tpRender();
+  try{await db.collection('tempPayslips').doc(TP.payday).set({payday:TP.payday,status:'draft',overrides:{[w]:{adj:arr}}},{merge:true});}
+  catch(e){toast('儲存失敗，請重試');}
+};
+window.tpDrinkWaive=async function(w,date,waive){
+  if(TP.doc&&TP.doc.status==='locked')return;
+  TP.waive[w+'|'+date]=!!waive;tpRender();
+  try{await db.collection('checkins').doc(`CI-${w}-${date}`).update({drinkWaived:!!waive});}
+  catch(e){delete TP.waive[w+'|'+date];tpRender();toast('更新失敗，請重試');}
+};
+const tpMD=d=>`${Number(d.slice(5,7))}/${Number(d.slice(8))}`;
+function tpSlipHtml(s){
+  const rows=s.lines.map(l=>`<tr><td>${MAT.esc(l.label)}</td><td class="n">${psFmt(l.amount)}</td></tr>`).join('');
+  return`<table class="slip"><tr class="h"><td>${MAT.esc(s.worker)}（臨時）</td><td class="n">發薪日 ${tpMD(s.payday)}</td></tr>
+    <tr><td colspan="2">期間 ${tpMD(s.from)}～${tpMD(s.to)}</td></tr>${rows}
+    <tr class="b"><td>實領</td><td class="n">${psFmt(s.net)}</td></tr></table>`;
+}
+function tpPageHtml(s){
+  const dayRows=s.days.map(d=>`<tr><td>${tpMD(d.date)}（${'日一二三四五六'[tpWd(d.date)]}）</td><td>${TP_TYPES[d.type]}</td>
+    <td>${MAT.esc(d.detail)}${d.type==='piece'&&d.work.length?'<br>'+d.work.map(r=>`${MAT.esc(r.name)}${r.spec?' '+MAT.esc(r.spec):''}${r.step?'〔'+MAT.esc(r.step)+'〕':''} ${r.qty}×${r.price}`).join('<br>'):''}${d.warn?`<br><b style="color:#C62828">${MAT.esc(d.warn)}</b>`:''}</td>
+    <td class="n">${psFmt(d.amount)}</td></tr>`).join('');
+  const matCols=[['日期',r=>tpMD(r.date)],['品名',r=>MAT.esc(r.name)+(r.ret?'（退還）':'')],['規格',r=>MAT.esc(r.spec)],['數量',r=>r.qty,'n'],['單價',r=>r.price,'n'],['金額',r=>Math.round(r.amount*100)/100,'n']];
+  return`<div class="page"><div class="col l">${tpSlipHtml(s)}${s.mats.length?psDetailHtml('材料領取記錄',s.mats,matCols):''}</div>
+    <div class="col r"><div style="text-align:center;font-weight:600;font-size:14px;margin:6px 0 2px">每日明細</div>
+    <table class="det"><tr><th>日期</th><th>方式</th><th>內容</th><th>金額</th></tr>${dayRows}
+    <tr><td colspan="3" class="n"><b>合計</b></td><td class="n"><b>${psFmt(s.days.reduce((a,d)=>a+d.amount,0))}</b></td></tr></table></div></div>`;
+}
+window.tpPrint=function(only){
+  const locked=!!(TP.doc&&TP.doc.status==='locked');
+  const slips=(only?[only]:tpWorkers()).map(tpCompute);
+  if(!slips.length)return alert('沒有可列印的薪資單');
+  const w=window.open('','_blank','width=1000,height=800');
+  w.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>臨時工週薪 ${TP.payday}</title><style>
+    body{font-family:'Microsoft JhengHei',sans-serif;margin:0;padding:10px}${PS_CSS}
+    .page{display:flex;gap:10px;align-items:flex-start;page-break-after:always}.page:last-child{page-break-after:auto}
+    .col.l{width:42%}.col.r{width:58%}.draft{color:#C62828;font-size:12px;margin-bottom:4px}
+    @page{size:A4;margin:8mm}@media print{button{display:none}}</style></head><body>
+    ${locked?'':'<div class="draft">※ 草稿（尚未鎖定），數字可能還會變動</div>'}
+    ${slips.map(tpPageHtml).join('')}
+    <div style="text-align:right;margin-top:10px"><button onclick="window.print()">列印</button></div></body></html>`);
+  w.document.close();
+  setTimeout(()=>w.print(),500);
+};
+window.tpLock=async function(){
+  const pd=TP.payday;if(!TP.ready||TP.matsKey!==pd)return alert('資料載入中，請稍候');
+  const ws=tpWorkers();
+  const bad=ws.map(tpCompute).filter(s=>s.warn);
+  if(bad.length&&!confirm(`以下臨時工還有待處理的日子（未打下班卡或未設金額）：\n${bad.map(s=>'・'+s.worker).join('\n')}\n\n仍要鎖定？`))return;
+  if(!confirm(`確定鎖定 ${pd} 發薪的臨時工週薪？\n鎖定後保存目前內容，之後資料變動也不會改變。`))return;
+  try{
+    const slips={};ws.forEach(w=>{slips[w]=JSON.parse(JSON.stringify(tpCompute(w)));});
+    await db.collection('tempPayslips').doc(pd).set({payday:pd,status:'locked',lockedAt:new Date().toISOString(),slips},{merge:true});
+    toast(`${pd} 臨時工週薪已鎖定`);
+  }catch(e){toast('鎖定未完成，請再試一次：'+(e.message||''));}
+};
+window.tpUnlock=async function(){
+  const pd=TP.payday;
+  const pw=prompt(`解鎖 ${pd} 臨時工週薪需要再次輸入管理密碼：`);if(pw===null)return;
+  if(pw!==(typeof ADMIN_PWD!=='undefined'?ADMIN_PWD:'0423'))return alert('密碼錯誤');
+  try{await db.collection('tempPayslips').doc(pd).set({status:'draft',unlockedAt:new Date().toISOString(),slips:firebase.firestore.FieldValue.delete()},{merge:true});toast('已解鎖，恢復為草稿');}
+  catch(e){toast('解鎖未完成，請重試');}
+};
+_empInfoCbs.add(()=>{if(document.getElementById('tp-wrap')?.style.display!=='none'&&TP.ready)tpRender();});
+
 window.psInit=function(){
   if(!document.getElementById('ps-style')){const st=document.createElement('style');st.id='ps-style';st.textContent=PS_CSS;document.head.appendChild(st);}
   const el=document.getElementById('ps-month');
   if(!el.value){const d=new Date(Date.now()+8*3600e3);d.setUTCDate(1);d.setUTCMonth(d.getUTCMonth()-1);el.value=d.toISOString().slice(0,7);}
   if(PS.month!==el.value)psLoad();else psRender();
+  let k='month';try{k=localStorage.getItem('ps-kind')||'month';}catch(e){}
+  psKind(k);
 };
 
 _empInfoCbs.add(()=>{if(document.getElementById('pg-payslip').classList.contains('active'))psRender();});

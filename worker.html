@@ -64,7 +64,9 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
       <div style="font-size:13px;color:#888;margin-top:2px">Hệ thống thao tác</div>
       <div style="font-size:13px;color:#888;margin-top:6px">請點選你的名字 / Chọn tên của bạn</div>
     </div>
+    <div id="shared-banner" style="display:none;background:#E3F2FD;color:#185FA5;border-radius:8px;padding:6px 10px;font-size:13px;text-align:center;margin-bottom:10px">📱 共用裝置 / Thiết bị dùng chung</div>
     <div class="worker-grid" id="w-grid"></div>
+    <div style="text-align:right;margin-top:14px"><button onclick="sharedToggle()" title="共用裝置模式" style="border:none;background:none;color:#ccc;font-size:16px;cursor:pointer">⚙</button></div>
   </div>
 </div>
 
@@ -99,6 +101,9 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
 </div>
 
 <div id="main-screen" style="display:none">
+  <div id="shared-bar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:2000;padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:rgba(255,255,255,.96);border-top:1px solid #ddd">
+    <button class="btn" onclick="sharedLogout()" style="width:100%;padding:14px;font-size:17px;font-weight:700;background:#2E7D32;border-color:#2E7D32;color:#fff">✅ 完成／換人 / Xong・Đổi người</button>
+  </div>
   <div class="nav">
     <span class="nav-title">👷 作業系統</span>
     <span id="nav-name" style="font-size:13px;color:#888;margin-right:8px"></span>
@@ -307,7 +312,10 @@ const RC=(function(){
 // 耗材：品項、管理員名單、鎖定月份（各 1 筆文件）
 if(window.MAT)MAT.init(db);
 
-let currentWorker=localStorage.getItem('worker_name')||null;
+// 共用裝置模式：只記在這台裝置；開啟時不記住上一個登入的人
+const SHARED=(()=>{try{return localStorage.getItem('shared-device')==='1';}catch(e){return false;}})();
+const SHARED_PW='0423';
+let currentWorker=SHARED?null:(localStorage.getItem('worker_name')||null);
 RC.start(db,currentWorker?'員工 '+currentWorker:'員工端（未登入）');
 let employees=[],dispatches=[],orders=[],checkins=[],workerPins={};
 let historyOffset=0;
@@ -697,6 +705,8 @@ window.addEventListener('online',forceResync);
 window.manualRefresh=function(){location.reload();};
 
 function init(){
+  if(SHARED){try{localStorage.removeItem('worker_name');}catch(e){}const b=document.getElementById('shared-banner');if(b)b.style.display='block';
+    const bar=document.getElementById('shared-bar');if(bar)bar.style.display='block';document.body.style.paddingBottom='80px';}
   if(currentWorker){
     // 裝置已記住員工，直接進入主畫面
     showMain(currentWorker);
@@ -765,7 +775,7 @@ window.pinCancel=function(){
 async function processPIN(){
   if(pinMode==='verify'){
     if(pinBuffer===workerPins[pinTargetWorker]){
-      localStorage.setItem('worker_name',pinTargetWorker);
+      if(!SHARED)localStorage.setItem('worker_name',pinTargetWorker);
       currentWorker=pinTargetWorker;
       document.getElementById('pin-screen').style.display='none';
       showMain(pinTargetWorker);
@@ -784,7 +794,7 @@ async function processPIN(){
       try{
         await db.collection('system').doc('workerPins').set(newPins);
         workerPins=newPins;
-        localStorage.setItem('worker_name',pinTargetWorker);
+        if(!SHARED)localStorage.setItem('worker_name',pinTargetWorker);
         currentWorker=pinTargetWorker;
         document.getElementById('pin-screen').style.display='none';
         showMain(pinTargetWorker);
@@ -815,12 +825,104 @@ function showMain(name){
 
 window.logoutWorker=function(){
   try{_outRemHide();}catch(e){}
+  if(SHARED){sharedClearCache(currentWorker);sharedHide();clearInterval(_shCd);}
   stopScope();unmountMat();unmountReq();if(currentTab==='mat'||currentTab==='req')switchTab('pending');
   currentWorker=null;localStorage.removeItem('worker_name');renderAnnouncements();window._untilList=[];window._startList=[];untilCheck();
   document.getElementById('main-screen').style.display='none';
   document.getElementById('select-screen').style.display='flex';
 }
 
+// ══ 共用裝置模式（2026/11）══════════════════════════════════════════════
+// 放在現場、給臨時工或沒帶手機的員工用的公司手機／平板。用管理密碼開啟，只記在這台裝置上（其他手機不受影響）。
+// 不記住上一個人；上班打卡後跳出今日工單，按「確認工單」記在當天打卡紀錄（confirmAt／confirmList）後自動登出；
+// 回報後全部做完 3 秒登出，還有待辦則閒置 60 秒登出；畫面下方常駐「完成／換人」。
+const SHARED_IDLE=60e3;
+let _shLast=Date.now(),_shTimer=null;
+['pointerdown','keydown','input','touchstart','scroll'].forEach(ev=>document.addEventListener(ev,()=>{_shLast=Date.now();},{passive:true,capture:true}));
+window.sharedToggle=function(){
+  const pw=prompt(SHARED?'關閉共用裝置模式：請輸入管理密碼':'開啟共用裝置模式（現場公司手機／平板用）：請輸入管理密碼');
+  if(pw===null)return;
+  if(pw!==SHARED_PW)return alert('密碼錯誤');
+  try{if(SHARED)localStorage.removeItem('shared-device');else{localStorage.setItem('shared-device','1');localStorage.removeItem('worker_name');}}catch(e){}
+  alert(SHARED?'已關閉共用裝置模式':'已開啟共用裝置模式（只影響這台裝置）');
+  location.reload();
+};
+function sharedClearCache(name){
+  if(!name)return;
+  try{const pre=`hist-cache-${name}-`;Object.keys(localStorage).filter(k=>k.startsWith(pre)).forEach(k=>localStorage.removeItem(k));}catch(e){}
+}
+function sharedOverlay(html){
+  let el=document.getElementById('shared-modal');
+  if(!el){el=document.createElement('div');el.id='shared-modal';
+    el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px';
+    document.body.appendChild(el);}
+  el.innerHTML=`<div style="background:#fff;border-radius:14px;max-width:460px;width:100%;max-height:88vh;overflow:auto;padding:18px">${html}</div>`;
+  el.style.display='flex';
+}
+function sharedHide(){const el=document.getElementById('shared-modal');if(el)el.style.display='none';}
+let _shCd=null;
+function sharedCountdown(msg,sec){
+  clearInterval(_shCd);let n=sec||3;
+  const draw=()=>sharedOverlay(`<div style="text-align:center;padding:12px 0">
+    <div style="font-size:40px">✅</div><div style="font-size:17px;font-weight:700;margin:6px 0">${msg}</div>
+    <div style="font-size:15px;color:#555"><b style="font-size:22px;color:#185FA5">${n}</b> 秒後自動登出 / Tự đăng xuất sau ${n} giây</div>
+    <button class="btn" style="margin-top:14px;padding:10px 22px" onclick="sharedLogout()">現在登出 / Đăng xuất</button></div>`);
+  draw();
+  _shCd=setInterval(()=>{n--;if(n<=0){clearInterval(_shCd);sharedLogout();}else draw();},1000);
+}
+window.sharedLogout=function(){
+  clearInterval(_shCd);sharedHide();
+  if(currentWorker)logoutWorker();
+};
+// 閒置自動登出
+if(SHARED)_shTimer=setInterval(()=>{
+  if(!currentWorker||document.getElementById('main-screen').style.display==='none')return;
+  if(Date.now()-_shLast>=SHARED_IDLE){toast('閒置過久，已自動登出 / Đã tự đăng xuất');sharedLogout();}
+},3000);
+// 上班打卡後：今日工單 → 確認 → 自動登出
+async function sharedAfterCheckin(){
+  window._myPendingNow=[];
+  const t0=Date.now();
+  while(!hasTodayAccess()&&Date.now()-t0<8000)await new Promise(r=>setTimeout(r,300));
+  try{renderWorkerMain();}catch(e){}
+  const list=window._myPendingNow||[];
+  const esc=t=>String(t??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const groups=[];const gk={};
+  list.forEach(d=>{const k=d.isMerged?`${d.batchId}||${d.groupName||d.orderName}`:d.id;if(!gk[k]){gk[k]=[];groups.push(gk[k]);}gk[k].push(d);});
+  const today=toTW(new Date().toISOString(),false);
+  const todayAll=dispatches.filter(d=>d.worker===currentWorker&&(d.effectiveDate||toTW(d.createdAt,false))===today&&!((d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0)));
+  const more=todayAll.length>list.length;
+  const qtyOf=g=>{const s=myShareQty(g);if(s)return s;return g.reduce((a,d)=>{const o=orders.find(x=>x.id===d.orderId);return a+(o?getOrderRemain(o,d.id):(d.assignQty||0));},0);};
+  window._shSnap=groups.map(g=>{const d=g[0];return{ids:g.map(x=>x.id),name:d.groupName||d.orderName||'',spec:d.orderSpec||'',qty:qtyOf(g),n:g.length,
+    ...(dStep(d)?{step:d.step,stepName:d.stepName||''}:{}),...(String(d.note||'').trim()?{note:String(d.note).trim()}:{}),...(d.multiDay?{multiDay:true}:{})};});
+  const rows=window._shSnap.map((x,i)=>`<div style="border:1px solid #e0e0e0;border-radius:10px;padding:10px 12px;margin-bottom:8px">
+      <div style="font-weight:700;font-size:16px">${i+1}. ${esc(x.name)} <span style="color:#888;font-weight:400;font-size:13px">${esc(x.spec)}</span></div>
+      ${x.step?`<div style="color:#4527A0;font-size:13px;font-weight:600">🔧 工序 / Công đoạn ${x.step}${x.stepName?'：'+esc(x.stepName):''}</div>`:''}
+      <div style="font-size:14px">數量 / Số lượng：<b style="color:#185FA5;font-size:17px">${x.qty}</b>${x.n>1?`<span style="color:#888;font-size:12px">（合併 ${x.n} 張 / Gộp ${x.n}）</span>`:''}${x.multiDay?' <span style="background:#F3E5F5;color:#6A1B9A;border-radius:8px;padding:0 6px;font-size:12px">多日 / Nhiều ngày</span>':''}</div>
+      ${x.note?`<div style="font-size:13px;color:#E65100;font-weight:600">📌 ${esc(x.note)}</div>`:''}</div>`).join('');
+  sharedOverlay(`<div style="font-size:18px;font-weight:700;color:#185FA5;margin-bottom:2px">📋 今日工單 / Công việc hôm nay</div>
+    <div style="font-size:13px;color:#888;margin-bottom:10px">${esc(currentWorker)}</div>
+    ${rows||`<div style="text-align:center;color:#888;padding:18px 0;font-size:15px">目前沒有工單，請稍後再登入查看<br>Chưa có việc, vui lòng đăng nhập lại sau</div>`}
+    ${more&&rows?`<div style="font-size:13px;color:#1565C0;margin-bottom:8px">完成後會出現下一張工單 / Làm xong sẽ hiện việc tiếp theo</div>`:''}
+    <button class="btn btn-primary" style="width:100%;padding:14px;font-size:17px" onclick="sharedConfirm()">${rows?'確認工單 / Xác nhận':'確定 / OK'}</button>`);
+}
+window.sharedConfirm=async function(){
+  const today=toTW(new Date().toISOString(),false),now=new Date();
+  const hm=new Date(now.getTime()+8*3600e3).toISOString().slice(11,16);
+  try{
+    await db.collection('checkins').doc(`CI-${currentWorker}-${today}`).update({confirmAt:now.toISOString(),confirmTime:hm,confirmList:window._shSnap||[]});
+  }catch(e){console.warn('確認工單寫入失敗',e);toast('確認紀錄寫入失敗 / Lỗi ghi');}
+  sharedCountdown('已確認 / Đã xác nhận',3);
+};
+// 回報後：全部做完 → 3 秒登出；還有待辦 → 留在畫面（閒置 60 秒登出）
+function sharedAfterReport(){
+  setTimeout(()=>{
+    try{renderWorkerMain();}catch(e){}
+    const n=(window._myPendingNow||[]).length;
+    if(!n)sharedCountdown('已全部回報 / Đã báo cáo xong',3);
+    else toast(`還有 ${n} 張待回報 / Còn ${n} việc chưa báo`);
+  },1500);
+}
 
 // ── 工廠座標與距離計算 ──
 const FACTORY_LAT=24.0187583;
@@ -1023,12 +1125,14 @@ window.doCheckin=async function(type){
         setSS('ok');
         return alert(`今天已經打過上班卡了（${srv.data().inTime}），不需要再打。\nHôm nay bạn đã vào ca lúc ${srv.data().inTime}.\n\n請按「🔄 重新整理」更新畫面。`);
       }
-      await db.collection('checkins').doc(id).set({worker:currentWorker,date:today,inTime:timeStr,inLat:lat,inLng:lng,inDist:distRound,outTime:null,outLat:null,outLng:null,outDist:null});
+      await db.collection('checkins').doc(id).set({worker:currentWorker,date:today,inTime:timeStr,inLat:lat,inLng:lng,inDist:distRound,outTime:null,outLat:null,outLng:null,outDist:null,...(SHARED?{sharedDevice:true}:{})});
       setSS('ok');toast('上班打卡成功 / Vào ca thành công ✓');
+      if(SHARED)sharedAfterCheckin();
     }else{
       // 只更新下班欄位（不用手機上的舊資料整筆覆蓋，避免蓋掉回報時寫入的欄位）；outManual 標記為員工親自按的
       await db.collection('checkins').doc(id).update({outTime:timeStr,outLat:lat,outLng:lng,outDist:distRound,outManual:true});
       setSS('ok');toast('下班打卡成功 / Ra ca thành công ✓');
+      if(SHARED)sharedCountdown('下班打卡完成 / Đã ra ca',3);
     }
   }catch(e){setSS('err');toast('打卡失敗，請重試');}
 }
@@ -1199,7 +1303,7 @@ function renderHistory(){
     if(d&&getDispStatus(d)==='待確認'){
       const o=orders.find(x=>x.id===d.orderId);
       const othersRep=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==d.id)
-        .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+        .reduce((a,x)=>a+dUsedFor(x,d),0);
       // 有指定派工數量（小於訂單數量）→ 最多只能報到指定數量（和第一次回報同一規則）
       const remain=Math.min(Math.max(0,(o?o.qty:d.assignQty)-othersRep),(o&&d.assignQty&&d.assignQty<o.qty)?d.assignQty:Infinity,grpQtyLeft(d));
       el.innerHTML=`<div class="card" style="border:1.5px solid #185FA5;padding:0.875rem;margin-bottom:10px">
@@ -1360,7 +1464,7 @@ window.validateEdit=function(id){
   const err=document.getElementById('ee-'+id);
   const o=orders.find(x=>x.id===d.orderId);
   const othersReported=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==id)
-    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    .reduce((a,x)=>a+dUsedFor(x,d),0);
   // 有指定派工數量（小於訂單數量）→ 修改時最多也只能報到指定數量（和第一次回報同一規則）
   const avail=Math.min(Math.max(0,(o?o.qty:d.assignQty)-othersReported),(o&&d.assignQty&&d.assignQty<o.qty)?d.assignQty:Infinity,grpQtyLeft(d));
   if(err){
@@ -1427,6 +1531,20 @@ const NO_ACCESS_MSG=`<div class="card" style="text-align:center;padding:2.5rem;b
   <div style="font-size:16px;font-weight:600;color:#C62828;margin-bottom:6px">請先打上班卡才能查看工單</div>
   <div style="font-size:13px;color:#888">Vui lòng chấm công vào trước khi xem công việc</div>
 </div>`;
+// ══ 分工（工序）（2026/11）：一張訂單拆給多人各做一道工序，每人都經手全部數量 ══
+// 派工有 step（第幾道）、stepCount（共幾道）。可回報量：同一道工序的人共用訂單數量；前面工序的不良、來料不足會扣掉
+function dStep(d){return d&&d.step>0?d.step:0;}
+function dCountsDone(d){const s=dStep(d);return!s||s>=(d.stepCount||s);}
+function dUsedFor(x,d){
+  const all=(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),loss=(x.defectQty||0)+(x.shortageQty||0);
+  const xs=dStep(x),k=dStep(d);
+  if(!xs)return all;
+  if(!k)return dCountsDone(x)?all:loss;
+  if(xs===k)return all;
+  return xs<k?loss:0;
+}
+function stepTagW(d){const s=dStep(d);if(!s)return'';const e=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  return`<div style="margin:2px 0 4px"><span style="background:#EDE7F6;color:#4527A0;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700">🔧 工序 / Công đoạn ${s}/${d.stepCount||'?'}${d.stepName?'：'+e(d.stepName):''}</span></div>`;}
 // ── 工單主畫面 ──
 // 計算單張訂單剩餘可回報量（全域，供多處使用）
 // 2026/11：合併卡片的每人總量（groupQty）。同一次派工、同品名的其他派工（自己的）已回報多少，剩下多少可報
@@ -1451,8 +1569,9 @@ function getOrderRemain(o, excludeDispatchId){
   return Math.min(base,Math.max(0,grpQtyLeft(d0)-self));
 }
 function _getOrderRemainBase(o, excludeDispatchId){
+  const dSelf=dispatches.find(x=>x.id===excludeDispatchId);
   const rep=dispatches.filter(x=>x.id!==excludeDispatchId&&x.orderId===o.id)
-    .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+    .reduce((a,x)=>a+dUsedFor(x,dSelf),0);
   const orderRemain=Math.max(0,o.qty-rep);
   // 若有指定派工數量（且小於訂單數量），取兩者較小值
   const d=dispatches.find(x=>x.id===excludeDispatchId);
@@ -1485,8 +1604,9 @@ function renderWorkerMain(){
     // 找出與此派工記錄「同一訂單」且「同一員工」相關的所有 dispatch
     // （只比較該員工自己的派工批次，避免其他員工的新派工動作影響到此員工原本有效的工單）
     const refOrderId=d.orderId;
+    // 分工：不同工序是不同的工作，各自看最新一批
     const allForOrder=dispatches.filter(x=>
-      x.worker===d.worker&&(x.orderId===refOrderId||(x.mergedOrderIds&&x.mergedOrderIds.includes(refOrderId)))
+      x.worker===d.worker&&dStep(x)===dStep(d)&&(x.orderId===refOrderId||(x.mergedOrderIds&&x.mergedOrderIds.includes(refOrderId)))
     );
     // 找最新的 batchId：還沒生效的預派不算；依「生效日期，再比建立時間」排序
     // （晚上預派明天的工作時，今天的卡片今晚仍可回報，明天才換成預派的那一批）
@@ -1528,8 +1648,9 @@ function renderWorkerMain(){
       const reportedToday=rep>0&&x.lastReportAt&&toTW(x.lastReportAt,false)===twToday;
       const still=!!x.multiDay&&rep===0&&!x.groupReportedAt&&stillList(x).some(s=>!s.rejected&&s.date>=_addDays(twToday,-7));
       if(eff!==twToday&&!reportedToday&&!still)continue;
-      if(!per.has(x.worker))per.set(x.worker,{done:0,def:0,sho:0,rep:false,share:0,assign:0,custom:true});
-      const p=per.get(x.worker);
+      const pk=x.worker+(dStep(x)?`（工序${x.step}${x.stepName?' '+x.stepName:''}）`:'');
+      if(!per.has(pk))per.set(pk,{done:0,def:0,sho:0,rep:false,share:0,assign:0,custom:true});
+      const p=per.get(pk);
       if(x.groupQty>0)p.share=x.groupQty;
       else{const ox=orders.find(y=>y.id===x.orderId);p.assign+=x.assignQty||0;if(!(ox&&x.assignQty&&x.assignQty<ox.qty))p.custom=false;}
       p.done+=x.doneQty||0;p.def+=x.defectQty||0;p.sho+=x.shortageQty||0;
@@ -1548,9 +1669,10 @@ function renderWorkerMain(){
   function calcOrderRemain(o,excludeDispatchId){
     // 計算單一訂單的剩餘可回報量
     // 其他員工對此訂單的已回報量
+    const dSelf=dispatches.find(x=>x.id===excludeDispatchId);
     const othersReported=dispatches
       .filter(x=>x.id!==excludeDispatchId&&x.orderId===o.id)
-      .reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+      .reduce((a,x)=>a+dUsedFor(x,dSelf),0);
     return Math.max(0, o.qty-othersReported);
   }
   function getMergedRemain(d){
@@ -1603,6 +1725,7 @@ function renderWorkerMain(){
     if(!d.sequence)return true;
     return!basePending.some(x=>x.sequence&&x.sequence<d.sequence);
   });
+  window._myPendingNow=myPending; // 共用裝置：今日工單視窗、回報後判斷是否全部做完
   // 本月累計：手機上的查詢結果＋即時監聽的最近 14 天派工合併計算，不額外讀取
   const st=document.getElementById('wm-stats');
   st.style.gridTemplateColumns='';
@@ -1671,7 +1794,7 @@ function renderWorkerMain(){
             <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;color:#888">${d.orderNo||''}</span>
           </div>
-          ${coWorkHtml([d])}
+          ${stepTagW(d)}${coWorkHtml([d])}
           <div style="font-size:13px;color:#666;margin-bottom:12px;line-height:2">
             ${myShareQty([d])?myShareHtml(myShareQty([d])):`<div>訂單總量 / <span style="color:#aaa">Tổng đơn hàng</span>：<strong>${o?o.qty:d.assignQty}</strong></div>`}
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>$${d.itemPrice}</strong>／件</div>
@@ -1726,7 +1849,7 @@ function renderWorkerMain(){
             <div><span style="font-weight:600;font-size:15px">${first.orderName}</span>${first.orderSpec?` <span style="color:#aaa;font-size:12px">${first.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;background:#E3F2FD;color:#185FA5;padding:2px 8px;border-radius:12px">合併 ${list.length} 張 / Gộp ${list.length}</span>
           </div>
-          ${coWorkHtml(list)}
+          ${stepTagW(first)}${coWorkHtml(list)}
           <div style="font-size:13px;color:#666;margin-bottom:10px;line-height:2">
             ${gq?myShareHtml(gq):''}
             <div>單價 / <span style="color:#aaa">Đơn giá</span>：<strong>${prices.map(p=>'$'+p).join('、')}</strong>／件</div>
@@ -1763,6 +1886,7 @@ function renderWorkerMain(){
 async function autoClockOut(opt){
   // 回報完工後自動更新下班打卡時間
   if(!currentWorker)return;
+  if(SHARED)sharedAfterReport();
   const twToday=toTW(new Date().toISOString(),false);
   const now=new Date();
   // 台灣時間 HH:MM
@@ -2070,7 +2194,7 @@ function grpCapNew(d){const o=orders.find(x=>x.id===d.orderId);return o?getOrder
 // 修改：退回自己這筆的分配後，以目前剩餘量計算（與單筆修改相同）
 function grpCapEdit(d){
   const o=orders.find(x=>x.id===d.orderId);
-  const others=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==d.id).reduce((a,x)=>a+(x.doneQty||0)+(x.defectQty||0)+(x.shortageQty||0),0);
+  const others=dispatches.filter(x=>x.orderId===d.orderId&&x.id!==d.id).reduce((a,x)=>a+dUsedFor(x,d),0);
   return Math.max(0,(o?o.qty:(d.assignQty||0))-others);
 }
 // 合併卡片每人總量的剩餘：扣掉卡片外（同批次同品名）自己已回報的；新回報也扣掉卡片內已回報的，修改則不扣（自己的會退回重分配）
@@ -2130,36 +2254,58 @@ async function writeReports(updatedList){
     const oRefs=orderIds.map(id=>db.collection('orders').doc(id));
     const dSnaps=[];for(const r of dRefs)dSnaps.push(await tx.get(r));
     const oSnaps=[];for(const r of oRefs)oSnaps.push(await tx.get(r));
-    const delta=new Map(orderIds.map(id=>[id,{done:0,def:0,sho:0}]));
+    // 分工：完工只算最後一道工序（或沒分工的派工）；不良、來料不足各工序都算；各工序另記在訂單 steps
+    const delta=new Map(orderIds.map(id=>[id,{done:0,def:0,sho:0,by:new Map()}]));
     updatedList.forEach((u,i)=>{
       const old=dSnaps[i].exists?dSnaps[i].data():{};
       const dd=delta.get(String(u.orderId));if(!dd)return;
-      dd.done+=(u.doneQty||0)-(old.doneQty||0);
-      dd.def+=(u.defectQty||0)-(old.defectQty||0);
-      dd.sho+=(u.shortageQty||0)-(old.shortageQty||0);
+      const k=dStep(u),n=u.stepCount||k;
+      const x={done:(u.doneQty||0)-(old.doneQty||0),def:(u.defectQty||0)-(old.defectQty||0),sho:(u.shortageQty||0)-(old.shortageQty||0)};
+      if(dCountsDone(u))dd.done+=x.done;
+      dd.def+=x.def;dd.sho+=x.sho;
+      const b=dd.by.get(k)||{n,done:0,def:0,sho:0};b.done+=x.done;b.def+=x.def;b.sho+=x.sho;dd.by.set(k,b);
     });
+    const stepUsed=(o,k,n)=>{
+      const tot=(o.done||0)+(o.defect||0)+(o.shortage||0);if(!k)return tot;
+      const st=o.steps||{},g=j=>st[j]||{};let sDef=0,sSho=0;Object.values(st).forEach(t=>{sDef+=t.def||0;sSho+=t.sho||0;});
+      let used=((o.done||0)-(g(n).done||0))+((o.defect||0)-sDef)+((o.shortage||0)-sSho)+(g(k).done||0)+(g(k).def||0)+(g(k).sho||0);
+      for(let j=1;j<k;j++)used+=(g(j).def||0)+(g(j).sho||0);
+      return Math.max(0,used);
+    };
     // 員工回報的總數量不能超出訂單數量（以伺服器最新資料判斷，兩人同時回報也擋得住）；
     // 超出訂單只能由管理員在「調整」修改。減少或不變的修改照常允許。
     oSnaps.forEach((sn,i)=>{
       if(!sn.exists)return;
-      const o=sn.data(),dd=delta.get(orderIds[i]),inc=dd.done+dd.def+dd.sho;
-      if(inc<=0)return;
-      const reported=(o.done||0)+(o.defect||0)+(o.shortage||0),left=Math.max(0,(o.qty||0)-reported);
-      if(inc>left){
-        const err=new Error(`超過訂單剩餘數量（剩 ${left}，這次 ${inc}）。多做的請寫在備註，由管理員調整。\nVượt quá số lượng còn lại (còn ${left}). Ghi phần dư vào ghi chú.`);
-        err.overQty=true;throw err;
+      const o=sn.data(),dd=delta.get(orderIds[i]);
+      // 每道工序各自檢查（不同工序不互相擋）；沒分工＝k 0
+      for(const [k,b] of dd.by){
+        const inc=b.done+b.def+b.sho;
+        if(inc<=0)continue;
+        const left=Math.max(0,(o.qty||0)-stepUsed(o,k,b.n));
+        if(inc>left){
+          const err=new Error(`超過訂單剩餘數量（剩 ${left}，這次 ${inc}）。多做的請寫在備註，由管理員調整。\nVượt quá số lượng còn lại (còn ${left}). Ghi phần dư vào ghi chú.`);
+          err.overQty=true;throw err;
+        }
       }
     });
     updatedList.forEach((u,i)=>tx.set(dRefs[i],u));
     oSnaps.forEach((sn,i)=>{
       if(!sn.exists)return;
       const o=sn.data(),dd=delta.get(orderIds[i]);
-      if(!dd.done&&!dd.def&&!dd.sho)return;
-      tx.update(oRefs[i],{
+      const stepChg=[...dd.by].some(([k,b])=>k&&(b.done||b.def||b.sho));
+      if(!dd.done&&!dd.def&&!dd.sho&&!stepChg)return;
+      const upd={
         done:o.forceDone?Math.max(o.qty||0,(o.done||0)+dd.done):Math.max(0,(o.done||0)+dd.done), // 不設上限（管理端可能調整成超做數量）；強制完成至少為總量
         defect:Math.max(0,(o.defect||0)+dd.def),
         shortage:Math.max(0,(o.shortage||0)+dd.sho)
-      });
+      };
+      if(stepChg){
+        const st=JSON.parse(JSON.stringify(o.steps||{}));
+        for(const [k,b] of dd.by){if(!k)continue;const t=st[k]=st[k]||{done:0,def:0,sho:0};
+          t.done=Math.max(0,(t.done||0)+b.done);t.def=Math.max(0,(t.def||0)+b.def);t.sho=Math.max(0,(t.sho||0)+b.sho);}
+        upd.steps=st;
+      }
+      tx.update(oRefs[i],upd);
     });
   });
 }
