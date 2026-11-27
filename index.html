@@ -2765,7 +2765,8 @@ function doneCheck(o){
   if(doneForced(o,sum.done))sum.done=o.done||0;
   // 舊資料：以前完工數以訂單數量為上限（派工回報合計超過訂單數量時，訂單只記到訂單數量）→ 不算不符
   if((o.done||0)===(o.qty||0)&&sum.done>(o.qty||0))sum.done=o.done||0;
-  const stKey=x=>JSON.stringify(Object.keys(x||{}).sort().map(k=>[k,x[k].done||0,x[k].def||0,x[k].sho||0]));
+  // 還沒回報的工序（全部是 0）不算：剛派工、訂單上還沒有 steps 時不會誤判
+  const stKey=x=>JSON.stringify(Object.keys(x||{}).sort().map(k=>[k,x[k].done||0,x[k].def||0,x[k].sho||0]).filter(r=>r[1]||r[2]||r[3]));
   const stBad=Object.keys(sum.steps).length?stKey(o.steps)!==stKey(sum.steps):false;
   const bad=(o.done||0)!==sum.done||(o.defect||0)!==sum.defect||(o.shortage||0)!==sum.shortage||stBad;
   if(bad)sum.stBad=stBad;
@@ -3208,7 +3209,7 @@ window.confirmAddWorkersGroup=async function(gi){
   const ords=orderIds.map(id=>window.DB.orders.find(o=>o.id===id)).filter(Boolean).sort((a,b)=>(a.date||'').localeCompare(b.date||''));
   if(!ords.length)return alert('找不到這組的訂單資料');
   const now=new Date().toISOString();
-  const keep={};['effectiveDate','sequence','note','multiDay','maxDays','startTime','untilTime','untilMust','preview','priority','isReDispatch','step','stepCount','stepName'].forEach(k=>{if(base[k]!==undefined&&base[k]!==null&&base[k]!=='')keep[k]=base[k];});
+  const keep={};['effectiveDate','sequence','note','multiDay','maxDays','startTime','untilTime','untilMust','preview','priority','isReDispatch','step','stepCount','stepName','stepNameVi'].forEach(k=>{if(base[k]!==undefined&&base[k]!==null&&base[k]!=='')keep[k]=base[k];});
   if(!keep.effectiveDate)keep.effectiveDate=toTW(now,false);
   setSS('syncing');
   try{
@@ -4044,7 +4045,7 @@ window.createDispatch=async function(){
     const isSameNameGroup=g.orders.length>1; // 同品名合併群組標記
     // 分工：這組只派選定的那道工序，單價用工序單價；訂單記下共幾道與工序名稱（列表顯示進度用）
     const sx=g.step?g.steps[g.step-1]:null;
-    const stepFields=sx?{step:g.step,stepCount:g.steps.length,stepName:sx.name||''}:{};
+    const stepFields=sx?{step:g.step,stepCount:g.steps.length,stepName:sx.name||'',...(sx.nameVi?{stepNameVi:sx.nameVi}:{})}:{};
     for(const o of g.orders){
       if(sx){const names=g.steps.map(x=>x.name||'');
         if(o.stepCount!==g.steps.length||JSON.stringify(o.stepNames||[])!==JSON.stringify(names)){
@@ -4547,9 +4548,10 @@ window.openNextProcess=function(orderId){
       ${(o.done||0)>0?`<br><span style="color:#C62828">目前完工 ${o.done}：會改成前一道的進度，訂單完工從第 ${next} 道的回報重新計算。</span>`:''}
     </div>
     ${own?'':`<label style="margin-top:0">第 1 道名稱 <span style="color:#aaa;font-weight:400">（選填，原本的加工）</span></label>
-    <input type="text" id="nxp-first" placeholder="例：一次加工" style="margin-bottom:8px">`}
-    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">
-      <div><label style="margin-top:0">第 ${next} 道製程名稱</label><input type="text" id="nxp-name" placeholder="例：倒角"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px"><input type="text" id="nxp-first" placeholder="中文，例：一次加工" style="margin:0"><input type="text" id="nxp-first-vi" placeholder="越南文（選填）" style="margin:0"></div>`}
+    <div style="display:grid;grid-template-columns:2fr 2fr 1fr;gap:10px">
+      <div><label style="margin-top:0">第 ${next} 道製程名稱</label><input type="text" id="nxp-name" placeholder="中文，例：倒角"></div>
+      <div><label style="margin-top:0">越南文名稱 <span style="color:#aaa;font-weight:400">（選填，越南籍員工看）</span></label><input type="text" id="nxp-name-vi" placeholder="例：vát mép"></div>
       <div><label style="margin-top:0">單價</label><input type="number" id="nxp-price" min="0" step="0.01" placeholder="例：1"></div>
     </div>
     <div style="font-size:13px;color:#888;margin:10px 0 6px">派給（可多選；不勾也可以，之後再到派工頁選這道工序派工）</div>
@@ -4575,6 +4577,8 @@ window.submitNextProcess=async function(orderId){
   const own=Array.isArray(o.stepList)&&o.stepList.length>=2;
   if(!own&&prodSteps(o.name,o.spec))return alert('這個品名已在資料庫設定工序，請用派工頁的工序選單派工');
   const name=(document.getElementById('nxp-name').value||'').trim();
+  const nameVi=(document.getElementById('nxp-name-vi')?.value||'').trim();
+  const firstVi=(document.getElementById('nxp-first-vi')?.value||'').trim();
   const pr=document.getElementById('nxp-price').value.trim();
   if(!name)return alert('請填製程名稱');
   if(pr===''||!(parseFloat(pr)>=0))return alert('請填單價（可為 0）');
@@ -4585,7 +4589,8 @@ window.submitNextProcess=async function(orderId){
   const workers=[...document.querySelectorAll('.nxp-w:checked')].map(c=>c.value);
   const eff=document.getElementById('nxp-date').value||twToday();
   const note=document.getElementById('nxp-note').value||'';
-  const list=own?[...o.stepList,{name,price}]:[{name:(document.getElementById('nxp-first')?.value||'').trim(),price:o.price||0},{name,price}];
+  const nv=x=>x?{nameVi:x}:{};
+  const list=own?[...o.stepList,{name,price,...nv(nameVi)}]:[{name:(document.getElementById('nxp-first')?.value||'').trim(),price:o.price||0,...nv(firstVi)},{name,price,...nv(nameVi)}];
   const n=list.length;
   if(!workers.length&&!confirm(`沒有勾選員工，只建立第 ${n} 道工序「${name}」，之後再到派工頁派工？`))return;
   setSS('syncing');
@@ -4594,12 +4599,12 @@ window.submitNextProcess=async function(orderId){
     // 原本的派工：沒分工的 → 第 1 道；已分工的 → 共幾道改成 n
     const ds=window.DB.dispatches.filter(d=>d.orderId===orderId).map(d=>({...d}));
     for(const d of ds){
-      const p=dStep(d)?{stepCount:n}:(own?null:{step:1,stepCount:n,stepName:list[0].name});
+      const p=dStep(d)?{stepCount:n}:(own?null:{step:1,stepCount:n,stepName:list[0].name,...(list[0].nameVi?{stepNameVi:list[0].nameVi}:{})});
       if(!p)continue;Object.assign(d,p);
       await db.collection('dispatches').doc(String(d.id)).update(p);
     }
     const added=workers.map(worker=>({id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',orderNo:o.orderno||'',
-      itemPrice:price,step:n,stepCount:n,stepName:name,worker,assignQty,batchId,doneQty:0,defectQty:0,shortageQty:0,
+      itemPrice:price,step:n,stepCount:n,stepName:name,...(nameVi?{stepNameVi:nameVi}:{}),worker,assignQty,batchId,doneQty:0,defectQty:0,shortageQty:0,
       note,status:'待完成',createdAt:now,effectiveDate:eff}));
     for(const d of added)await saveDispatch(d);
     const tot=orderTotalsPatch(o,[...ds,...added]);
@@ -4634,7 +4639,7 @@ window.confirmAddWorkers=async function(orderId){
     await saveDispatch({
       id:genId('D'),orderId,orderName:o.name,orderSpec:o.spec||'',
       orderNo:o.orderno||'',itemPrice:sx?sx.price:o.price,worker,
-      ...(sx?{step:k,stepCount:steps.length,stepName:sx.name||''}:{}),
+      ...(sx?{step:k,stepCount:steps.length,stepName:sx.name||'',...(sx.nameVi?{stepNameVi:sx.nameVi}:{})}:{}),
       assignQty,batchId,
       doneQty:0,defectQty:0,shortageQty:0,
       note:'',status:'待完成',createdAt:now,
@@ -6212,7 +6217,7 @@ window.openEditProd=function(i){
       <button class="btn btn-primary" style="flex:1" onclick="saveEditProd(${i})">儲存</button>
       <button class="btn" onclick="closeModal()">取消</button>
     </div>`;
-  window._epSteps=(Array.isArray(p.steps)?p.steps:[]).map(x=>({name:x.name||'',price:x.price}));
+  window._epSteps=(Array.isArray(p.steps)?p.steps:[]).map(x=>({name:x.name||'',nameVi:x.nameVi||'',price:x.price}));
   epStepRender();
   document.getElementById('dispatch-modal').style.display='flex';
 }
@@ -6222,6 +6227,7 @@ function epStepRender(){
   box.innerHTML=window._epSteps.map((x,k)=>`<div style="display:flex;gap:6px;align-items:center;margin-bottom:4px">
     <span style="font-size:12px;color:#4527A0;width:46px">工序${k+1}</span>
     <input type="text" placeholder="名稱（選填，例：倒角）" value="${dueEsc(x.name||'')}" oninput="_epSteps[${k}].name=this.value" style="flex:1;margin:0">
+    <input type="text" placeholder="越南文（選填）" value="${dueEsc(x.nameVi||'')}" oninput="_epSteps[${k}].nameVi=this.value" style="flex:1;margin:0">
     <span style="color:#888;font-size:12px">$</span><input type="number" min="0" step="0.01" value="${x.price??''}" oninput="_epSteps[${k}].price=this.value;epStepSum()" style="width:80px;margin:0">
     <button class="btn btn-sm btn-danger" onclick="_epSteps.splice(${k},1);epStepRender()">✕</button></div>`).join('')||'<div style="font-size:12px;color:#aaa">尚未設定（不分工）</div>';
   epStepSum();
@@ -6241,7 +6247,7 @@ window.saveEditProd=async function(i){
   if(window._epSteps&&window._epSteps.length){
     if(window._epSteps.length<2)return alert('分工至少要 2 道工序；不分工請把工序全部刪除');
     if(window._epSteps.some(x=>String(x.price).trim()===''||!(parseFloat(x.price)>=0)))return alert('每道工序都要填單價（可為 0）');
-    steps=window._epSteps.map(x=>({name:String(x.name||'').trim(),price:Math.round(parseFloat(x.price)*100)/100}));
+    steps=window._epSteps.map(x=>{const vi=String(x.nameVi||'').trim();return{name:String(x.name||'').trim(),...(vi?{nameVi:vi}:{}),price:Math.round(parseFloat(x.price)*100)/100};});
   }
   const isDrink=(window.DB.products[i]||{}).name===DRINK_NAME;
   if(isDrink){if(price>=0)return alert('「代訂飲料」是扣款，單價請填負數（例如 -50）');}

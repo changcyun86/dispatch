@@ -894,10 +894,10 @@ async function sharedAfterCheckin(){
   const more=todayAll.length>list.length;
   const qtyOf=g=>{const s=myShareQty(g);if(s)return s;return g.reduce((a,d)=>{const o=orders.find(x=>x.id===d.orderId);return a+(o?getOrderRemain(o,d.id):(d.assignQty||0));},0);};
   window._shSnap=groups.map(g=>{const d=g[0];return{ids:g.map(x=>x.id),name:d.groupName||d.orderName||'',spec:d.orderSpec||'',qty:qtyOf(g),n:g.length,
-    ...(dStep(d)?{step:d.step,stepName:d.stepName||''}:{}),...(String(d.note||'').trim()?{note:String(d.note).trim()}:{}),...(d.multiDay?{multiDay:true}:{})};});
+    ...(dStep(d)?{step:d.step,stepName:d.stepName||'',...(d.stepNameVi?{stepNameVi:d.stepNameVi}:{})}:{}),...(String(d.note||'').trim()?{note:String(d.note).trim()}:{}),...(d.multiDay?{multiDay:true}:{})};});
   const rows=window._shSnap.map((x,i)=>`<div style="border:1px solid #e0e0e0;border-radius:10px;padding:10px 12px;margin-bottom:8px">
       <div style="font-weight:700;font-size:16px">${i+1}. ${esc(x.name)} <span style="color:#888;font-weight:400;font-size:13px">${esc(x.spec)}</span></div>
-      ${x.step?`<div style="color:#4527A0;font-size:13px;font-weight:600">🔧 工序 / Công đoạn ${x.step}${x.stepName?'：'+esc(x.stepName):''}</div>`:''}
+      ${x.step?`<div style="color:#4527A0;font-size:13px;font-weight:600">🔧 第${ZH_NUM[x.step]||x.step}階段 / Giai đoạn ${x.step}${x.stepName?'：'+esc(x.stepName):''}${x.stepNameVi?' / '+esc(x.stepNameVi):''}</div>`:''}
       <div style="font-size:14px">數量 / Số lượng：<b style="color:#185FA5;font-size:17px">${x.qty}</b>${x.n>1?`<span style="color:#888;font-size:12px">（合併 ${x.n} 張 / Gộp ${x.n}）</span>`:''}${x.multiDay?' <span style="background:#F3E5F5;color:#6A1B9A;border-radius:8px;padding:0 6px;font-size:12px">多日 / Nhiều ngày</span>':''}</div>
       ${x.note?`<div style="font-size:13px;color:#E65100;font-weight:600">📌 ${esc(x.note)}</div>`:''}</div>`).join('');
   sharedOverlay(`<div style="font-size:18px;font-weight:700;color:#185FA5;margin-bottom:2px">📋 今日工單 / Công việc hôm nay</div>
@@ -1543,8 +1543,16 @@ function dUsedFor(x,d){
   if(xs===k)return all;
   return xs<k?loss:0;
 }
-function stepTagW(d){const s=dStep(d);if(!s)return'';const e=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  return`<div style="margin:2px 0 4px"><span style="background:#EDE7F6;color:#4527A0;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700">🔧 工序 / Công đoạn ${s}/${d.stepCount||'?'}${d.stepName?'：'+e(d.stepName):''}</span></div>`;}
+// 第 2 道以後：卡片最上面一整條醒目色塊（和一般工單明顯分開）
+const ZH_NUM=['零','一','二','三','四','五','六','七','八','九','十'];
+function stepBarW(d){const s=dStep(d);if(s<2)return'';const e=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const n=k=>ZH_NUM[k]||k,nm=d.stepName?'：'+e(d.stepName):'';
+  const nmVi=d.stepNameVi?': '+e(d.stepNameVi):(d.stepName?': '+e(d.stepName):'');
+  return`<div style="margin:-1.25rem -1.25rem 12px;padding:12px 1.25rem;background:#6A1B9A;color:#fff;border-radius:11px 11px 0 0;line-height:1.5">
+    <div style="font-size:16px;font-weight:700">第${n(s-1)}階段完成，請進行第${n(s)}階段${nm}</div>
+    <div style="font-size:16px;font-weight:700;margin-top:2px">Giai đoạn ${s-1} đã xong, vui lòng làm giai đoạn ${s}${nmVi}</div></div>`;}
+function stepTagW(d){const s=dStep(d);if(!s||s>=2)return'';const e=t=>String(t).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  return`<div style="margin:2px 0 4px"><span style="background:#EDE7F6;color:#4527A0;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:700">🔧 第${ZH_NUM[s]||s}階段 / Giai đoạn ${s}${d.stepName?'：'+e(d.stepName):''}${d.stepNameVi?' / '+e(d.stepNameVi):''}</span></div>`;}
 // ── 工單主畫面 ──
 // 計算單張訂單剩餘可回報量（全域，供多處使用）
 // 2026/11：合併卡片的每人總量（groupQty）。同一次派工、同品名的其他派工（自己的）已回報多少，剩下多少可報
@@ -1648,7 +1656,7 @@ function renderWorkerMain(){
       const reportedToday=rep>0&&x.lastReportAt&&toTW(x.lastReportAt,false)===twToday;
       const still=!!x.multiDay&&rep===0&&!x.groupReportedAt&&stillList(x).some(s=>!s.rejected&&s.date>=_addDays(twToday,-7));
       if(eff!==twToday&&!reportedToday&&!still)continue;
-      const pk=x.worker+(dStep(x)?`（工序${x.step}${x.stepName?' '+x.stepName:''}）`:'');
+      const pk=x.worker+(dStep(x)?`（第${x.step}階段 / GĐ ${x.step}${x.stepName?' '+x.stepName:''}）`:'');
       if(!per.has(pk))per.set(pk,{done:0,def:0,sho:0,rep:false,share:0,assign:0,custom:true});
       const p=per.get(pk);
       if(x.groupQty>0)p.share=x.groupQty;
@@ -1789,7 +1797,7 @@ function renderWorkerMain(){
         const o=orders.find(x=>x.id===d.orderId);
         const remain=o?getOrderRemain(o,d.id):Math.max(0,d.assignQty);
         return`<div class="card"${group._rank?' style="border:2px solid #1565C0"':''}>
-          ${prioHead(group._rank)}${startBar([d])}${untilBar([d])}
+          ${stepBarW(d)}${prioHead(group._rank)}${startBar([d])}${untilBar([d])}
           <div style="display:flex;justify-content:space-between;margin-bottom:8px">
             <div><span style="font-weight:600;font-size:15px">${d.orderName}</span>${d.orderSpec?` <span style="color:#aaa;font-size:12px">${d.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;color:#888">${d.orderNo||''}</span>
@@ -1844,7 +1852,7 @@ function renderWorkerMain(){
               <input type="number" id="g${k}-${gid}" min="0" value="0" inputmode="numeric" oninput="grpUpdate('g','${gid}')">
             </div>`;
         return`<div class="card" data-grp="g${gid}" data-ids="${list.map(d=>d.id).join(',')}"${group._rank?' style="border:2px solid #1565C0"':''}>
-          ${prioHead(group._rank)}${startBar(list)}${untilBar(list)}
+          ${stepBarW(first)}${prioHead(group._rank)}${startBar(list)}${untilBar(list)}
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
             <div><span style="font-weight:600;font-size:15px">${first.orderName}</span>${first.orderSpec?` <span style="color:#aaa;font-size:12px">${first.orderSpec}</span>`:''}</div>
             <span style="font-size:11px;background:#E3F2FD;color:#185FA5;padding:2px 8px;border-radius:12px">合併 ${list.length} 張 / Gộp ${list.length}</span>
