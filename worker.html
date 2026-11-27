@@ -148,7 +148,18 @@ input:focus{border-color:#185FA5;box-shadow:0 0 0 3px rgba(24,95,165,0.1)}
         <div style="font-size:13px;font-weight:600;color:#6A1B9A;margin-bottom:10px">📋 請假申請 / Xin nghỉ phép</div>
         <div style="margin-bottom:8px">
           <div style="font-size:12px;color:#888;margin-bottom:4px">請假日期 / Ngày nghỉ</div>
-          <input type="date" id="leave-date" style="width:100%;box-sizing:border-box">
+          <input type="date" id="leave-date" style="width:100%;box-sizing:border-box" oninput="leaveHrs()">
+        </div>
+        <div style="display:flex;gap:16px;margin-bottom:8px;font-size:14px">
+          <label style="display:flex;gap:4px;align-items:center;cursor:pointer"><input type="radio" name="leave-mode" value="day" checked style="width:auto;margin:0" onchange="leaveMode()"> 全天 / Cả ngày</label>
+          <label style="display:flex;gap:4px;align-items:center;cursor:pointer"><input type="radio" name="leave-mode" value="part" style="width:auto;margin:0" onchange="leaveMode()"> 時段 / Theo giờ</label>
+        </div>
+        <div id="leave-part" style="display:none;margin-bottom:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <div><div style="font-size:12px;color:#888;margin-bottom:4px">從 / Từ</div><input type="time" id="leave-st" value="08:00" style="width:100%;box-sizing:border-box" oninput="leaveHrs()"></div>
+            <div><div style="font-size:12px;color:#888;margin-bottom:4px">到 / Đến</div><input type="time" id="leave-en" value="12:00" style="width:100%;box-sizing:border-box" oninput="leaveHrs()"></div>
+          </div>
+          <div id="leave-hrs" style="font-size:12px;color:#6A1B9A;margin-top:4px"></div>
         </div>
         <div style="margin-bottom:8px">
           <div style="font-size:12px;color:#888;margin-bottom:4px">假別 / Loại nghỉ</div>
@@ -996,9 +1007,16 @@ window.openLeavePanel=function(){
   const today=toTW(new Date().toISOString(),false);
   document.getElementById('leave-date').value=today;
   document.getElementById('leave-note').value='';
+  {const r=document.querySelector('input[name="leave-mode"][value="day"]');if(r)r.checked=true;leaveMode();}
   document.getElementById('leave-err').style.display='none';
   renderLeaveRecords();
 }
+// 時段請假（半天、幾小時）：存在當天打卡紀錄 partLeaves，可和上下班打卡同一天；時數扣午休 12:00–13:00 重疊部分
+const _lvMin=t=>{const[h,m]=String(t||'').split(':').map(Number);return h*60+(m||0);};
+function leaveHours(date,a,b){let m=_lvMin(b)-_lvMin(a);const lunch=window.WC?WC.conf(date).lunch:true;if(lunch){const ov=Math.min(_lvMin(b),780)-Math.max(_lvMin(a),720);if(ov>0)m-=ov;}return Math.max(0,Math.round(m/60*100)/100);}
+window.leaveMode=function(){const part=document.querySelector('input[name="leave-mode"]:checked').value==='part';document.getElementById('leave-part').style.display=part?'block':'none';leaveHrs();};
+window.leaveHrs=function(){const el=document.getElementById('leave-hrs');if(!el)return;const d=document.getElementById('leave-date').value,a=document.getElementById('leave-st').value,b=document.getElementById('leave-en').value;
+  el.textContent=d&&a&&b&&b>a?`共 ${leaveHours(d,a,b)} 小時 / ${leaveHours(d,a,b)} giờ`:'結束要晚於開始 / Giờ kết thúc phải sau giờ bắt đầu';};
 window.submitLeave=async function(){
   if(!currentWorker)return;
   if(!_ciReady){toast(SCOPE_WAIT_MSG);return;}
@@ -1007,6 +1025,23 @@ window.submitLeave=async function(){
   const leaveNote=document.getElementById('leave-note').value.trim();
   const errEl=document.getElementById('leave-err');
   if(!date){errEl.style.display='block';errEl.textContent='請選擇請假日期';return;}
+  if(document.querySelector('input[name="leave-mode"]:checked')?.value==='part'){
+    const from=document.getElementById('leave-st').value,to=document.getElementById('leave-en').value;
+    if(!from||!to||to<=from){errEl.style.display='block';errEl.textContent='結束時間要晚於開始時間 / Giờ kết thúc phải sau giờ bắt đầu';return;}
+    setSS('syncing');
+    try{
+      const ref=db.collection('checkins').doc(`CI-${currentWorker}-${date}`),sn=await ref.get();
+      const cur=sn.exists?sn.data():{};
+      if(cur.leave&&cur.status!=='拒絕'){setSS('ok');errEl.style.display='block';errEl.textContent='該日已有全天請假 / Ngày này đã xin nghỉ cả ngày';return;}
+      const arr=[...(cur.partLeaves||[])];
+      if(arr.some(x=>x.status!=='拒絕'&&x.from<to&&from<x.to)){setSS('ok');errEl.style.display='block';errEl.textContent='這個時段已經申請過 / Khung giờ này đã xin rồi';return;}
+      arr.push({id:'PL'+Date.now().toString(36),from,to,hours:leaveHours(date,from,to),type:leaveType,note:leaveNote,status:'待審核',at:new Date().toISOString()});
+      await ref.set({worker:currentWorker,date,partLeaves:arr},{merge:true});
+      setSS('ok');errEl.style.display='none';toast('請假申請已送出，等待管理員審核 / Đã gửi, chờ duyệt ✓');
+      document.getElementById('leave-panel').style.display='none';renderLeaveRecords();
+    }catch(e){setSS('err');toast('送出失敗，請重試');}
+    return;
+  }
   // 若選的是今天，檢查是否已打卡
   const today=toTW(new Date().toISOString(),false);
   if(date===today){
@@ -1016,6 +1051,7 @@ window.submitLeave=async function(){
   // 檢查該日是否已有請假申請
   const existing=checkins.find(c=>c.worker===currentWorker&&c.date===date&&c.leave);
   if(existing){errEl.style.display='block';errEl.textContent='該日已有請假申請';return;}
+  if(checkins.some(c=>c.worker===currentWorker&&c.date===date&&(c.partLeaves||[]).some(x=>x.status!=='拒絕'))){errEl.style.display='block';errEl.textContent='該日已有時段請假，請改用時段 / Ngày này đã xin nghỉ theo giờ';return;}
   errEl.style.display='none';
   setSS('syncing');
   try{
@@ -1035,7 +1071,9 @@ function renderLeaveRecords(){
   const el=document.getElementById('leave-records');if(!el)return;
   const myLeaves=checkins.filter(c=>c.worker===currentWorker&&c.leave)
     .sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  if(!myLeaves.length){el.innerHTML='';return;}
+  // 時段請假攤成一筆一筆，和全天假一起依日期排
+  const parts=[];checkins.filter(c=>c.worker===currentWorker).forEach(c=>(c.partLeaves||[]).forEach(x=>parts.push({c,x})));
+  if(!myLeaves.length&&!parts.length){el.innerHTML='';return;}
   const statusColor={'待審核':'#E65100','核准':'#2E7D32','拒絕':'#C62828'};
   const statusBg={'待審核':'#FFF3E0','核准':'#E8F5E9','拒絕':'#FFEBEE'};
   el.innerHTML=`<div style="font-size:12px;font-weight:600;color:#888;margin-bottom:6px">請假記錄 / Lịch sử xin nghỉ</div>`+
@@ -1048,15 +1086,35 @@ function renderLeaveRecords(){
       ${c.leaveNote?`<div style="color:#666">${c.leaveNote}</div>`:''}
       ${c.adminNote?`<div style="color:#185FA5;margin-top:3px">管理員備註：${c.adminNote}</div>`:''}
       ${(!c.status||c.status==='待審核')?`<button class="btn btn-sm btn-danger" style="margin-top:6px;font-size:11px" onclick="cancelLeave('${c.date}')">取消申請</button>`:''}
+    </div>`).join('')+
+    parts.sort((a,b)=>(b.c.date||'').localeCompare(a.c.date||'')).map(({c,x})=>`
+    <div style="background:${statusBg[x.status||'待審核']||'#fafafa'};border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="font-weight:600">${c.date} ${x.type||'請假'} ${x.from}–${x.to}（${x.hours}h）</span>
+        <span style="color:${statusColor[x.status||'待審核']};font-weight:600">${x.status||'待審核'}</span>
+      </div>
+      ${x.note?`<div style="color:#666">${x.note}</div>`:''}
+      ${x.adminNote?`<div style="color:#185FA5;margin-top:3px">管理員備註：${x.adminNote}</div>`:''}
+      ${(!x.status||x.status==='待審核')?`<button class="btn btn-sm btn-danger" style="margin-top:6px;font-size:11px" onclick="cancelPartLeave('${c.date}','${x.id}')">取消申請</button>`:''}
     </div>`).join('');
 }
+window.cancelPartLeave=async function(date,id){
+  if(!_ciReady){toast(SCOPE_WAIT_MSG);return;}
+  if(!confirm('確定取消此請假申請？'))return;
+  const c=checkins.find(x=>x.worker===currentWorker&&x.date===date);if(!c)return;
+  setSS('syncing');
+  try{await db.collection('checkins').doc(`CI-${currentWorker}-${date}`).update({partLeaves:(c.partLeaves||[]).filter(x=>x.id!==id)});setSS('ok');toast('已取消請假申請');renderLeaveRecords();}
+  catch(e){setSS('err');toast('取消失敗，請重試');}
+};
 window.cancelLeave=async function(date){
   if(!_ciReady){toast(SCOPE_WAIT_MSG);return;}
   if(!confirm('確定取消此請假申請？'))return;
   const id=`CI-${currentWorker}-${date}`;
   setSS('syncing');
   try{
-    await db.collection('checkins').doc(id).delete();
+    const c=checkins.find(x=>x.worker===currentWorker&&x.date===date);
+    if(c&&(c.partLeaves||[]).length){const FV=firebase.firestore.FieldValue;await db.collection('checkins').doc(id).update({leave:FV.delete(),leaveType:FV.delete(),leaveNote:FV.delete(),status:FV.delete()});}
+    else await db.collection('checkins').doc(id).delete();
     setSS('ok');toast('已取消請假申請');
     renderLeaveRecords();
   }catch(e){setSS('err');toast('取消失敗，請重試');}
@@ -1125,7 +1183,10 @@ window.doCheckin=async function(type){
         setSS('ok');
         return alert(`今天已經打過上班卡了（${srv.data().inTime}），不需要再打。\nHôm nay bạn đã vào ca lúc ${srv.data().inTime}.\n\n請按「🔄 重新整理」更新畫面。`);
       }
-      await db.collection('checkins').doc(id).set({worker:currentWorker,date:today,inTime:timeStr,inLat:lat,inLng:lng,inDist:distRound,outTime:null,outLat:null,outLng:null,outDist:null,...(SHARED?{sharedDevice:true}:{})});
+      // 當天先登了時段請假（文件已存在、沒有上班時間）→ 合併寫入，保留請假紀錄
+      const keep=srv&&srv.exists&&!srv.data().leave&&(srv.data().partLeaves||[]).length;
+      const ciData={worker:currentWorker,date:today,inTime:timeStr,inLat:lat,inLng:lng,inDist:distRound,outTime:null,outLat:null,outLng:null,outDist:null,...(SHARED?{sharedDevice:true}:{})};
+      if(keep)await db.collection('checkins').doc(id).set(ciData,{merge:true});else await db.collection('checkins').doc(id).set(ciData);
       setSS('ok');toast('上班打卡成功 / Vào ca thành công ✓');
       if(SHARED)sharedAfterCheckin();
     }else{

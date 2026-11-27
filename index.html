@@ -449,6 +449,7 @@ textarea{resize:vertical;min-height:70px}
 <div id="pg-checkin" class="page">
   <div class="section-hdr">
     <strong style="font-size:15px">打卡記錄</strong>
+    <button class="btn btn-sm" style="background:#F3E5F5;color:#6A1B9A;border-color:#CE93D8" onclick="openAdminLeave()">＋ 代登請假</button>
   </div>
   <!-- 待審核請假申請 -->
   <div id="leave-approval-section" style="margin-bottom:1rem"></div>
@@ -2944,6 +2945,7 @@ function renderCIMatrix(box){
   for(const c of cis){
     const k=c.worker+'|'+c.date,cur=map.get(k)||{};
     if(c.leave){if(c.status!=='拒絕')cur.leave=c;}else if(c.inTime||c.outTime||c.otHours)cur.punch=c;
+    if(plApproved(c).length)cur.parts=plApproved(c);
     map.set(k,cur);
   }
   const head1=dates.map(d=>{const cf=WC.conf(d),wd=WC.weekday(d),wkWork=cf.work&&(wd===0||wd===6);
@@ -2958,20 +2960,23 @@ function renderCIMatrix(box){
       if(e.leave&&!(e.punch&&e.punch.inTime)){
         const lv=e.leave;return`<td class="cim-lv" title="${ciEsc(lv.leaveNote||'')}">${ciEsc(lv.leaveType||'請假')}${lv.status&&lv.status!=='核准'?`<br><span style="font-size:10px">${ciEsc(lv.status)}</span>`:''}</td>`;
       }
-      const p=e.punch;
+      const p=e.punch,parts=e.parts||[];
+      const plTag=parts.length?`<br><span class="cim-pl" title="${ciEsc(parts.map(plText).join('\n'))}">假${Math.round(parts.reduce((a,x)=>a+(x.hours||0),0)*100)/100}h</span>`:'';
       if(!p||!p.inTime){
-        if(cf.work&&d<today)return`<td class="cim-miss">缺</td>`;
+        if(parts.length)return`<td class="cim-lv" title="${ciEsc(parts.map(plText).join('\n'))}">${ciEsc(parts[0].type||'請假')}${plTag}</td>`;
+        if(cf.work&&d<today)return`<td class="cim-miss cim-click" onclick="openAdminLeave('${ciEsc(w)}','${d}')" title="點擊代登請假">缺</td>`;
         return`<td class="${cls}"></td>`;
       }
-      const late=String(p.inTime).slice(0,5)>WC.onTime(d);
+      // 時段請假蓋到上班時間 → 不算遲到；蓋到下班時間 → 不算早退
+      const late=String(p.inTime).slice(0,5)>WC.onTime(d)&&!parts.some(x=>x.from<=WC.onTime(d)&&plMin(p.inTime)<=plMin(x.to)+10); // 請假結束後一樣有 10 分鐘寬限
       let out;
       if(p.outTime){
-        const early=cf.work&&String(p.outTime).slice(0,5)<cf.end;
+        const early=cf.work&&String(p.outTime).slice(0,5)<cf.end&&!parts.some(x=>x.to>=cf.end&&x.from<=String(p.outTime).slice(0,5));
         out=`<span style="${early?'color:#E65100;font-weight:600':''}${!p.outManual?';color:#999':''}" title="${p.outManual?'員工按下班打卡':'員工未按下班打卡，為最後一次回報時間'}">${ciEsc(p.outTime)}${p.outManual?'':'*'}</span>`;
       }else out=d<today?'<span style="color:#E65100;font-size:10px">未下班</span>':'—';
       const ot=Number(p.otHours)>0?`<br><span class="cim-ot">+${Number(p.otHours)}</span>`:'';
       const canOT=wd>=1&&wd<=5;
-      return`<td class="${cls}${canOT?' cim-click':''}" ${canOT?`onclick="openOTEditor('${ciEsc(p.id)}')" title="點擊輸入平日加班時數"`:''}><span style="${late?'color:#C62828;font-weight:600':''}">${ciEsc(String(p.inTime).slice(0,5))}</span><br>${out}${ot}</td>`;
+      return`<td class="${cls}${canOT?' cim-click':''}" ${canOT?`onclick="openOTEditor('${ciEsc(p.id)}')" title="點擊輸入平日加班時數"`:''}><span style="${late?'color:#C62828;font-weight:600':''}">${ciEsc(String(p.inTime).slice(0,5))}</span><br>${out}${ot}${plTag}</td>`;
     }).join('');
     const otTotal=ots.reduce((a,x)=>a+x.h,0);
     const otH=ots.length?ots.map(x=>`${Number(x.d.slice(5,7))}/${Number(x.d.slice(8))} ${x.h} 小時`).join('<br>')+`<br><b>共 ${Math.round(otTotal*100)/100} 小時</b>`:'<span style="color:#ccc">—</span>';
@@ -2984,6 +2989,7 @@ function renderCIMatrix(box){
     .cim-nm{position:sticky;left:0;background:#fff;text-align:left!important;font-weight:600;padding-left:8px!important;z-index:1;min-width:64px!important}
     .cim-lv{background:#F3E5F5;color:#6A1B9A}.cim-miss{background:#FFEBEE;color:#C62828;font-weight:600}
     .cim-ot{display:inline-block;padding:0 4px;border-radius:4px;background:#E3F2FD;color:#1565C0;font-size:11px;font-weight:600}
+    .cim-pl{display:inline-block;padding:0 4px;border-radius:4px;background:#F3E5F5;color:#6A1B9A;font-size:10px;font-weight:600}
     .cim-click{cursor:pointer}.cim-click:hover{outline:2px solid #90CAF9;outline-offset:-2px}
     .cim-s{font-weight:700;background:#FAFAFA}.cim-ot-list{text-align:left!important;font-size:11px;color:#555;min-width:110px!important}
   </style>
@@ -2993,7 +2999,7 @@ function renderCIMatrix(box){
   <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:#666;margin-top:8px">
     <span><span class="cim-ot">+2</span> 平日加班（點格子輸入）</span><span><span style="background:#FFEBEE;color:#C62828;padding:0 4px;border-radius:4px">缺</span> 日曆是上班日卻沒打卡、沒請假</span>
     <span><span style="color:#C62828;font-weight:600">08:14</span> 遲到（上班時間＋10 分鐘後）</span><span><span style="color:#E65100;font-weight:600">16:40</span> 早退</span>
-    <span><span style="color:#999">16:30*</span> 員工沒按下班，為最後一次回報時間</span><span><span style="background:#F3E5F5;color:#6A1B9A;padding:0 4px;border-radius:4px">事假</span> 請假</span>
+    <span><span style="color:#999">16:30*</span> 員工沒按下班，為最後一次回報時間</span><span><span style="background:#F3E5F5;color:#6A1B9A;padding:0 4px;border-radius:4px">事假</span> 請假</span><span><span class="cim-pl">假2h</span> 時段請假（不算遲到早退）</span><span>點「缺」可代登請假</span>
     <span>灰底＝休假日；上班總天數、平日、週六、週日依實際打卡計算</span>
   </div>`;
 }
@@ -4884,15 +4890,137 @@ window.submitAdjust=async function(id){
 window.closeModal=function(){document.querySelectorAll('.modal-overlay').forEach(m=>m.style.display='none');}
 document.querySelectorAll('.modal-overlay').forEach(m=>m.addEventListener('click',function(e){if(e.target===this)closeModal();}));
 
+// ══ 請假：時段請假與管理員代登（2026/11）══════════════════════════════
+// 全天假：照舊（打卡紀錄 leave:true）。時段假（半天、1～2 小時）：存在當天打卡紀錄的 partLeaves 陣列，
+// [{id,from,to,hours,type,note,status,at,byAdmin,adminNote,reviewedAt}]，可和上下班打卡同一天。
+// 時數＝結束－開始，扣掉實際重疊的午休 12:00–13:00。管理員代登直接核准。全勤不自動扣，薪資單提醒自行判斷。
+const plMin=t=>{const[h,m]=String(t||'').slice(0,5).split(':').map(Number);return h*60+(m||0);};
+function plHours(date,from,to){
+  const cf=WC.conf(date),a=plMin(from),b=plMin(to);let m=b-a;
+  if(cf.lunch){const ov=Math.min(b,780)-Math.max(a,720);if(ov>0)m-=ov;}
+  return Math.max(0,Math.round(m/60*100)/100);
+}
+function plApproved(c){return((c&&c.partLeaves)||[]).filter(x=>x.status==='核准');}
+function plText(x){return`${x.type||'請假'} ${x.from}–${x.to}（${x.hours}h）`;}
+const PL_TYPES=['病假','事假','其他'];
+window.openAdminLeave=function(worker,date){
+  const today=twToday();
+  document.getElementById('due-modal-title').textContent='代登請假（員工口頭請假）';
+  document.getElementById('due-modal-content').innerHTML=`
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label style="margin-top:0">員工</label><select id="al-w">${(window.DB.employees||[]).map(e=>`<option ${e===worker?'selected':''}>${ciEsc(e)}</option>`).join('')}</select></div>
+      <div><label style="margin-top:0">假別</label><select id="al-type">${PL_TYPES.map(t=>`<option>${t}</option>`).join('')}</select></div>
+    </div>
+    <div style="display:flex;gap:16px;margin:10px 0 4px;font-size:14px">
+      <label style="margin:0;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="radio" name="al-mode" value="day" checked style="width:auto;margin:0" onchange="alMode()"> 全天</label>
+      <label style="margin:0;display:flex;gap:4px;align-items:center;cursor:pointer"><input type="radio" name="al-mode" value="part" style="width:auto;margin:0" onchange="alMode()"> 時段（半天、幾小時）</label>
+    </div>
+    <div id="al-day" style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div><label>從</label><input type="date" id="al-from" value="${date||today}"></div>
+      <div><label>到 <span style="color:#aaa;font-weight:400">（只請一天可不改）</span></label><input type="date" id="al-to" value="${date||today}"></div>
+      <div style="grid-column:1/-1;font-size:12px;color:#888">連續多天時，工作日曆上的休假日（週末、國定假日）會自動跳過。</div>
+    </div>
+    <div id="al-part" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:10px">
+      <div><label>日期</label><input type="date" id="al-date" value="${date||today}"></div>
+      <div><label>開始</label><input type="time" id="al-st" value="08:00" oninput="alHrs()"></div>
+      <div><label>結束</label><input type="time" id="al-en" value="12:00" oninput="alHrs()"></div>
+      <div id="al-hrs" style="grid-column:1/-1;font-size:13px;color:#6A1B9A"></div>
+    </div>
+    <label>備註 <span style="color:#aaa;font-weight:400">（選填）</span></label><input type="text" id="al-note" placeholder="例：口頭請假、看醫生">
+    <div style="font-size:12px;color:#888;margin-top:6px">管理員代登直接算「核准」，員工手機的請假紀錄看得到。</div>
+    <div style="display:flex;gap:8px;margin-top:12px"><button class="btn btn-primary btn-sm" onclick="submitAdminLeave()">確認登記</button><button class="btn btn-sm" onclick="closeModal()">取消</button></div>`;
+  document.getElementById('due-modal').style.display='flex';
+  alHrs();
+};
+window.alMode=function(){
+  const part=document.querySelector('input[name="al-mode"]:checked').value==='part';
+  document.getElementById('al-day').style.display=part?'none':'grid';
+  document.getElementById('al-part').style.display=part?'grid':'none';alHrs();
+};
+window.alHrs=function(){
+  const el=document.getElementById('al-hrs');if(!el)return;
+  const d=document.getElementById('al-date').value,a=document.getElementById('al-st').value,b=document.getElementById('al-en').value;
+  el.textContent=d&&a&&b&&b>a?`共 ${plHours(d,a,b)} 小時（已扣午休 12:00–13:00 重疊的部分）`:'結束時間要晚於開始時間';
+};
+window.submitAdminLeave=async function(){
+  const w=document.getElementById('al-w').value,type=document.getElementById('al-type').value,note=document.getElementById('al-note').value.trim();
+  const part=document.querySelector('input[name="al-mode"]:checked').value==='part';
+  const now=new Date().toISOString();
+  if(!w)return alert('請選擇員工');
+  setSS('syncing');
+  try{
+    if(part){
+      const date=document.getElementById('al-date').value,from=document.getElementById('al-st').value,to=document.getElementById('al-en').value;
+      if(!date||!from||!to||to<=from){setSS('ok');return alert('請選日期，結束時間要晚於開始時間');}
+      const ref=db.collection('checkins').doc(`CI-${w}-${date}`),sn=await ref.get();
+      const cur=sn.exists?sn.data():{};
+      if(cur.leave&&cur.status!=='拒絕'){setSS('ok');return alert(`${w} ${date} 已經請全天假`);}
+      const arr=[...(cur.partLeaves||[])];
+      if(arr.some(x=>x.status!=='拒絕'&&x.from<to&&from<x.to)){setSS('ok');return alert('這個時段和已登記的請假重疊');}
+      arr.push({id:'PL'+Date.now().toString(36),from,to,hours:plHours(date,from,to),type,note,status:'核准',at:now,byAdmin:true,adminNote:'管理員代登',reviewedAt:now});
+      await ref.set({worker:w,date,partLeaves:arr},{merge:true});
+      setSS('ok');closeModal();toast(`已登記 ${w} ${date} ${type} ${from}–${to}`);
+    }else{
+      const a=document.getElementById('al-from').value,b=document.getElementById('al-to').value||a;
+      if(!a||b<a){setSS('ok');return alert('請選日期（結束不能早於開始）');}
+      const dates=[];for(let d=a;d<=b;d=rsAddDays(d,1))if(a===b||WC.isWork(d))dates.push(d);
+      if(!dates.length){setSS('ok');return alert('這段期間都是休假日');}
+      const done=[],skip=[];
+      for(const d of dates){
+        const ref=db.collection('checkins').doc(`CI-${w}-${d}`),sn=await ref.get(),cur=sn.exists?sn.data():null;
+        if(cur&&cur.inTime){skip.push(`${d} 已打上班卡（請改用「時段」登記）`);continue;}
+        if(cur&&cur.leave&&cur.status!=='拒絕'){skip.push(`${d} 已有請假`);continue;}
+        await ref.set({worker:w,date:d,leave:true,leaveType:type,leaveNote:note,status:'核准',adminNote:'管理員代登',byAdmin:true,reviewedAt:now,
+          inTime:null,outTime:null,inLat:null,inLng:null,outLat:null,outLng:null,createdAt:now,...(cur&&cur.partLeaves?{partLeaves:cur.partLeaves}:{})});
+        done.push(d);
+      }
+      setSS('ok');closeModal();
+      if(skip.length)alert(`已登記 ${done.length} 天。\n\n沒有登記：\n${skip.join('\n')}`);
+      else toast(`已登記 ${w} ${type} ${done.length} 天`);
+    }
+    try{renderCheckins();}catch(e){}
+  }catch(e){console.error(e);setSS('err');toast('登記失敗：'+(e.message||e));}
+};
+// 員工申請的時段假：核准／拒絕
+window.reviewPartLeave=async function(worker,date,id,decision){
+  const noteEl=document.getElementById(`pl-note-${id}`);
+  const adminNote=noteEl?noteEl.value.trim():'';
+  if(!adminNote)return alert('請填寫管理員備註');
+  const ci=window.DB.checkins.find(c=>c.worker===worker&&c.date===date);if(!ci)return;
+  const arr=(ci.partLeaves||[]).map(x=>x.id===id?{...x,status:decision,adminNote,reviewedAt:new Date().toISOString()}:x);
+  setSS('syncing');
+  try{await db.collection('checkins').doc(`CI-${worker}-${date}`).update({partLeaves:arr});setSS('ok');toast(`已${decision}：${worker} ${date} 時段請假`);}
+  catch(e){setSS('err');toast('操作失敗，請重試');}
+};
+// 管理員刪除某筆時段假（登錯時）
+window.deletePartLeave=async function(worker,date,id){
+  const ci=window.DB.checkins.find(c=>c.worker===worker&&c.date===date);if(!ci)return;
+  const x=(ci.partLeaves||[]).find(p=>p.id===id);if(!x)return;
+  if(!confirm(`刪除 ${worker} ${date} 的「${plText(x)}」？`))return;
+  try{await db.collection('checkins').doc(`CI-${worker}-${date}`).update({partLeaves:(ci.partLeaves||[]).filter(p=>p.id!==id)});toast('已刪除');}
+  catch(e){toast('刪除失敗：'+(e.message||e));}
+};
 // ── 請假審核 ──
 function renderLeaveApproval(){
   const el=document.getElementById('leave-approval-section');if(!el)return;
   const pending=window.DB.checkins.filter(c=>c.leave&&(!c.status||c.status==='待審核'))
     .sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  if(!pending.length){el.innerHTML='';return;}
+  const pParts=[];window.DB.checkins.forEach(c=>(c.partLeaves||[]).forEach(x=>{if(!x.status||x.status==='待審核')pParts.push({c,x});}));
+  pParts.sort((a,b)=>(a.c.date||'').localeCompare(b.c.date||''));
+  if(!pending.length&&!pParts.length){el.innerHTML='';return;}
+  const partHtml=pParts.map(({c,x})=>`
+        <div style="background:#fafafa;border-radius:8px;padding:10px;margin-bottom:8px;font-size:13px">
+          <div style="margin-bottom:6px"><span style="font-weight:600">${ciEsc(c.worker)}</span><span style="color:#888;margin-left:8px">${c.date}</span>
+            <span style="background:#F3E5F5;color:#6A1B9A;padding:2px 8px;border-radius:12px;font-size:11px;margin-left:6px">時段 ${ciEsc(plText(x))}</span></div>
+          ${x.note?`<div style="color:#666;font-size:12px;margin-bottom:6px">備註：${ciEsc(x.note)}</div>`:''}
+          <div style="display:flex;gap:8px;align-items:flex-end">
+            <div style="flex:1"><label style="font-size:11px;color:#888">管理員備註（必填）</label><input type="text" id="pl-note-${x.id}" placeholder="核准或拒絕原因..." style="margin-top:2px"></div>
+            <button class="btn btn-sm" style="background:#2E7D32;color:#fff;border-color:#2E7D32" onclick="reviewPartLeave('${ciEsc(c.worker)}','${c.date}','${x.id}','核准')">✓ 核准</button>
+            <button class="btn btn-sm btn-danger" onclick="reviewPartLeave('${ciEsc(c.worker)}','${c.date}','${x.id}','拒絕')">✗ 拒絕</button>
+          </div></div>`).join('');
   el.innerHTML=`
     <div class="card" style="border-left:4px solid #E65100">
-      <div style="font-size:14px;font-weight:600;color:#E65100;margin-bottom:10px">⏳ 待審核請假申請（${pending.length} 筆）</div>
+      <div style="font-size:14px;font-weight:600;color:#E65100;margin-bottom:10px">⏳ 待審核請假申請（${pending.length+pParts.length} 筆）</div>${partHtml}
       ${pending.map(c=>`
         <div style="background:#fafafa;border-radius:8px;padding:10px;margin-bottom:8px;font-size:13px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
@@ -5052,7 +5180,8 @@ function renderCheckins(){
         <td><span class="badge" style="background:#F3E5F5;color:#6A1B9A">請假</span></td>
       </tr>`;
     }
-    const statusBadge=c.outTime
+    const statusBadge=!c.inTime&&(c.partLeaves||[]).length?''
+      :c.outTime
       ?`<span class="badge bd">完整</span>`
       :c.inTime?`<span class="badge" style="background:#FFF3E0;color:#E65100">未下班</span>`
       :`<span class="badge" style="background:#FFEBEE;color:#C62828">異常</span>`;
@@ -5064,7 +5193,7 @@ function renderCheckins(){
       <td style="font-weight:500">${hours}</td>
       <td style="font-size:12px;color:#888">${c.inDist!=null?`${c.inDist}m`:'-'}</td>
       <td style="font-size:12px;color:#888">${c.outDist!=null?`${c.outDist}m`:'-'}</td>
-      <td>${statusBadge}${ciConfirmBadge(c)}</td>
+      <td>${statusBadge}${ciConfirmBadge(c)}${ciPartHtml(c)}</td>
     </tr>`;
   }).join('');
 
@@ -5074,6 +5203,10 @@ function renderCheckins(){
   sumEl.innerHTML=`共 <strong>${list.length}</strong> 筆記錄，完整打卡 <strong>${countComplete}</strong> 筆，總工時 <strong style="color:#185FA5">${totalHours.toFixed(1)} 小時</strong>`;
 }
 
+function ciPartHtml(c){
+  return(c.partLeaves||[]).map(x=>`<div style="font-size:11px;color:${x.status==='拒絕'?'#aaa':'#6A1B9A'};margin-top:2px;${x.status==='拒絕'?'text-decoration:line-through':''}">🕐 ${ciEsc(plText(x))}${x.status&&x.status!=='核准'?'・'+ciEsc(x.status):''}${x.byAdmin?'・代登':''}
+    <a href="javascript:void(0)" onclick="deletePartLeave('${ciEsc(c.worker)}','${c.date}','${x.id}')" style="color:#C62828;margin-left:4px">刪除</a></div>`).join('');
+}
 // 共用裝置打卡：上班後按「確認工單」的紀錄（confirmAt、confirmList 快照）
 function ciConfirmBadge(c){
   if(c.confirmAt){const n=(c.confirmList||[]).length;
@@ -5638,12 +5771,14 @@ const psFmt=n=>{const v=Math.round(Number(n)||0);return(v<0?'-':'')+Math.abs(v).
 // 出勤：08:10 以前上班打卡＝出勤（準時）；有上班打卡＝到班（含遲到，用來算伙食）；未拒絕的請假會讓全勤不成立
 function psAttendance(worker,from,to){
   const cis=(window.DB.checkins||[]).filter(c=>c.worker===worker&&c.date>=from&&c.date<=to);
-  let present=0,punctual=0,leaves=0;
+  let present=0,punctual=0,leaves=0,partN=0,partH=0;
   cis.forEach(c=>{
+    const parts=plApproved(c);partN+=parts.length;partH+=parts.reduce((a,x)=>a+(x.hours||0),0);
     if(c.leave){if(c.status!=='拒絕')leaves++;return;}
-    if(c.inTime){present++;if(String(c.inTime).slice(0,5)<=WC.onTime(c.date))punctual++;} // 準時：當天工作日曆的上班時間＋10 分鐘
+    // 準時：當天工作日曆的上班時間＋10 分鐘；早上請時段假、請到打卡時間的也算準時
+    if(c.inTime){present++;const t=String(c.inTime).slice(0,5);if(t<=WC.onTime(c.date)||parts.some(x=>x.from<=WC.onTime(c.date)&&plMin(t)<=plMin(x.to)+10))punctual++;}
   });
-  return{present,punctual,late:present-punctual,leaves};
+  return{present,punctual,late:present-punctual,leaves,partN,partH:Math.round(partH*100)/100};
 }
 function psWorkRows(worker,from,to){
   return(window.DB.dispatches||[]).filter(d=>d.worker===worker&&(d.doneQty>0)&&dispWorkDate(d)>=from&&dispWorkDate(d)<=to)
@@ -5669,7 +5804,7 @@ function psCompute(worker){
   const late=Math.max(0,present-punctual);
   const req=Number(doc.requiredDays)||WC.workDaysInMonth(m); // 沒手動輸入 → 依工作日曆
   const fullAuto=req>0&&punctual>=req&&att.leaves===0;
-  const fullReason=!req?'尚未輸入應出勤天數':`出勤 ${punctual}／應出勤 ${req}${att.leaves?`、請假 ${att.leaves} 天`:''}${late?`、遲到 ${late} 天`:''}${fullAuto?'，符合全勤':''}`;
+  const fullReason=!req?'尚未輸入應出勤天數':`出勤 ${punctual}／應出勤 ${req}${att.leaves?`、請假 ${att.leaves} 天`:''}${late?`、遲到 ${late} 天`:''}${fullAuto?'，符合全勤':''}${att.partN?`　⚠ 時段請假 ${att.partN} 次（共 ${att.partH} 小時），全勤請自行判斷`:''}`;
   const full=ov.full!=null?Number(ov.full):(fullAuto?PS.FULL:0);
   const work=psWorkRows(worker,from,to);
   const mats=psMatRows(worker,from,to);
