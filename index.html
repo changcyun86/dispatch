@@ -2818,6 +2818,27 @@ function dUsedFor(x,d){
   return xs<k?loss:0;
 }
 function stepLeft(o,k,n){return Math.max(0,(o.qty||0)-stepUsed(o,k,n));}
+// 品名有工序、但這張訂單之前的派工沒有分工（例如分工功能上線前派的、原本另建單做二次加工的）：
+// 派工序時詢問這些是不是第 1 道做的。是 → 改成第 1 道（單價不變），訂單完工改以最後一道計算；否 → 維持「已全部完成」。
+function nonStepRep(o){return window.DB.dispatches.filter(d=>d.orderId===o.id&&!dStep(d));}
+function askConvertStep1(orders,steps){
+  const list=orders.filter(o=>nonStepRep(o).length);
+  if(!list.length)return[];
+  const s1=steps[0];
+  const lines=list.map(o=>{const r=nonStepRep(o).reduce((a,d)=>a+(d.doneQty||0)+(d.defectQty||0)+(d.shortageQty||0),0);return`・${o.orderno||o.id}　${r?`已回報 ${r}`:'尚未回報'}`;}).join('\n');
+  return confirm(`以下訂單之前的派工沒有分工：\n${lines}\n\n這些是「第 1 道${s1.name?' '+s1.name:''}」做的嗎？\n\n按「確定」：算成第 1 道（單價不變；之後要做完最後一道才算完工）\n按「取消」：當成整個都做完了（後面的工序只能做剩下的數量）`)?list:[];
+}
+async function convertToStep1(o,steps){
+  const n=steps.length,s1=steps[0];
+  const p={step:1,stepCount:n,stepName:s1.name||'',...(s1.nameVi?{stepNameVi:s1.nameVi}:{})};
+  const all=window.DB.dispatches.filter(d=>d.orderId===o.id);
+  for(const d of all){if(dStep(d))continue;await db.collection('dispatches').doc(String(d.id)).update(p);Object.assign(d,p);}
+  const tot=orderTotalsPatch(o,all);
+  if(doneForced(o,tot.done))tot.done=Math.max(o.qty||0,tot.done);
+  const names=steps.map(x=>x.name||'');
+  await db.collection('orders').doc(o.id).update({...tot,stepCount:n,stepNames:names});
+  Object.assign(o,tot,{stepCount:n,stepNames:names});
+}
 // 品名單價資料庫裡的工序設定（至少 2 道才算分工）
 // 訂單自己的工序（在訂單上按「加派二次加工」建立的，存在 o.stepList）優先，其次是品名單價資料庫的設定
 function orderSteps(o){return o&&Array.isArray(o.stepList)&&o.stepList.length>=2?o.stepList:prodSteps(o.name,o.spec);}
@@ -3979,7 +4000,8 @@ function updateSelectedInfo(){
         <select style="width:auto;margin:0;padding:2px 6px;font-size:12px;border-color:${g.step?'#7E57C2':'#ddd'}" onchange="grpStepSet('${keyEsc(g.key)}',this.value)">
           <option value="0"${g.step?'':' selected'}>不分工（$${g.price}，一人做完全部）</option>
           ${g.steps.map((x,k)=>`<option value="${k+1}"${g.step===k+1?' selected':''}>工序${k+1}/${g.steps.length}${x.name?' '+dueEsc(x.name):''}　$${x.price}</option>`).join('')}
-        </select>${g.step?`<span style="color:#888">勾選的員工只做這道工序；其他工序請另外派</span>`:''}</div>`:''}
+        </select>${g.step?`<span style="color:#888">勾選的員工只做這道工序；其他工序請另外派</span>`:''}</div>
+        ${g.step&&g.orders.some(x=>x.on&&nonStepRep(x.o).length)?`<div style="color:#E65100">有訂單之前的派工沒有分工，上面的剩餘數量把它們當成全部做完；派工時會問你要不要改算成第 1 道。</div>`:''}`:''}
       <div style="display:flex;flex-wrap:wrap;gap:4px 12px;margin:3px 0 2px">
         ${g.orders.map(x=>`<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;color:${x.on?'#333':'#aaa'};${x.on?'':'text-decoration:line-through;'}">
           <input type="checkbox" style="width:auto;margin:0" ${x.on?'checked':''} onchange="toggleBoxOrder('${x.o.id}',this.checked)">
@@ -4046,6 +4068,7 @@ window.createDispatch=async function(){
     // 分工：這組只派選定的那道工序，單價用工序單價；訂單記下共幾道與工序名稱（列表顯示進度用）
     const sx=g.step?g.steps[g.step-1]:null;
     const stepFields=sx?{step:g.step,stepCount:g.steps.length,stepName:sx.name||'',...(sx.nameVi?{stepNameVi:sx.nameVi}:{})}:{};
+    if(sx)for(const o of askConvertStep1(g.orders,g.steps))await convertToStep1(o,g.steps);
     for(const o of g.orders){
       if(sx){const names=g.steps.map(x=>x.name||'');
         if(o.stepCount!==g.steps.length||JSON.stringify(o.stepNames||[])!==JSON.stringify(names)){
@@ -4519,6 +4542,7 @@ window.addWorkerToOrder=function(orderId,stepSel){
       </label>`).join('')||'<div style="color:#aaa;font-size:12px">這道工序所有員工都已派過</div>'}
     </div>
     <div style="font-size:12px;color:#888;margin-bottom:4px">訂單總量 ${o.qty}／${k?`工序${k}已回報`:'已回報'} ${used}／<b style="color:#185FA5">剩餘 ${Math.max(0,o.qty-used)}</b></div>
+    ${k&&nonStepRep(o).length?`<div style="font-size:12px;color:#E65100;margin-bottom:6px">這張訂單之前的派工沒有分工，上面的數字把它們當成全部做完。按「確認新增」時會問你要不要改算成第 1 道。</div>`:''}
     <label style="margin-top:0">派工數量 <span style="color:#aaa;font-weight:400">（選填，每人各自；不填＝不限，可做到訂單剩餘量）</span></label>
     <input type="number" id="addw-qty" min="1" step="1" placeholder="例：200" style="width:160px;margin-bottom:14px">
     <div style="display:flex;gap:8px">
@@ -4630,6 +4654,7 @@ window.confirmAddWorkers=async function(orderId){
   const steps=orderSteps(o);
   const k=steps?(parseInt(document.getElementById('addw-step')?.value)||0):0;
   const sx=k?steps[k-1]:null;
+  if(sx)for(const x of askConvertStep1([o],steps))await convertToStep1(x,steps);
   if(sx){const names=steps.map(x=>x.name||'');
     if(o.stepCount!==steps.length||JSON.stringify(o.stepNames||[])!==JSON.stringify(names))
       await db.collection('orders').doc(o.id).update({stepCount:steps.length,stepNames:names});}
