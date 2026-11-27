@@ -736,6 +736,7 @@ textarea{resize:vertical;min-height:70px}
       <div id="mat-items-editor"></div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button class="btn btn-sm" onclick="matItemAdd()">＋ 新增品項</button>
+        <button class="btn btn-sm" onclick="matPasteOpen()">📋 從 Excel 貼上</button>
         <button class="btn btn-primary btn-sm" onclick="matItemsSave()">儲存品項</button>
         <span id="mat-items-dirty" style="font-size:12px;color:#E65100;align-self:center"></span>
       </div>
@@ -5653,8 +5654,9 @@ function renderMatSettings(redraw){
   const ed=document.getElementById('mat-items-editor');
   if(ed&&(redraw||!_matDraft)){
     const rows=_matDraft||MAT.items;
-    ed.innerHTML=rows.length?`<div class="tbl-wrap"><table class="tbl" style="min-width:420px"><thead><tr><th>品名</th><th>規格</th><th>單位</th><th class="col-num">單價</th><th>啟用</th></tr></thead><tbody>`+
+    ed.innerHTML=rows.length?`<div class="tbl-wrap"><table class="tbl" style="min-width:420px"><thead><tr><th>供應商</th><th>品名</th><th>規格</th><th>單位</th><th class="col-num">單價</th><th>啟用</th></tr></thead><tbody>`+
       rows.map(r=>`<tr data-mid="${MAT.esc(r.id)}">
+        <td><input data-f="supplier" value="${MAT.esc(r.supplier||'')}" style="width:90px" oninput="matDirty()"></td>
         <td><input data-f="name" value="${MAT.esc(r.name)}" oninput="matDirty()"></td>
         <td><input data-f="spec" value="${MAT.esc(r.spec||'')}" oninput="matDirty()"></td>
         <td><input data-f="unit" value="${MAT.esc(r.unit||'')}" style="width:60px" oninput="matDirty()"></td>
@@ -5672,14 +5674,14 @@ function _matReadDraft(){
   const ed=document.getElementById('mat-items-editor');
   return[...ed.querySelectorAll('tr[data-mid]')].map(tr=>{
     const g=f=>tr.querySelector(`[data-f="${f}"]`);
-    return{id:tr.dataset.mid,name:g('name').value.trim(),spec:g('spec').value.trim(),unit:g('unit').value.trim(),
+    return{id:tr.dataset.mid,supplier:g('supplier').value.trim(),name:g('name').value.trim(),spec:g('spec').value.trim(),unit:g('unit').value.trim(),
       price:g('price').value===''?'':Number(g('price').value),active:g('active').checked};
   });
 }
 window.matDirty=function(){document.getElementById('mat-items-dirty').textContent='尚未儲存';_matDraft=_matReadDraft();}
 window.matItemAdd=function(){
   const rows=document.querySelector('#mat-items-editor tr[data-mid]')?_matReadDraft():MAT.items.map(x=>({...x}));
-  rows.push({id:'MAT-'+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,5).toUpperCase(),name:'',spec:'',unit:'',price:'',active:true});
+  rows.push({id:'MAT-'+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,5).toUpperCase(),supplier:'',name:'',spec:'',unit:'',price:'',active:true});
   _matDraft=rows;document.getElementById('mat-items-dirty').textContent='尚未儲存';
   renderMatSettings(true);
 }
@@ -5695,6 +5697,69 @@ window.matItemsSave=async function(){
   try{await MAT.saveItems(list);_matDraft=null;document.getElementById('mat-items-dirty').textContent='';toast('耗材品項已儲存');renderMatSettings(true);}
   catch(e){toast('儲存失敗，請重試');}
 }
+// ── 耗材品項：從 Excel 貼上（供應商／品名／規格／單價；同品名＋規格已存在 → 更新供應商與單價） ──
+window.matPasteOpen=function(){
+  document.getElementById('due-modal-title').textContent='耗材品項：從 Excel 貼上';
+  document.getElementById('due-modal-content').innerHTML=`
+    <div style="font-size:13px;color:#555;line-height:1.7;margin-bottom:6px">在 Excel 選取後複製、貼到下面。欄位順序：<b>供應商｜品名｜規格｜單價</b>（第一列是標題會自動略過；規格可空白）。<br>
+      同品名＋規格已經有的，會更新供應商和單價；單位可在品項表手動填。</div>
+    <textarea id="mp-text" style="min-height:160px;font-family:monospace;font-size:13px" placeholder="大明五金	手套	L	15&#10;大明五金	膠帶	48mm	32" oninput="matPastePreview()"></textarea>
+    <div id="mp-prev" style="margin-top:8px"></div>
+    <div style="display:flex;gap:8px;margin-top:10px"><button class="btn btn-primary btn-sm" id="mp-ok" onclick="matPasteApply()" disabled>匯入並儲存</button><button class="btn btn-sm" onclick="closeModal()">取消</button></div>`;
+  document.getElementById('due-modal').style.display='flex';
+  setTimeout(()=>document.getElementById('mp-text').focus(),50);
+};
+function matPasteParse(){
+  const txt=(document.getElementById('mp-text')||{}).value||'';
+  const cur=document.querySelector('#mat-items-editor tr[data-mid]')?_matReadDraft():MAT.items.map(x=>({...x}));
+  const key=r=>(r.name||'').trim().toLowerCase()+'||'+(r.spec||'').trim().toLowerCase();
+  const map=new Map(cur.map(r=>[key(r),r]));
+  const rows=[],errs=[],seen=new Set();
+  txt.split(/\r?\n/).forEach((line,i)=>{
+    if(!line.trim())return;
+    const c=line.split('\t').map(x=>x.trim());
+    let supplier='',name,spec='',unit='',priceS;
+    if(c.length<=2){[name,priceS]=c;}else if(c.length===3){[supplier,name,priceS]=c;}else{[supplier,name,spec,priceS]=c;}
+    const price=Number(String(priceS??'').replace(/[$,\s元]/g,''));
+    if(!name){errs.push(`第 ${i+1} 列：沒有品名`);return;}
+    if(priceS===undefined||priceS===''||!Number.isFinite(price)||price<0){
+      if(i===0&&rows.length===0)return; // 第一列是標題
+      errs.push(`第 ${i+1} 列「${name}」：單價不正確（${priceS??'空白'}）`);return;}
+    const k=key({name,spec});
+    if(seen.has(k)){errs.push(`第 ${i+1} 列「${name}${spec?' '+spec:''}」：貼上的資料裡重複`);return;}
+    seen.add(k);
+    const old=map.get(k);
+    rows.push({supplier,name,spec,unit,price:Math.round(price*100)/100,old});
+  });
+  return{rows,errs,cur,map,key};
+}
+window.matPastePreview=function(){
+  const{rows,errs}=matPasteParse();
+  const chg=r=>r.old&&(r.old.price!==r.price||(r.supplier&&(r.old.supplier||'')!==r.supplier));
+  const nNew=rows.filter(r=>!r.old).length,nUpd=rows.filter(chg).length,nSame=rows.length-nNew-nUpd;
+  document.getElementById('mp-ok').disabled=!rows.length;
+  document.getElementById('mp-prev').innerHTML=!rows.length&&!errs.length?'':`
+    <div style="font-size:13px;margin-bottom:4px">新增 <b style="color:#2E7D32">${nNew}</b>、更新 <b style="color:#E65100">${nUpd}</b>${nSame?`、不變 ${nSame}`:''}${errs.length?`、<b style="color:#C62828">略過 ${errs.length}</b>`:''}</div>
+    ${errs.length?`<div style="font-size:12px;color:#C62828;margin-bottom:4px">${errs.map(MAT.esc).join('<br>')}</div>`:''}
+    <div class="tbl-wrap" style="max-height:240px;overflow:auto"><table class="tbl" style="font-size:12px"><thead><tr><th></th><th>供應商</th><th>品名</th><th>規格</th><th class="col-num">單價</th></tr></thead><tbody>
+    ${rows.map(r=>{const upd=chg(r);
+      return`<tr><td style="white-space:nowrap;color:${!r.old?'#2E7D32':upd?'#E65100':'#aaa'}">${!r.old?'新增':upd?'更新':'不變'}</td><td>${r.old&&r.supplier&&(r.old.supplier||'')!==r.supplier&&r.old.supplier?`<span style="color:#aaa;text-decoration:line-through">${MAT.esc(r.old.supplier)}</span> `:''}${MAT.esc(r.supplier)}</td><td>${MAT.esc(r.name)}</td><td>${MAT.esc(r.spec)}</td>
+      <td class="col-num">${upd&&r.old.price!==r.price?`<span style="color:#aaa;text-decoration:line-through">${r.old.price}</span> `:''}${r.price}</td></tr>`;}).join('')}
+    </tbody></table></div>`;
+};
+window.matPasteApply=async function(){
+  const{rows,cur,key}=matPasteParse();
+  if(!rows.length)return;
+  const list=cur.map(x=>({...x}));
+  const idx=new Map(list.map((r,i)=>[key(r),i]));
+  rows.forEach(r=>{
+    const i=idx.get(key(r));
+    if(i!=null){list[i].price=r.price;if(r.supplier)list[i].supplier=r.supplier;}
+    else list.push({id:'MAT-'+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,6).toUpperCase(),supplier:r.supplier,name:r.name,spec:r.spec,unit:'',price:r.price,active:true});
+  });
+  try{await MAT.saveItems(list);_matDraft=null;const d=document.getElementById('mat-items-dirty');if(d)d.textContent='';closeModal();renderMatSettings(true);toast(`已匯入 ${rows.length} 筆耗材品項`);}
+  catch(e){toast('儲存失敗，請重試');}
+};
 window.matKeeperToggle=async function(cb){
   const name=cb.dataset.emp;
   const set=new Set(MAT.keepers);cb.checked?set.add(name):set.delete(name);
